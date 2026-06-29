@@ -1,0 +1,99 @@
+@use "sass:color";
+@use "variables" as *;
+
+@mixin button-reset {
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  background: none;
+}
+
+@mixin focus-ring {
+  outline: 3px solid color.change($sky, $alpha: 0.28);
+  outline-offset: 2px;
+}
+
+@mixin panel {
+  background: $glass-bg;
+  backdrop-filter: $glass-blur;
+  -webkit-backdrop-filter: $glass-blur;
+  border: $glass-border;
+  border-radius: $radius;
+  box-shadow: $shadow;
+}
+
+@mixin panel-solid {
+  background: $glass-bg-solid;
+  backdrop-filter: $glass-blur;
+  -webkit-backdrop-filter: $glass-blur;
+  border: $glass-border;
+  border-radius: $radius;
+  box-shadow: $shadow;
+}
+
+@mixin subtle-button($base) {
+  background: color.change($base, $alpha: 0.1);
+  color: $base;
+
+  &:hover {
+    background: color.change($base, $alpha: 0.16);
+  }
+}
+
+@mixin card-interactive {
+  transition: transform $duration-normal $ease-out, box-shadow $duration-normal $ease-out, border-color $duration-normal $ease-out;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: $shadow-md;
+  }
+}
+
+@mixin gradient-border($from: $forest, $to: $leaf) {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    border-radius: 0 0 $radius $radius;
+    background: linear-gradient(90deg, $from, $to);
+    opacity: 0.6;
+  }
+}
+
+@mixin skeleton-loading {
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.04) 25%, rgba(0, 0, 0, 0.08) 50%, rgba(0, 0, 0, 0.04) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: $radius-sm;
+}
+
+@mixin responsive-grid($min: 280px) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax($min, 1fr));
+  gap: $space-lg;
+}
+
+@mixin truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@mixin scrollbar-thin {
+  &::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 3px;
+  }
+}
