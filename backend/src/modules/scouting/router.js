@@ -84,3 +84,10 @@ scoutingRouter.post('/observations/:observationId/evidence', validate(evidenceSc
   }, { transaction: req.dbTransaction });
   res.status(201).json({ data: evidence });
 }));
+
+scoutingRouter.patch('/runs/:id', validate(runSchema.partial()), asyncHandler(async (req, res) => {
+  const run = await ScoutingRun.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!run) return res.status(404).json({ error: { message: 'Monitoreo no encontrado.' } });
+  await run.update(req.body, { transaction: req.dbTransaction });
+  res.json({ data: run });
+}));

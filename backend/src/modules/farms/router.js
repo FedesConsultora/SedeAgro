@@ -67,3 +67,11 @@ farmsRouter.get('/:id', asyncHandler(async (req, res) => {
   if (!farm) return res.status(404).json({ error: { message: 'Establecimiento no encontrado.' } });
   res.json({ data: farm });
 }));
+
+farmsRouter.patch('/:id', validate(farmSchema.partial()), asyncHandler(async (req, res) => {
+  const farm = await Farm.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!farm) return res.status(404).json({ error: { message: 'Establecimiento no encontrado.' } });
+  await farm.update(req.body, { transaction: req.dbTransaction });
+  res.json({ data: farm });
+}));
+

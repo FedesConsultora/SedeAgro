@@ -76,3 +76,10 @@ fieldsRouter.post('/:id/irrigation', validate(irrigationSchema), asyncHandler(as
   }, { transaction: req.dbTransaction });
   res.status(201).json({ data: event });
 }));
+
+fieldsRouter.patch('/:id', validate(fieldSchema.partial()), asyncHandler(async (req, res) => {
+  const field = await Field.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!field) return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  await field.update(req.body, { transaction: req.dbTransaction });
+  res.json({ data: field });
+}));

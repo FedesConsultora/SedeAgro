@@ -69,3 +69,34 @@ campaignsRouter.get('/:id', asyncHandler(async (req, res) => {
   if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
   res.json({ data: campaign });
 }));
+
+campaignsRouter.patch('/:id', validate(campaignSchema.partial()), asyncHandler(async (req, res) => {
+  const campaign = await Campaign.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
+  await campaign.update(req.body, { transaction: req.dbTransaction });
+  res.json({ data: campaign });
+}));
+
+// All campaign-fields (for scouting run selectors etc.)
+campaignsRouter.get('/fields', asyncHandler(async (req, res) => {
+  const cfs = await CampaignField.findAll({
+    include: [
+      { model: Field, attributes: ['id', 'name', 'area_hectares'] },
+      { model: CropType, attributes: ['id', 'name', 'code'] },
+      { model: Campaign, attributes: ['id', 'name', 'season_year', 'status'] }
+    ],
+    order: [['created_at', 'DESC']],
+    transaction: req.dbTransaction
+  });
+  res.json({ data: cfs });
+}));
+
+campaignsRouter.patch('/:campaignId/fields/:cfId', validate(campaignFieldSchema.partial()), asyncHandler(async (req, res) => {
+  const cf = await CampaignField.findOne({
+    where: { id: req.params.cfId, campaign_id: req.params.campaignId },
+    transaction: req.dbTransaction
+  });
+  if (!cf) return res.status(404).json({ error: { message: 'Campo de campaña no encontrado.' } });
+  await cf.update(req.body, { transaction: req.dbTransaction });
+  res.json({ data: cf });
+}));
