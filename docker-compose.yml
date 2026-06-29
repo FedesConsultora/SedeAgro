@@ -46,8 +46,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    ports:
-      - "3001:3001"
+    # Sin ports: el backend NO se expone al host, solo al frontend interno
     networks:
       - sedeagro_internal
 
@@ -56,15 +55,15 @@ services:
       context: ./frontend
       target: prod
       args:
-        VITE_API_URL: /api/v1
+        VITE_API_URL: /api
     container_name: sedeagro_frontend
     restart: unless-stopped
     depends_on:
       - backend
-    ports:
-      - "8080:80"
+    # Sin ports: el proxy global (fedes-proxy) accede por fedes-net
     networks:
       - sedeagro_internal
+      - fedes-net
 
 volumes:
   sedeagro_db:
@@ -73,3 +72,5 @@ volumes:
 networks:
   sedeagro_internal:
     name: sedeagro_internal
+  fedes-net:
+    external: true
