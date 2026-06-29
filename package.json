@@ -1,0 +1,21 @@
+{
+  "name": "sedeagro",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SedeAgro MVP - SaaS AgTech multi-tenant",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "./dev.sh",
+    "prod:deploy": "./scripts/deploy-prod.sh",
+    "validate": "npm run audit && npm run check:syntax && npm --workspace frontend run build",
+    "check:syntax": "find backend/src backend/db backend/scripts scripts -type f \\( -name '*.js' -o -name '*.mjs' \\) -print | sort | xargs -n 1 node --check",
+    "audit": "npm run audit:sass && npm --workspace backend run audit:raw-sql",
+    "audit:sass": "node scripts/audit-sass.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
