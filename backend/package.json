@@ -1,0 +1,34 @@
+{
+  "name": "@sedeagro/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon --watch src --watch db src/server.js",
+    "migrate": "node src/infra/db/migrate.js up",
+    "migrate:down": "node src/infra/db/migrate.js down",
+    "migrate:status": "node src/infra/db/migrate.js status",
+    "seed": "node src/infra/db/seed.js up",
+    "seed:down": "node src/infra/db/seed.js down",
+    "db:prepare": "npm run migrate && npm run seed",
+    "audit:raw-sql": "node scripts/audit-raw-sql.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.13.1",
+    "pg-hstore": "^2.3.4",
+    "sequelize": "^6.37.8",
+    "umzug": "^3.8.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}
