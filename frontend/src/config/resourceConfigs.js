@@ -358,6 +358,25 @@ export const pageResources = {
         { label: 'Miembros', render: (item) => countChildren(item, 'TeamMembers') },
         { label: 'Notas', render: (item) => item.notes || '-' }
       ]
+    },
+    {
+      id: 'members',
+      title: 'Miembros de la Organización',
+      eyebrow: 'Usuarios',
+      endpoint: 'GET /auth/members',
+      mock: [
+        { id: '1', role_code: 'tenant_admin', User: { full_name: 'Ana López (Admin)', email: 'admin@agro-demo.test' } },
+        { id: '2', role_code: 'scout', User: { full_name: 'Laura Gómez (Scout)', email: 'monitor@agro-demo.test' } }
+      ],
+      load: (api) => api.members(),
+      create: () => Promise.resolve({ data: [] }), // Readonly on MVP workbench
+      form: [], // Empty form: managed by onboarding/invitations
+      columns: [
+        { label: 'Nombre', render: (item) => item.User?.full_name || 'Desconocido', strong: true },
+        { label: 'Email', render: (item) => item.User?.email || '-' },
+        { label: 'Rol de acceso', render: (item) => item.role_code, variant: 'status' },
+        { label: 'Estado', render: (item) => item.User?.status || 'active', variant: 'status' }
+      ]
     }
   ],
   assets: [

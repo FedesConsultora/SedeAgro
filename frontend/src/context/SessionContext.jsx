@@ -23,6 +23,7 @@ function normalizeSession(value) {
       ...demoSession.user,
       ...(value?.user || {})
     },
+    membership: value?.membership || null,
     entitlements: value?.entitlements?.length ? value.entitlements : demoSession.entitlements
   };
 }
@@ -64,14 +65,48 @@ export function SessionProvider({ children }) {
     localStorage.setItem('sedeagro.dataMode', normalized);
   };
 
+  // Login helper: sets real session + switches to live mode
+  const login = (data) => {
+    const next = {
+      token: data.token,
+      tenant: data.tenant,
+      user: data.user,
+      membership: data.membership,
+      entitlements: data.entitlements || demoSession.entitlements
+    };
+    setSession(next);
+    setDataModeState('live');
+    localStorage.setItem('sedeagro.dataMode', 'live');
+  };
+
+
+  // Logout: clears session + returns to mock/demo mode
+  const logout = () => {
+    setSession(null);
+    setDataModeState('mock');
+    localStorage.setItem('sedeagro.dataMode', 'mock');
+  };
+
+  // True only when a real JWT token + tenant ID are present
+  const isAuthenticated = useMemo(() => {
+    return !!(
+      session?.token && session.token.length > 0 &&
+      session?.tenant?.id && session.tenant.id.length > 0
+    );
+  }, [session]);
+
   const value = useMemo(() => ({
     session,
     setSession,
     dataMode,
     setDataMode,
     api,
-    entitlements: session?.entitlements || []
-  }), [session, dataMode, api]);
+    entitlements: session?.entitlements || [],
+    isAuthenticated,
+    login,
+    logout
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [session, dataMode, api, isAuthenticated]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
