@@ -1,0 +1,77 @@
+name: sedeagro-dev
+
+services:
+  sedeagro-db:
+    platform: linux/amd64
+    image: postgis/postgis:16-3.4
+    container_name: sedeagro_db_dev
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sedeagro}
+      POSTGRES_USER: ${POSTGRES_USER:-sedeagro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sedeagro_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - sedeagro_db_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sedeagro} -d ${POSTGRES_DB:-sedeagro}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  sedeagro-redis:
+    image: redis:7-alpine
+    container_name: sedeagro_redis_dev
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sedeagro_redis_dev:/data
+
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    container_name: sedeagro_backend_dev
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-sedeagro}:${POSTGRES_PASSWORD:-sedeagro_dev_password}@sedeagro-db:5432/${POSTGRES_DB:-sedeagro}
+      REDIS_URL: redis://sedeagro-redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-development}
+      CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
+      FALLBACK_TENANT_ID: ${FALLBACK_TENANT_ID:-}
+      SEED_MODE: ${SEED_MODE:-dev}
+    ports:
+      - "${BACKEND_PORT:-3001}:3001"
+    volumes:
+      - ./backend:/app
+      - sedeagro_backend_node_modules:/app/node_modules
+    depends_on:
+      sedeagro-db:
+        condition: service_healthy
+      sedeagro-redis:
+        condition: service_started
+    command: sh -c "npm install && npm run dev"
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: sedeagro_frontend_dev
+    environment:
+      VITE_API_URL: http://localhost:${BACKEND_PORT:-3001}/api/v1
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app
+      - sedeagro_frontend_node_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
+    depends_on:
+      - backend
+
+volumes:
+  sedeagro_db_dev:
+  sedeagro_redis_dev:
+  sedeagro_backend_node_modules:
+  sedeagro_frontend_node_modules:

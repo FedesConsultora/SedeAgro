@@ -1,0 +1,75 @@
+name: sedeagro
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: sedeagro_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sedeagro}
+      POSTGRES_USER: ${POSTGRES_USER:-sedeagro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - sedeagro_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sedeagro} -d ${POSTGRES_DB:-sedeagro}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - sedeagro_internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: sedeagro_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sedeagro_redis:/data
+    networks:
+      - sedeagro_internal
+
+  backend:
+    build:
+      context: ./backend
+      target: prod
+    container_name: sedeagro_backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-sedeagro}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sedeagro}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "3001:3001"
+    networks:
+      - sedeagro_internal
+
+  frontend:
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        VITE_API_URL: /api/v1
+    container_name: sedeagro_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+    networks:
+      - sedeagro_internal
+
+volumes:
+  sedeagro_db:
+  sedeagro_redis:
+
+networks:
+  sedeagro_internal:
+    name: sedeagro_internal
