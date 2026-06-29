@@ -20,6 +20,7 @@ import { imageryRouter } from './modules/imagery/router.js';
 import { reportsRouter } from './modules/reports/router.js';
 import { syncRouter } from './modules/sync/router.js';
 import { notificationsRouter } from './modules/notifications/router.js';
+import { platformRouter } from './modules/platform/router.js';
 import { HttpError } from './utils/http.js';
 import { logger } from './core/logger.js';
 
@@ -63,6 +64,7 @@ function mountScopedRoutes(app, prefix = '/api') {
   app.use(`${prefix}/reports`, requireAuth, reportsRouter);
   app.use(`${prefix}/sync`, requireAuth, syncRouter);
   app.use(`${prefix}/notifications`, requireAuth, notificationsRouter);
+  app.use(`${prefix}/platform`, requireAuth, platformRouter);
 }
 
 export function createApp() {

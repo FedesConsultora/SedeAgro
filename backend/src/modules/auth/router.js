@@ -59,7 +59,7 @@ async function issueTenantSession(user, membership, transaction) {
 
   return {
     token: signSession(sessionPayload(user, membership)),
-    user: { id: user.id, email: user.email, fullName: user.full_name },
+    user: { id: user.id, email: user.email, fullName: user.full_name, isPlatformAdmin: user.is_platform_admin },
     tenant,
     membership: { id: membership.id, roleCode: membership.role_code, status: membership.status },
     entitlements: modules.map((module) => module.module_code)
@@ -178,10 +178,23 @@ authScopedRouter.get('/me', asyncHandler(async (req, res) => {
     user: {
       id: req.auth.user.id,
       email: req.auth.user.email,
-      fullName: req.auth.user.full_name
+      fullName: req.auth.user.full_name,
+      isPlatformAdmin: req.auth.user.is_platform_admin
     },
     tenant: req.tenant,
     role: req.auth.role,
     entitlements: modules.map((module) => module.module_code)
   });
 }));
+
+authScopedRouter.get('/members', asyncHandler(async (req, res) => {
+  const memberships = await Membership.findAll({
+    where: { tenant_id: req.tenantId },
+    include: [{ model: User, attributes: ['id', 'email', 'full_name', 'status', 'is_platform_admin'] }],
+    order: [[User, 'full_name', 'ASC']],
+    transaction: req.dbTransaction,
+    skipTenantScope: true
+  });
+  res.json({ data: memberships });
+}));
+
