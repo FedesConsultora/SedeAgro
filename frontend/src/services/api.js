@@ -1,21 +1,55 @@
 export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
 
 export class ApiError extends Error {
-  constructor({ message, code, status, details, requestId }) {
+  constructor({ message, code, status, details, requestId, hint }) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
     this.status = status;
     this.details = details;
     this.requestId = requestId;
+    this.hint = hint;
   }
 }
 
-function normalizeError(error) {
+// ── User-friendly error messages by status code ───────────────
+const STATUS_MESSAGES = {
+  400: { title: 'Solicitud inválida', hint: 'Revisá los datos enviados e intentá de nuevo.' },
+  401: { title: 'No autorizado', hint: 'Tu sesión pudo haber expirado. Intentá ingresar de nuevo.' },
+  403: { title: 'Acceso denegado', hint: 'No tenés permisos para realizar esta acción.' },
+  404: { title: 'No encontrado', hint: 'El recurso solicitado no existe o fue eliminado.' },
+  409: { title: 'Conflicto', hint: 'Ya existe un recurso con estos datos.' },
+  422: { title: 'Datos inválidos', hint: 'Revisá los campos marcados y corregí los errores.' },
+  429: { title: 'Demasiadas solicitudes', hint: 'Esperá unos segundos antes de intentar de nuevo.' },
+  500: { title: 'Error interno', hint: 'Ocurrió un problema en el servidor. Intentá de nuevo en unos minutos.' },
+  502: { title: 'Error de conexión', hint: 'El servidor no está respondiendo. Intentá de nuevo más tarde.' },
+  503: { title: 'Servicio no disponible', hint: 'El sistema está en mantenimiento. Intentá de nuevo pronto.' }
+};
+
+function normalizeApiError(status, responseBody, requestId) {
+  const serverError = responseBody?.error || {};
+  const statusInfo = STATUS_MESSAGES[status] || STATUS_MESSAGES[500];
+
   return {
-    title: error.status ? `Error ${error.status}` : 'Error de conexión',
-    message: error.message || 'No se pudo contactar al servidor.',
-    requestId: error.requestId
+    title: statusInfo.title,
+    message: serverError.message || statusInfo.title,
+    hint: serverError.hint || statusInfo.hint,
+    code: serverError.code || null,
+    status,
+    details: serverError.details || null,
+    requestId: serverError.request_id || requestId || null
+  };
+}
+
+function normalizeNetworkError(error) {
+  return {
+    title: 'Error de conexión',
+    message: 'No se pudo conectar con el servidor.',
+    hint: 'Verificá tu conexión a internet e intentá de nuevo.',
+    code: 'NETWORK_ERROR',
+    status: 0,
+    details: null,
+    requestId: null
   };
 }
 
@@ -24,7 +58,7 @@ export function createApiClient(session, feedback) {
     feedback?.startLoading();
 
     try {
-      const { body: requestBody, headers, ...requestOptions } = options;
+      const { body: requestBody, headers, silent, ...requestOptions } = options;
       const hasBody = requestBody !== undefined;
       const response = await fetch(`${API_URL}${path}`, {
         ...requestOptions,
@@ -38,28 +72,38 @@ export function createApiClient(session, feedback) {
       });
 
       const responseBody = await response.json().catch(() => ({}));
+
       if (!response.ok) {
-        const errorMsg = responseBody.error?.message || 'Error de API';
+        const requestId = response.headers.get('x-request-id');
+        const normalized = normalizeApiError(response.status, responseBody, requestId);
 
         // Auto-logout on stale session or deleted tenant
-        if (response.status === 401 || (response.status === 404 && errorMsg.includes('Tenant no encontrado'))) {
+        if (response.status === 401 || (response.status === 404 && normalized.message.includes('Tenant no encontrado'))) {
           localStorage.removeItem('sedeagro.session');
           localStorage.setItem('sedeagro.dataMode', 'mock');
           window.location.reload();
           return;
         }
 
-        throw new ApiError({
-          message: errorMsg,
-          code: responseBody.error?.code,
-          status: response.status,
-          details: responseBody.error?.details,
-          requestId: responseBody.error?.request_id || response.headers.get('x-request-id')
-        });
+        const apiError = new ApiError(normalized);
+
+        // Show error toast unless explicitly silenced
+        if (!silent) {
+          feedback?.showError(normalized);
+        }
+
+        throw apiError;
       }
+
       return responseBody;
     } catch (error) {
-      feedback?.showError(normalizeError(error));
+      if (error instanceof ApiError) throw error;
+
+      // Network / fetch error
+      const normalized = normalizeNetworkError(error);
+      if (!options.silent) {
+        feedback?.showError(normalized);
+      }
       throw error;
     } finally {
       feedback?.stopLoading();

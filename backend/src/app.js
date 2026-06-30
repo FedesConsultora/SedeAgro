@@ -90,8 +90,29 @@ export function createApp() {
   app.use((_req, _res, next) => next(new HttpError(404, 'Ruta no encontrada.')));
 
   app.use((error, req, res, _next) => {
+    // Normalize Sequelize errors into HttpError-like shape
+    if (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError') {
+      const fields = {};
+      for (const e of error.errors || []) {
+        const key = e.path || 'general';
+        if (!fields[key]) fields[key] = [];
+        fields[key].push(e.message);
+      }
+      error.status = error.name === 'SequelizeUniqueConstraintError' ? 409 : 422;
+      error.code = error.name === 'SequelizeUniqueConstraintError' ? 'UNIQUE_CONSTRAINT' : 'VALIDATION_ERROR';
+      error.details = { fieldErrors: fields };
+      error.hint = error.name === 'SequelizeUniqueConstraintError'
+        ? 'Ya existe un registro con estos datos. Revisá los campos duplicados.'
+        : 'Revisá los campos marcados y corregí los errores.';
+      error.expose = true;
+      error.message = error.name === 'SequelizeUniqueConstraintError'
+        ? 'Registro duplicado'
+        : 'Error de validación';
+    }
+
     const status = error.status || 500;
     const isPublicError = status < 500 && error.expose !== false;
+
     if (status >= 500) {
       logger.error('http.unhandled_error', {
         request_id: req.requestId,
@@ -105,10 +126,12 @@ export function createApp() {
         message: error.message
       });
     }
+
     res.status(status).json({
       error: {
         code: error.code || (status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'),
-        message: isPublicError ? error.message : 'Error interno',
+        message: isPublicError ? error.message : 'Error interno del servidor.',
+        hint: isPublicError ? (error.hint || null) : 'Intentá de nuevo en unos minutos. Si el problema persiste, contactá al soporte.',
         details: isPublicError ? error.details : undefined,
         request_id: req.requestId
       }

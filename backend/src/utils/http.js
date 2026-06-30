@@ -1,9 +1,10 @@
 export class HttpError extends Error {
-  constructor(status, message, details = undefined, code = undefined) {
+  constructor(status, message, details = undefined, code = undefined, hint = undefined) {
     super(message);
     this.status = status;
     this.details = details;
     this.code = code;
+    this.hint = hint;
     this.expose = status < 500;
   }
 }

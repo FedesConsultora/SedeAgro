@@ -45,12 +45,7 @@ export function SessionProvider({ children }) {
   const [session, setSessionState] = useState(storedSession);
   const [dataMode, setDataModeState] = useState(storedDataMode);
   const feedback = useFeedback();
-  const feedbackApi = useMemo(() => ({
-    startLoading: feedback.startLoading,
-    stopLoading: feedback.stopLoading,
-    showError: feedback.showError
-  }), [feedback.startLoading, feedback.stopLoading, feedback.showError]);
-  const api = useMemo(() => createApiClient(session, feedbackApi), [session, feedbackApi]);
+  const api = useMemo(() => createApiClient(session, feedback), [session, feedback]);
 
   const setSession = (nextSession) => {
     const normalized = nextSession ? normalizeSession(nextSession) : demoSession;

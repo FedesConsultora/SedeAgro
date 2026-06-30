@@ -16,7 +16,7 @@ import {
 import { useSession } from './context/SessionContext.jsx';
 import { Sidebar } from './components/Sidebar.jsx';
 import { Topbar } from './components/Topbar.jsx';
-import { ErrorToast } from './components/ErrorToast.jsx';
+import { NotificationToast } from './components/NotificationToast.jsx';
 import { GlobalLoader } from './components/GlobalLoader.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
 import { FarmsPage } from './pages/FarmsPage.jsx';
@@ -77,7 +77,7 @@ function Shell() {
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'app-shell--collapsed' : ''}`}>
       <GlobalLoader />
-      <ErrorToast />
+      <NotificationToast />
       <Sidebar
         views={sidebarViews}
         activeView={currentView}
