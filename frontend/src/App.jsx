@@ -24,7 +24,9 @@ import { CampaignsPage } from './pages/CampaignsPage.jsx';
 import { ScoutingPage } from './pages/ScoutingPage.jsx';
 import { WorkOrdersPage } from './pages/WorkOrdersPage.jsx';
 import { ReportsPage } from './pages/ReportsPage.jsx';
-import { OperationsPage } from './pages/OperationsPage.jsx';
+import { AssetsPage } from './pages/AssetsPage.jsx';
+import { SatellitePage } from './pages/SatellitePage.jsx';
+import { SyncPage } from './pages/SyncPage.jsx';
 import { TeamPage } from './pages/TeamPage.jsx';
 import { TenantAdminPage } from './pages/TenantAdminPage.jsx';
 import { PlatformAdminPage } from './pages/PlatformAdminPage.jsx';
@@ -117,9 +119,9 @@ function Shell() {
         {currentView === 'teams'      && <TeamPage />}
         {currentView === 'admin'      && <TenantAdminPage />}
         {currentView === 'platform'   && <PlatformAdminPage />}
-        {['assets', 'imagery', 'sync'].includes(currentView) && (
-          <OperationsPage mode={currentView} />
-        )}
+        {currentView === 'assets'     && <AssetsPage />}
+        {currentView === 'imagery'    && <SatellitePage />}
+        {currentView === 'sync'       && <SyncPage />}
       </main>
     </div>
   );
