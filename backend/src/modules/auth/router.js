@@ -163,7 +163,7 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
     return;
   }
 
-  res.json(await issueTenantSession(user, selectedMembership));
+  res.json(await issueTenantSession(user, selectedMembership, req.dbTransaction));
 }));
 
 authScopedRouter.get('/me', asyncHandler(async (req, res) => {
