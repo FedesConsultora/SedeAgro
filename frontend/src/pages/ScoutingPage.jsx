@@ -18,7 +18,8 @@ function StatusBadge({ status }) {
 function RunDetail({ run, onObsCreated }) {
   const [showObsModal, setShowObsModal] = useState(false);
   const [showEvidModal, setShowEvidModal] = useState(null); // observationId
-  const observations = mockData.scoutingObservations.filter((o) => o.scouting_run_id === run.id);
+
+  const observations = run.ScoutingObservations || [];
 
   return (
     <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(0,0,0,0.04)', animation: 'slideDown 0.2s ease-out' }}>
