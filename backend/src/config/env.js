@@ -23,5 +23,6 @@ export const env = {
   logLevel: process.env.LOG_LEVEL || '',
   logSql: process.env.LOG_SQL === '1',
   logStack: process.env.LOG_STACK === '1' && process.env.NODE_ENV !== 'production',
+  logFormat: process.env.LOG_FORMAT || 'json',
   isProd: process.env.NODE_ENV === 'production'
 };
