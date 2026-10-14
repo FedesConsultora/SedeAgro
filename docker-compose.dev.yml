@@ -42,6 +42,7 @@ services:
       CORS_ORIGIN: http://localhost:${FRONTEND_PORT:-3000}
       FALLBACK_TENANT_ID: ${FALLBACK_TENANT_ID:-}
       SEED_MODE: ${SEED_MODE:-dev}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     volumes:
