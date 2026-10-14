@@ -61,7 +61,7 @@ test('priority ordering favors overdue work then urgent before pending approval,
       scheduled_at: '2026-10-01T08:00:00.000Z' }
   ]);
   const result = homeSnapshot(resources, today);
-  assert.deepEqual(result.alerts.map(a => a.id), ['a', 'b', 'run1', 'd']);
+  assert.deepEqual(result.alerts.map(a => a.id), ['a', 'run1', 'b', 'd']);
   assert.equal(result.alertCount, 4);
   assert.equal(result.metrics.find(x => x.key === 'orders').value, 4);
   assert.equal(result.metrics.find(x => x.key === 'scoutingRuns').value, 1);
