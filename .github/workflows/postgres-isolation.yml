@@ -60,6 +60,14 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: npm --workspace backend run test:db
+      - name: Run real Chromium cookie and session acceptance against PostgreSQL
+        env:
+          TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
+          TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
+        run: |
+          npm install --no-save --package-lock=false playwright@1.58.2
+          npx playwright install chromium --with-deps
+          node scripts/acceptance-browser-cookie.mjs
 
   browser-offline:
     runs-on: ubuntu-latest
