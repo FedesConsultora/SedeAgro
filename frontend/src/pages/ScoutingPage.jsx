@@ -25,6 +25,7 @@ function RunDetail({ run, onChanged }) {
   const [actionError, setActionError] = useState('');
   const [working, setWorking] = useState(false);
   const [showObsModal, setShowObsModal] = useState(false);
+  const [queuedNotice, setQueuedNotice] = useState('');
   const [showEvidModal, setShowEvidModal] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -160,6 +161,11 @@ function RunDetail({ run, onChanged }) {
       </div>
       {error && <div className="auth-error" role="alert">{error} <button type="button" onClick={() => refresh()}>Reintentar</button></div>}
       {actionError && <div className="auth-error" role="alert">{actionError}</div>}
+      {queuedNotice && <div role="status" style={{ padding: '10px 12px',
+        background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 8,
+        fontSize: 12, color: '#065f46' }}>
+        {queuedNotice}
+      </div>}
       {canManage && details?.status === 'planned' && (
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
           <label className="form-field" style={{ minWidth: 220 }}>
@@ -216,6 +222,10 @@ function RunDetail({ run, onChanged }) {
       {showAudit && canManage && <ScoutingAuditPanel runId={run.id} />}
       {dataMode !== 'live' && <p style={{ fontSize: 12, color: '#a16207', margin: 0 }}>Modo demo: estos datos no provienen del backend; no se guardan modificaciones.</p>}
       {showObsModal && <ObservationFormModal isOpen runId={run.id} onClose={() => setShowObsModal(false)}
+        onQueued={() => {
+          setShowObsModal(false);
+          setQueuedNotice('Observación guardada en este dispositivo. Se enviará automáticamente al recuperar conexión; podés ver el estado en Sincronizaciones.');
+        }}
         onCreated={() => { setShowObsModal(false); void refresh(); onChanged?.(); }} />}
       {showEvidModal && <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)}
         onCreated={() => { setShowEvidModal(null); void refresh(); }} />}
