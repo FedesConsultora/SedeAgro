@@ -179,8 +179,10 @@ export function createApiClient(session, feedback) {
     submitSyncBatch: (body, options = {}) => request('/sync/batches', {
       method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
     }),
-    notifications: () => request('/notifications'),
-    markNotificationRead: (notificationId) => request(`/notifications/${notificationId}/read`, { method: 'PATCH' }),
+    notifications: () => request('/notifications', { silent: true }),
+    markNotificationRead: (notificationId) => request(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: 'PATCH', silent: true
+    }),
     // Platform administration
     getPlatformTenants: () => request('/platform/tenants'),
     getPlatformUsers: () => request('/platform/users'),
