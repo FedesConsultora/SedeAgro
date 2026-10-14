@@ -114,13 +114,17 @@ export async function readOfflinePhoto(file) {
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { alpha: false });
       if (!context) throw new Error('El navegador no permite preparar fotografías.');
-      context.imageSmoothingEnabled = true;
-      context.imageSmoothingQuality = 'high';
       let found = false;
       for (const longestSide of SIZES) {
         const size = scaledPhotoSize(image.width, image.height, longestSide);
         canvas.width = size.width;
         canvas.height = size.height;
+        // Assigning canvas dimensions resets the 2D state. Set smoothing and
+        // a white matte each iteration to avoid black transparent PNG regions.
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, size.width, size.height);
         context.drawImage(image, 0, 0, size.width, size.height);
         for (const quality of QUALITIES) {
           const candidate = await encodeJpeg(canvas, quality);
