@@ -8,6 +8,7 @@ import {
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const reportsRouter = Router();
 
@@ -29,7 +30,7 @@ const runSchema = z.object({
   filters: z.record(z.any()).default({})
 });
 
-reportsRouter.get('/templates', asyncHandler(async (req, res) => {
+reportsRouter.get('/templates', requireCapability('reports.read'), asyncHandler(async (req, res) => {
   const templates = await ReportTemplate.findAll({
     order: [['name', 'ASC']],
     transaction: req.dbTransaction
@@ -37,12 +38,12 @@ reportsRouter.get('/templates', asyncHandler(async (req, res) => {
   res.json({ data: templates });
 }));
 
-reportsRouter.post('/templates', validate(templateSchema), asyncHandler(async (req, res) => {
+reportsRouter.post('/templates', requireCapability('reports.write'), validate(templateSchema), asyncHandler(async (req, res) => {
   const template = await ReportTemplate.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: template });
 }));
 
-reportsRouter.get('/runs', asyncHandler(async (req, res) => {
+reportsRouter.get('/runs', requireCapability('reports.read'), asyncHandler(async (req, res) => {
   const runs = await ReportRun.findAll({
     include: [{ model: ReportTemplate, attributes: ['id', 'name', 'code', 'format'] }],
     order: [['created_at', 'DESC']],
@@ -51,7 +52,7 @@ reportsRouter.get('/runs', asyncHandler(async (req, res) => {
   res.json({ data: runs });
 }));
 
-reportsRouter.post('/runs', validate(runSchema), asyncHandler(async (req, res) => {
+reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSchema), asyncHandler(async (req, res) => {
   const run = await ReportRun.create({
     ...req.body,
     requested_by: req.auth.user.id,
@@ -61,7 +62,7 @@ reportsRouter.post('/runs', validate(runSchema), asyncHandler(async (req, res) =
 }));
 
 // ─── Field-level report ───────────────────────────────────────
-reportsRouter.get('/field/:fieldId', asyncHandler(async (req, res) => {
+reportsRouter.get('/field/:fieldId', requireCapability('reports.read'), asyncHandler(async (req, res) => {
   const { fieldId } = req.params;
   const tx = req.dbTransaction;
 
