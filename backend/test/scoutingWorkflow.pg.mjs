@@ -266,6 +266,21 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.deepEqual(new Set((await scopedRequest('/fields')).json.data.map((item) => item.id)),
       new Set([fieldA, fieldA2]));
 
+    assert.equal((await scopedRequest(`/campaigns/${campaign}`, otherToken)).status, 404);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, otherToken, 'PATCH',
+      { status: 'in_progress' })).status, 404);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'completed' })).status, 409, 'scout cannot skip start');
+    const startedByScout = await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'in_progress' });
+    assert.equal(startedByScout.status, 200, JSON.stringify(startedByScout.json));
+    const finishedByScout = await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'completed' });
+    assert.equal(finishedByScout.status, 200, JSON.stringify(finishedByScout.json));
+    assert.ok(finishedByScout.json.data.completed_at);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'in_progress' })).status, 409);
+
   } finally {
     if (connected) {
       try {
