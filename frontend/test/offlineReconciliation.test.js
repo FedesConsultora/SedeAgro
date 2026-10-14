@@ -19,7 +19,6 @@ const session = (userId = USER, tenantId = TENANT) => ({
 });
 const values = { observation_type: 'weed', severity: 'high', notes: 'Monitoreo confirmado',
   point: { type: 'Point', coordinates: [-57.95, -34.92] } };
-const ids = () => [KEY, OP][ids.index++ % 2];
 const draft = (options = {}) => createPendingObservation({
   session: session(), runId: RUN, values: { ...values, ...options },
   uuid: (() => { let i = 0; return () => [KEY, OP][i++]; })(),
