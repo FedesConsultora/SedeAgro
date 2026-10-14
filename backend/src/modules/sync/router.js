@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { SyncBatch, SyncOperation } from '../../models/index.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const syncRouter = Router();
 
@@ -18,7 +19,7 @@ const batchSchema = z.object({
   operations: z.array(operationSchema).min(1).max(500)
 });
 
-syncRouter.post('/batches', validate(batchSchema), asyncHandler(async (req, res) => {
+syncRouter.post('/batches', requireCapability('sync.submit'), validate(batchSchema), asyncHandler(async (req, res) => {
   const batch = await SyncBatch.create({
     client_id: req.body.client_id,
     device_id: req.body.device_id,
@@ -34,7 +35,7 @@ syncRouter.post('/batches', validate(batchSchema), asyncHandler(async (req, res)
   res.status(202).json({ data: { batch, operations } });
 }));
 
-syncRouter.get('/batches', asyncHandler(async (req, res) => {
+syncRouter.get('/batches', requireCapability('sync.read'), asyncHandler(async (req, res) => {
   const batches = await SyncBatch.findAll({
     include: [{ model: SyncOperation }],
     order: [['received_at', 'DESC']],
