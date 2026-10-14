@@ -130,15 +130,23 @@ try {
   await ready('http://127.0.0.1:4174/');
   const prod = await browser.newContext({ serviceWorkers: 'allow' });
   const prodPage = await prod.newPage();
+  prodPage.on('pageerror', (error) => console.log('BROWSER_ERROR:', error.message));
+  prodPage.on('requestfailed', (request) => console.log('FAILED_REQUEST:', request.url(), request.failure()?.errorText));
   await prodPage.goto('http://127.0.0.1:4174/', { waitUntil: 'load' });
+  console.log('ONLINE_RENDER_LENGTH:', (await prodPage.locator('body').innerText()).length);
   await prodPage.evaluate(async () => navigator.serviceWorker.ready);
   await prodPage.waitForFunction(async () => {
     const cache = await caches.open('sedeagro-web-shell-v2');
     return Boolean(await cache.match('/'));
   });
   await prodPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  console.log('CACHED_URLS:', await prodPage.evaluate(async () => {
+    const cache = await caches.open('sedeagro-web-shell-v2');
+    return (await cache.keys()).map((request) => request.url);
+  }));
   await prod.setOffline(true);
   await prodPage.reload({ waitUntil: 'domcontentloaded' });
+  console.log('OFFLINE_RELOAD_URL:', prodPage.url());
   // DOMContentLoaded precedes React mounting and cached module evaluation.
   // Wait for meaningful UI, not just the empty root element in index.html.
   await prodPage.waitForFunction(() => document.body.innerText.trim().length > 10,
