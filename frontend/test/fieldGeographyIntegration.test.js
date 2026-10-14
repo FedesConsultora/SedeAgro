@@ -38,3 +38,10 @@ test('field creation does not silently use demo farms on live API failures', () 
   assert.match(form, /setFarmLoadError\(err\?\.message/);
   assert.match(form, /!farms\.some\(\(farm\) => farm\.id === form\.farm_id\)/);
 });
+
+test('the displayed geometry resets when actor authorization or entitlements change', () => {
+  assert.match(panel, /session\?\.membership\?\.roleCode \|\| ''/);
+  assert.match(panel, /\(session\?\.entitlements \|\| \[\]\)\.join\(','\)/);
+  assert.match(panel, /result\.scope === scope/);
+  assert.match(panel, /record: null, error: ''/);
+});
