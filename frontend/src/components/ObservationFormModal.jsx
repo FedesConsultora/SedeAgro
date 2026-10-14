@@ -137,16 +137,17 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
                 <strong>{photo.name}</strong>
                 <div>{(photo.size / 1048576).toFixed(2)} MiB originales</div>
                 <div>{photo.size > 512 * 1024
-                  ? 'Se reducirá automáticamente antes de guardar (máximo 512 KiB).'
-                  : 'Tamaño compatible. Se conserva el archivo original.'}</div>
+                  ? 'Se reducirá y limpiará antes de guardar (máximo 512 KiB).'
+                  : 'Se convertirá a JPEG para quitar metadatos de ubicación y del dispositivo.'}</div>
               </div>
             </div>
           )}
           {photoError && <p role="alert" className="field-photo-picker__error">{photoError}</p>}
           <p className="field-photo-picker__hint">
             JPEG, PNG o WebP de hasta 12 MiB. Las fotos grandes se convierten a JPEG
-            de hasta 512 KiB para guardarlas cifradas. La compresión puede quitar
-            metadatos y detalle; las fotos pequeñas se conservan tal como están.
+            de hasta 512 KiB para guardarlas cifradas. Todas las fotos nuevas se convierten
+            a JPEG para eliminar metadatos EXIF/GPS del archivo original, incluso las pequeñas.
+            Esto puede modificar la calidad y la transparencia.
           </p>
         </div>
         <label className="form-field">

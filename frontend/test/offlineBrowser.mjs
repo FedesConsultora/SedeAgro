@@ -189,6 +189,44 @@ try {
   assert.equal(cameraReopened.clientUploadId, camera.clientUploadId);
   assert.equal(cameraReopened.observationHasPhoto, false);
   console.log('PASS: Chromium compresses a camera JPEG and restores AES-GCM offline draft');
+
+  // EXIF/GPS bytes in an already-small JPEG must never enter a NEW draft.
+  // Insert a syntactically valid APP1 segment with a sentinel GPS label.
+  const exifCheck = await page.evaluate(async () => {
+    const { readOfflinePhoto } = await import('/src/services/offlinePhoto.js');
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 24;
+    c.getContext('2d').fillRect(0, 0, c.width, c.height);
+    const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/jpeg', 0.8));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const tag = new TextEncoder().encode('Exif\\0\\0GPSLatitude=SEDEAGRO_PRIVATE_LOCATION');
+    const segmentLength = tag.length + 2;
+    const tagged = new Uint8Array(bytes.length + 4 + tag.length);
+    tagged.set(bytes.slice(0, 2), 0);
+    tagged[2] = 0xff; tagged[3] = 0xe1;
+    tagged[4] = (segmentLength >>> 8) & 255;
+    tagged[5] = segmentLength & 255;
+    tagged.set(tag, 6);
+    tagged.set(bytes.slice(2), 6 + tag.length);
+    const source = new File([tagged], 'small-with-gps.jpg', { type: 'image/jpeg' });
+    const saved = await readOfflinePhoto(source);
+    const raw = atob(saved.content_base64);
+    return {
+      sourceBytes: source.size,
+      mimeType: saved.mime_type,
+      sanitized: saved.sanitized,
+      filename: saved.original_name,
+      hasGps: raw.includes('SEDEAGRO_PRIVATE_LOCATION'),
+      hasExif: raw.includes('Exif')
+    };
+  });
+  assert.ok(exifCheck.sourceBytes < 512 * 1024);
+  assert.equal(exifCheck.mimeType, 'image/jpeg');
+  assert.equal(exifCheck.sanitized, true);
+  assert.equal(exifCheck.hasGps, false);
+  assert.equal(exifCheck.hasExif, false);
+  assert.match(exifCheck.filename, /-reducida[.]jpg$/);
+  console.log('PASS: Chromium strips embedded location marker from small JPEG during re-encoding');
   await context.close();
 
   // Exercise production service-worker shell under a real offline reload.
