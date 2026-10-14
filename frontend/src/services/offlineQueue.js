@@ -3,6 +3,7 @@ import {
   MAX_PENDING_BATCHES, QUEUE_EVENT, retryDelayMs, sessionScope
 } from './offlineSyncModel.js';
 import { indexedDbQueueStore } from './offlineQueueStore.js';
+import { reconcileOfflineDraft } from './offlineReconciliation.js';
 import { assertStorageCapacity, browserStorageStatus } from './offlineStorageStatus.js';
 
 const changes = () => {
@@ -61,6 +62,29 @@ export function createOfflineQueue({
       ...item, state: 'pending', nextRetryAt: null, lastError: null, errorCode: null
     });
     if (notifyChange) notify();
+  }
+
+  // Requires a fresh server receipt obtained via GET /sync/my-batches and
+  // explicit user confirmation. Never use this for a draft with local evidence:
+  // batch receipts do NOT prove that the separate photo upload succeeded.
+  async function confirmApplied(session, id, receipt) {
+    const scope = sessionScope(session);
+    if (!scope || typeof id !== 'string' || !id.startsWith(`${scope}:`)) {
+      throw new Error('Esta operación pertenece a otra sesión.');
+    }
+    if (inFlightScopes.has(scope)) return false;
+    return withLock(scope, async () => {
+      if (inFlightScopes.has(scope)) return false;
+      const current = await store.get(id);
+      if (!current || current.scope !== scope) return false;
+      const verified = reconcileOfflineDraft(current, [receipt], session);
+      if (verified.status !== 'confirmed' || current.evidence) {
+        throw new Error('No hay un recibo completo y seguro para retirar este borrador.');
+      }
+      await store.delete(id);
+      notify();
+      return true;
+    });
   }
 
   async function flush(session, send, { force = false, sendEvidence = null } = {}) {
@@ -143,7 +167,7 @@ export function createOfflineQueue({
     }
   }
 
-  return { list, queueObservation, discard, allowRetry, flush };
+  return { list, queueObservation, discard, allowRetry, confirmApplied, flush };
 }
 
 async function lockAcrossTabs(scope, handler) {
