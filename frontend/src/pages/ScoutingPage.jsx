@@ -90,7 +90,8 @@ function RunDetail({ run, onChanged }) {
     setWorking(true);
     setActionError('');
     try {
-      await api.updateScoutingRun(run.id, { status });
+      if (role === 'scout') await api.advanceScoutingRun(run.id, status);
+      else await api.updateScoutingRun(run.id, { status });
       await refresh();
       onChanged?.();
     } catch (err) {
@@ -132,11 +133,11 @@ function RunDetail({ run, onChanged }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <strong style={{ fontSize: 13, color: '#334155' }}>Observaciones ({observations.length})</strong>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {canManage && details?.status === 'planned' &&
+          {canOperate && details?.status === 'planned' &&
             <button type="button" className="ghost-action" disabled={working || !details?.assigned_to}
               title={!details?.assigned_to ? 'Primero asigná un responsable' : undefined}
               onClick={() => changeStatus('in_progress')}>Iniciar recorrida</button>}
-          {canManage && details?.status === 'in_progress' &&
+          {canOperate && details?.status === 'in_progress' &&
             <button type="button" className="ghost-action" disabled={working} onClick={() => changeStatus('completed')}>Completar recorrida</button>}
           {canManage && ['planned', 'in_progress'].includes(details?.status) &&
             <button type="button" className="ghost-action" disabled={working}
