@@ -127,6 +127,10 @@ Los seeders globales **no crean usuarios demo** por defecto. Para una instancia 
 
 Antes de desplegar el cambio en una base existente, seguir la [guía de auditoría de cuentas demo](docs/security/production-demo-audit.md). Evitar nuevos usuarios demo **no desactiva cuentas ya existentes**.
 
+## Roles y permisos de empresa
+
+Las rutas de negocio requieren permisos server-side por operación, además de la sesión JWT y el entitlement del módulo. Consulta la [matriz de autorización y sus limitaciones](docs/security/authorization-matrix.md). Las cuentas productoras no tienen acceso a lotes ajenos mientras no exista un modelo de permisos por cliente/establecimiento. El contratista solo puede ver y ejecutar órdenes que tenga asignadas.
+
 ## Primer tenant
 
 Después de levantar el backend, crear una organización:
