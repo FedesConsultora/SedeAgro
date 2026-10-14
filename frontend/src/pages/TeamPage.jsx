@@ -228,7 +228,7 @@ export function TeamPage() {
       ) : (
         <>
           {/* Platform admins section */}
-          {platformAdmins.length > 0 && (
+          {!errors.members && platformAdmins.length > 0 && (
             <section className="team-section">
               <div className="team-section__header">
                 <Shield size={16} style={{ color: '#f43f5e' }} />
@@ -242,7 +242,7 @@ export function TeamPage() {
           )}
 
           {/* Members section */}
-          <section className="team-section">
+          {!errors.members && <section className="team-section">
             <div className="team-section__header">
               <UsersIcon size={16} style={{ color: '#059669' }} />
               <h2>Miembros del tenant</h2>
@@ -259,10 +259,10 @@ export function TeamPage() {
                 {regularMembers.map(m => <MemberCard key={m.id} member={m} />)}
               </div>
             )}
-          </section>
+          </section>}
 
           {/* Teams section */}
-          <section className="team-section">
+          {!errors.teams && <section className="team-section">
             <div className="team-section__header">
               <UsersIcon size={16} style={{ color: '#0ea5e9' }} />
               <h2>Equipos de trabajo</h2>
@@ -279,7 +279,7 @@ export function TeamPage() {
                 {teams.map(t => <TeamCard key={t.id} team={t} />)}
               </div>
             )}
-          </section>
+          </section>}
         </>
       )}
 
