@@ -38,10 +38,10 @@ try {
       DELETE FROM auth_sessions a USING doomed WHERE a.id = doomed.id
       RETURNING a.id
     `, {
-      replacements: { cutoff }, type: QueryTypes.DELETE, transaction
+      replacements: { cutoff }, type: QueryTypes.SELECT, transaction
     }));
     // PostgreSQL returns row count as the second result for DELETE.
-    const removed = Array.isArray(affected) ? affected[1] : affected;
+    const removed = affected.length;
     console.log(JSON.stringify({ action: 'applied', removed,
       retentionDays: 30, maxRowsPerApply: 500 }));
   }
