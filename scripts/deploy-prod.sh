@@ -4,49 +4,93 @@ set -euo pipefail
 echo "====================================="
 echo "  SedeAgro - Deploy Producción"
 echo "====================================="
-echo ""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-if [ ! -f "backend/.env" ]; then
-  echo "Falta backend/.env. Crealo a partir de backend/.env.example antes de desplegar."
+if [[ ! -f .env || ! -f backend/.env ]]; then
+  echo "Se requieren .env y backend/.env; consultar los archivos .env.example." >&2
   exit 1
 fi
 
-if [ -z "${SKIP_GIT_PULL:-}" ]; then
-  echo "Actualizando código desde main..."
-  git pull origin main
+if [[ -z "${SKIP_GIT_PULL:-}" ]]; then
+  git pull --ff-only origin main
 fi
 
-echo ""
-echo "Reconstruyendo y levantando contenedores..."
-docker compose up -d --build --remove-orphans
+# Compose reads .env independently; source it here for controlled role provisioning.
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
 
-echo ""
-echo "Esperando al backend para migraciones..."
-sleep 8
+POSTGRES_DB="${POSTGRES_DB:-sedeagro}"
+POSTGRES_USER="${POSTGRES_USER:-sedeagro}"
+APP_DB_USER="${APP_DB_USER:-sedeagro_app}"
 
-if docker exec sedeagro_backend npm run db:prepare; then
-  echo "Migraciones y datos base aplicados."
-else
-  echo "Falló la preparación de base de datos. Revisá logs antes de continuar."
+if [[ -z "${POSTGRES_PASSWORD:-}" || -z "${APP_DB_PASSWORD:-}" ]]; then
+  echo "POSTGRES_PASSWORD y APP_DB_PASSWORD son obligatorios." >&2
+  exit 1
+fi
+if [[ ! "$APP_DB_USER" =~ ^[a-z_][a-z0-9_]*$ || "$APP_DB_USER" == "$POSTGRES_USER" ]]; then
+  echo "APP_DB_USER debe ser un rol propio, distinto del propietario de la BD." >&2
+  exit 1
+fi
+if [[ ${#APP_DB_PASSWORD} -lt 24 || ! "$APP_DB_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  echo "APP_DB_PASSWORD debe tener 24+ caracteres y ser seguro para una URL PostgreSQL." >&2
+  exit 1
+fi
+if ! grep -Eq '^NODE_ENV=production[[:space:]]*$' backend/.env; then
+  echo "backend/.env debe tener NODE_ENV=production antes de desplegar." >&2
   exit 1
 fi
 
-echo ""
-echo "Refrescando proxy global si existe..."
-if docker ps --format '{{.Names}}' | grep -q "^fedes-proxy$"; then
+echo "Construyendo imágenes sin detener el backend actual..."
+docker compose build backend frontend
+
+echo "Preparando los servicios de base de datos..."
+docker compose up -d db redis
+
+echo "Esperando a PostgreSQL..."
+ready=0
+for _ in $(seq 1 30); do
+  if docker compose exec -T db pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$ready" -ne 1 ]]; then
+  echo "PostgreSQL no respondió después de 60 segundos." >&2
+  exit 1
+fi
+
+# Migrations execute with the schema owner, never with the HTTP server's limited role.
+echo "Aplicando migraciones y catálogo global con rol propietario..."
+docker compose run --rm --no-deps \
+  -e MIGRATION_DB_USER="$POSTGRES_USER" \
+  -e MIGRATION_DB_PASSWORD="$POSTGRES_PASSWORD" \
+  -e MIGRATION_DB_NAME="$POSTGRES_DB" \
+  backend sh -ec '
+    DATABASE_URL="$(node -e '\''const p=process.env; const user=encodeURIComponent(p.MIGRATION_DB_USER); const pass=encodeURIComponent(p.MIGRATION_DB_PASSWORD); const db=encodeURIComponent(p.MIGRATION_DB_NAME); process.stdout.write("postgres://"+user+":"+pass+"@db:5432/"+db);'\'')" \
+      npm run db:prepare
+  '
+
+echo "Provisionando permisos mínimos del usuario de la aplicación..."
+docker compose exec -T db psql \
+  -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 \
+  -v "db_owner=$POSTGRES_USER" \
+  -v "app_user=$APP_DB_USER" \
+  -v "app_password=$APP_DB_PASSWORD" \
+  < scripts/provision-runtime-role.sql
+
+echo "Recreando backend y frontend con credenciales de aplicación no privilegiadas..."
+docker compose up -d --no-deps backend frontend
+
+echo "Recargando proxy global si existe..."
+if docker ps --format '{{.Names}}' | grep -q '^fedes-proxy$'; then
   docker exec fedes-proxy nginx -s reload
-  echo "Proxy recargado."
-else
-  echo "No encontré fedes-proxy; omito reload."
 fi
 
-echo ""
-echo "Deploy completo."
+echo "Deploy completado. Verificar logs, healthchecks y matriz RLS antes de habilitar tráfico."
 docker compose ps
-
-echo ""
-echo "Últimas líneas del backend:"
 docker compose logs backend --tail 30
