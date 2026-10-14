@@ -2,14 +2,14 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { Tenant, User, Plan, TenantModule, Module, Membership } from '../../models/index.js';
 import { asyncHandler, HttpError } from '../../utils/http.js';
+import { isPlatformAdministrator } from '../../infra/security/securityGuards.js';
 
 export const platformRouter = Router();
 
-// Middleware to block non-platform-admins
-platformRouter.use((req, res, next) => {
-  // If in production, strictly verify. In development, double-check req.auth exists.
-  if (req.auth && !req.auth.user.is_platform_admin) {
-    throw new HttpError(403, 'Acceso denegado: Se requieren privilegios de administrador de plataforma.');
+// Fail closed for missing principals and non-platform administrators in all environments.
+platformRouter.use((req, _res, next) => {
+  if (!isPlatformAdministrator(req.auth)) {
+    return next(new HttpError(403, 'Acceso denegado: Se requieren privilegios de administrador de plataforma.'));
   }
   next();
 });
