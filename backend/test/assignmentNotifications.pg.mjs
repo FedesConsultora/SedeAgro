@@ -18,10 +18,12 @@ const { createApp } = await import('../src/app.js');
 const { sequelize, setLocalTenant } = await import('../src/core/db.js');
 const { signSession } = await import('../src/utils/jwt.js');
 const { createAssignmentNotification } = await import('../src/modules/notifications/assignmentNotifications.js');
+const { isSafeRuntimeDbRole } = await import('../src/core/tenantDbSafety.js');
 const { Client } = pg;
 
 test('assignment notifications: transactional writes, replay, ownership, RLS, rollback', async t => {
   const owner = new Client({ connectionString: adminUrl });
+  const appClient = new Client({ connectionString: appUrl });
   const server = createApp().listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
@@ -33,6 +35,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
   const tenants = [];
   const users = [];
   let connected = false;
+  let appConnected = false;
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
   async function insert(sql, args) {
     return (await owner.query(sql, args)).rows[0].id;
@@ -58,6 +61,24 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     connected = true;
     const [{ name }] = (await owner.query('SELECT current_database() AS name')).rows;
     assert.match(name, /(?:^|[_-])test(?:$|[_-])/i);
+    await appClient.connect();
+    appConnected = true;
+    const [{ db, ...appRole }] = (await appClient.query(`
+      SELECT current_database() AS db,
+             r.rolname, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb,
+             pg_get_userbyid(d.datdba) AS db_owner
+      FROM pg_roles r JOIN pg_database d ON d.datname=current_database()
+      WHERE r.rolname=current_user
+    `)).rows;
+    assert.equal(db, name, 'Owner and app URLs must use the same disposable test DB');
+    assert.ok(isSafeRuntimeDbRole(appRole),
+      'Runtime DB connection must be a non-owner without RLS bypass privileges');
+    const [policy] = (await owner.query(`
+      SELECT relrowsecurity, relforcerowsecurity
+      FROM pg_class WHERE oid='public.notifications'::regclass
+    `)).rows;
+    assert.ok(policy.relrowsecurity && policy.relforcerowsecurity,
+      'Notifications table must enforce FORCE RLS');
     const [{ id: planId }] = (await owner.query("SELECT id FROM plans WHERE code='starter'")).rows;
     const [{ id: cropId }] = (await owner.query("SELECT id FROM crop_types WHERE code='soy'")).rows;
     assert.ok(planId && cropId, 'Global seeds are required before DB gate');
@@ -244,5 +265,6 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
         }
       } finally { await owner.end(); }
     }
+    if (appConnected) await appClient.end();
   }
 });
