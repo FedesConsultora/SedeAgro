@@ -68,7 +68,7 @@ function serializeForm(form, values) {
 
 function statusMeta(source, dataMode) {
   if (source === 'live') return { icon: Server, label: 'Backend', tone: 'live' };
-  if (source === 'fallback') return { icon: AlertTriangle, label: 'Mock fallback', tone: 'fallback' };
+  if (source === 'error') return { icon: AlertTriangle, label: 'Error del backend', tone: 'fallback' };
   if (dataMode === 'live') return { icon: Database, label: 'Backend', tone: 'live' };
   return { icon: FlaskConical, label: 'Mock', tone: 'mock' };
 }
@@ -119,6 +119,7 @@ export function EndpointWorkbench({ resource }) {
   const feedback = useFeedback();
   const [items, setItems] = useState(() => cloneMock(resource.mock));
   const [source, setSource] = useState(dataMode);
+  const [loadError, setLoadError] = useState('');
   const [isBusy, setIsBusy] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(true);
   const [formValues, setFormValues] = useState(() => makeInitialValues(resource.form));
@@ -130,6 +131,7 @@ export function EndpointWorkbench({ resource }) {
     if (dataMode === 'mock') {
       setItems(cloneMock(resource.mock));
       setSource('mock');
+      setLoadError('');
       return;
     }
 
@@ -138,9 +140,11 @@ export function EndpointWorkbench({ resource }) {
       const response = await resource.load(api);
       setItems(unwrap(response));
       setSource('live');
-    } catch {
-      setItems(cloneMock(resource.mock));
-      setSource('fallback');
+      setLoadError('');
+    } catch (error) {
+      setItems([]);
+      setSource('error');
+      setLoadError(error?.message || 'No se pudo cargar la información del backend.');
     } finally {
       setIsBusy(false);
     }
@@ -216,6 +220,9 @@ export function EndpointWorkbench({ resource }) {
         </div>
       </div>
 
+      {loadError && dataMode === 'live' && <div className="auth-error" role="alert">
+        {loadError} <button type="button" onClick={loadResource} disabled={isBusy}>Reintentar</button>
+      </div>}
       <div className={isFormOpen ? 'resource-panel__body' : 'resource-panel__body resource-panel__body--table-only'}>
         <div className="resource-table" role="table" aria-label={resource.title}>
           <div className="resource-table__row resource-table__row--head" role="row">
@@ -239,7 +246,7 @@ export function EndpointWorkbench({ resource }) {
               })}
             </div>
           ))}
-          {!items.length && (
+          {!items.length && !loadError && (
             <div className="resource-table__empty">
               <CheckCircle2 size={18} />
               <span>Sin registros</span>
