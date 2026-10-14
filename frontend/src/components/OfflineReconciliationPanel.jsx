@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, RefreshCw, AlertTriangle, Image, MapPin } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
-import { sessionScope, QUEUE_EVENT } from '../services/offlineSyncModel.js';
+import { sessionScope } from '../services/offlineSyncModel.js';
 import {
   parseMySyncReceipts, reconcileOfflineDraft, RECONCILIATION_STATUS
 } from '../services/offlineReconciliation.js';
