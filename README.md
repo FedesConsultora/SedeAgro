@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Centro de trabajo agronómico (Bloque 0P — inspirado en TOP)
+
+El Inicio dejó de mostrar un mapa ilustrativo presentado como semáforo de riesgo y ahora lista **prioridades verificables** (órdenes vencidas/urgentes/pendientes de aprobación y recorridas atrasadas/en curso), métricas de las API habilitadas para el rol y accesos a registros concretos. Un error del backend **no se reemplaza por datos mock** en Inicio ni en Órdenes. Las filas de Órdenes son accesibles con teclado e incorporan búsqueda y filtros; un productor, un monitoreador y un contratista ven únicamente módulos correspondientes a sus capacidades. El [inventario comparado con patrones reales de TOP y próximos bloques 0Q–0T](docs/product/top-inspired-operational-roadmap.md) identifica los fallbacks que aún deben corregirse en otros módulos.
+
 ## Control de dispositivos y staging reproducible (Bloque 0O)
 
 Cada usuario puede mantener hasta **cinco sesiones activas por empresa**, con revocación de sesiones antiguas en inicios simultáneos. La nueva pantalla **Sesiones** permite cerrar dispositivos remotos sin exponer tokens ni borrar borradores locales cifrados. La limpieza de sesiones caducadas exige operación explícita: `backend/scripts/cleanup-auth-sessions.mjs --dry-run` o `--apply` con confirmación y máximo 500 registros. El CI incluye **Chromium autenticándose contra PostgreSQL real**, y genera un manifiesto de hashes del build de staging cuando `main` pasa sus controles; **no realiza despliegues ni restauraciones automáticas**. Ver [política de sesiones y procedimiento de staging](docs/security/session-operations-0o.md).
