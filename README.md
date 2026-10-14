@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Captura de campo y aceptación móvil (Bloque 0L)
+
+El formulario de monitoreo ofrece captura con cámara o galería y puede reducir JPEG/PNG/WebP de hasta **12 MiB** a una fotografía offline de **512 KiB** manteniendo las proporciones. El borrador y su foto siguen cifrados y los reintentos conservan identificadores únicos; los conflictos distinguen una observación ya confirmada de su foto aún pendiente. El CI comprueba esta conversión en **Chromium real** y se mantiene una [matriz de aceptación Android/iOS y staging](docs/pilot-field-acceptance-0l.md). **Los dispositivos físicos y el despliegue productivo continúan sin certificar.**
+
 ## Fotografías offline vinculadas a observaciones
 
 Las observaciones del navegador pueden incluir **una fotografía JPEG/PNG/WebP de hasta 512 KiB**, cifrada junto a las notas. Se sincroniza primero la observación y luego el archivo, con **identificadores de idempotencia separados**: si la conexión se corta, ningún elemento se pierde ni se duplica al reintentar. La pantalla indica cuando la observación quedó confirmada pero su foto sigue pendiente. El CI incluye pruebas reales con Chromium para migración IndexedDB y apertura del shell offline. [Contrato, límites y QA](docs/offline-evidence-and-browser-qa.md).

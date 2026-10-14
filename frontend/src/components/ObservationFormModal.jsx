@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
-import { readOfflinePhoto } from '../services/offlinePhoto.js';
+import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
 
 export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
   const { dataMode, session } = useSession();
@@ -14,9 +14,36 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   });
   const [saving, setSaving] = useState(false);
   const [photo, setPhoto] = useState(null);
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoError, setPhotoError] = useState('');
   const [error, setError] = useState('');
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  useEffect(() => {
+    if (!photo) {
+      setPhotoPreview(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(photo);
+    setPhotoPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [photo]);
+
+  const onPhotoSelected = (event) => {
+    const selected = event.target.files?.[0] || null;
+    // Reset inputs so selecting the same photo again fires a change event.
+    event.target.value = '';
+    setPhotoError('');
+    if (!selected) return;
+    try {
+      cameraPhotoPlan(selected);
+      setPhoto(selected);
+    } catch (err) {
+      setPhoto(null);
+      setPhotoError(err?.message || 'No se pudo seleccionar esta fotografía.');
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -44,9 +71,9 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Agregar observación"
       footer={<>
-        <button type="button" className="ghost-action" onClick={onClose}>Cancelar</button>
+        <button type="button" className="ghost-action" onClick={onClose} disabled={saving}>Cancelar</button>
         <button type="submit" form="obs-form" className="primary-action" disabled={saving}>
-          {saving ? 'Guardando…' : 'Guardar observación'}
+          {saving ? 'Preparando y guardando…' : 'Guardar observación'}
         </button>
       </>}
     >
@@ -87,14 +114,41 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
           de reintento segura cuando haya conexión. No se considera registrada en el servidor
           hasta aparecer como «Aplicada» en Sincronizaciones.
         </p>
-        <label className="form-field">
-          <span>Fotografía opcional para guardar offline</span>
-          <input type="file" accept="image/jpeg,image/png,image/webp"
-            onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={saving} />
-          <span style={{ fontSize: 12, color: '#64748b' }}>
-            Máximo 512 KiB. Se guarda cifrada junto con las notas; se envía después de confirmar la observación.
-          </span>
-        </label>
+        <div className="field-photo-picker">
+          <strong style={{ fontSize: 13 }}>Fotografía opcional</strong>
+          <div className="field-photo-picker__actions">
+            <label className="ghost-action field-photo-picker__action">
+              Tomar foto
+              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment"
+                onChange={onPhotoSelected} disabled={saving} aria-label="Tomar foto con cámara trasera" />
+            </label>
+            <label className="ghost-action field-photo-picker__action">
+              Elegir archivo
+              <input type="file" accept="image/jpeg,image/png,image/webp"
+                onChange={onPhotoSelected} disabled={saving} aria-label="Elegir fotografía del dispositivo" />
+            </label>
+            {photo && <button type="button" className="ghost-action" disabled={saving}
+              onClick={() => setPhoto(null)}>Quitar foto</button>}
+          </div>
+          {photo && (
+            <div className="field-photo-picker__selected">
+              {photoPreview && <img src={photoPreview} alt="Vista previa local de la fotografía seleccionada" />}
+              <div>
+                <strong>{photo.name}</strong>
+                <div>{(photo.size / 1048576).toFixed(2)} MiB originales</div>
+                <div>{photo.size > 512 * 1024
+                  ? 'Se reducirá automáticamente antes de guardar (máximo 512 KiB).'
+                  : 'Tamaño compatible. Se conserva el archivo original.'}</div>
+              </div>
+            </div>
+          )}
+          {photoError && <p role="alert" className="field-photo-picker__error">{photoError}</p>}
+          <p className="field-photo-picker__hint">
+            JPEG, PNG o WebP de hasta 12 MiB. Las fotos grandes se convierten a JPEG
+            de hasta 512 KiB para guardarlas cifradas. La compresión puede quitar
+            metadatos y detalle; las fotos pequeñas se conservan tal como están.
+          </p>
+        </div>
         <label className="form-field">
           <span>Notas *</span>
           <textarea id="obs-notes" value={form.notes} onChange={set('notes')} required rows={3}

@@ -119,6 +119,76 @@ try {
   });
   assert.equal(storage.supported, true);
   console.log('PASS: Browser storage quota information available');
+
+  // The actual browser decoder/canvas encoder handles a phone-sized image:
+  // one oversized photo must be converted to a bounded JPEG before AES-GCM
+  // encrypts it, and must survive a page reload with a stable client UUID.
+  const camera = await page.evaluate(async () => {
+    const { readOfflinePhoto } = await import('/src/services/offlinePhoto.js');
+    const { offlineQueue } = await import('/src/services/offlineQueue.js');
+    const canvas = document.createElement('canvas');
+    canvas.width = 2200;
+    canvas.height = 1700;
+    const ctx = canvas.getContext('2d');
+    const pixels = ctx.createImageData(canvas.width, canvas.height);
+    let seed = 123456789;
+    for (let index = 0; index < pixels.data.length; index += 4) {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      pixels.data[index] = seed & 255;
+      pixels.data[index + 1] = (seed >>> 8) & 255;
+      pixels.data[index + 2] = (seed >>> 16) & 255;
+      pixels.data[index + 3] = 255;
+    }
+    ctx.putImageData(pixels, 0, 0);
+    const originalBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.98));
+    if (!originalBlob) throw new Error('Could not generate test photo');
+    const original = new File([originalBlob], 'original-field-camera.jpg', { type: 'image/jpeg' });
+    const prepared = await readOfflinePhoto(original);
+    const session = {
+      token: 'browser-smoke-only',
+      tenant: { id: '0b000000-0000-4000-8000-000000000001' },
+      user: { id: '0b000000-0000-4000-8000-000000000002' }
+    };
+    const item = await offlineQueue.queueObservation(session,
+      '0b000000-0000-4000-8000-000000000004',
+      { notes: 'camera-smoke-test', observation_type: 'pest', severity: 'low', photo: prepared });
+    return {
+      originalBytes: original.size, savedBytes: prepared.size_bytes,
+      resized: prepared.resized, mime: prepared.mime_type,
+      name: prepared.original_name, queuedId: item.id,
+      clientUploadId: item.evidence.client_upload_id
+    };
+  });
+  assert.ok(camera.originalBytes > 512 * 1024, 'test camera source must exceed 512KiB');
+  assert.ok(camera.savedBytes <= 512 * 1024);
+  assert.equal(camera.resized, true);
+  assert.equal(camera.mime, 'image/jpeg');
+  assert.match(camera.name, /-reducida[.]jpg$/);
+  assert.ok(camera.clientUploadId);
+  await page.reload();
+  const cameraReopened = await page.evaluate(async (draftId) => {
+    const { offlineQueue } = await import('/src/services/offlineQueue.js');
+    const session = {
+      token: 'browser-smoke-only',
+      tenant: { id: '0b000000-0000-4000-8000-000000000001' },
+      user: { id: '0b000000-0000-4000-8000-000000000002' }
+    };
+    const item = (await offlineQueue.list(session)).find((row) => row.id === draftId);
+    if (!item) return null;
+    const response = {
+      photoBytes: item.evidence.content_base64.length,
+      clientUploadId: item.evidence.client_upload_id,
+      observationHasPhoto: Boolean(item.body.operations[0].payload.content_base64)
+    };
+    await offlineQueue.discard(session, item.id);
+    return response;
+  }, camera.queuedId);
+  assert.ok(cameraReopened.photoBytes > 0);
+  assert.equal(cameraReopened.clientUploadId, camera.clientUploadId);
+  assert.equal(cameraReopened.observationHasPhoto, false);
+  console.log('PASS: Chromium compresses a camera JPEG and restores AES-GCM offline draft');
   await context.close();
 
   // Exercise production service-worker shell under a real offline reload.
