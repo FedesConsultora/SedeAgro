@@ -165,7 +165,7 @@ try {
   assert.ok(camera.savedBytes <= 512 * 1024);
   assert.equal(camera.resized, true);
   assert.equal(camera.mime, 'image/jpeg');
-  assert.match(camera.name, /-reducida\\.jpg$/);
+  assert.match(camera.name, /-reducida[.]jpg$/);
   assert.ok(camera.clientUploadId);
   await page.reload();
   const cameraReopened = await page.evaluate(async (draftId) => {
