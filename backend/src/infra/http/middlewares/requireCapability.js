@@ -28,8 +28,8 @@ export function hasCapability(auth, tenantId, capability) {
   if (!tenantId || !auth?.user?.id || !membership || !roleCode || !capability) return false;
   if (membership.status !== 'active' || membership.tenant_id !== tenantId ||
       membership.user_id !== auth.user.id || membership.role_code !== roleCode) return false;
-  const allowed = CAPABILITIES[roleCode];
-  return Boolean(allowed && (allowed.includes('*') || allowed.includes(capability)));
+  const allowed = Object.hasOwn(CAPABILITIES, roleCode) ? CAPABILITIES[roleCode] : null;
+  return Boolean(Array.isArray(allowed) && (allowed.includes('*') || allowed.includes(capability)));
 }
 
 export function requireCapability(capability) {
