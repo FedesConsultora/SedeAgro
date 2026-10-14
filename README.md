@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Sincronización atómica y bitácora de recorridas
+
+Los lotes offline compatibles ahora aplican observaciones reales de monitoreo en una sola transacción y responden con IDs de operaciones procesadas. Los reintentos requieren una clave de idempotencia; no se admiten tipos arbitrarios ni cambios fuera de una recorrida autorizada. La página web muestra **recibos reales** y ya no simula una sincronización. Los administradores y coordinadores pueden consultar el historial de cambios de recorridas. [Contrato y límites de sincronización](docs/sync-atomic-observations.md).
+
 ## Monitoreo real y carga de archivos
 
 El detalle de recorridas consulta observaciones reales, los monitoreadores ven únicamente recorridas asignadas y las observaciones obtienen su lote del servidor. Un monitoreador puede iniciar y completar sus propias recorridas, y únicamente ver establecimientos, lotes y campañas de sus asignaciones. Los responsables se eligen por nombre entre miembros activos; ver [permisos y flujo por lote](docs/scouting-assignments-field-scope.md). Fotos JPEG/PNG/WebP y PDF de hasta 2 MiB se almacenan en PostgreSQL de forma transaccional, con descarga autenticada; no se admiten URLs arbitrarias como falsa evidencia. [Contrato y límites](docs/scouting-real-workflow.md).

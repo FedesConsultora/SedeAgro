@@ -9,6 +9,7 @@ export function defineSyncOperation(sequelize, DataTypes) {
     entity_client_id: DataTypes.STRING(120),
     operation: { type: DataTypes.STRING(24), allowNull: false },
     payload: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
+    result: DataTypes.JSONB,
     status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'pending' },
     error: DataTypes.TEXT
   }, { tableName: 'sync_operations', timestamps: false });
