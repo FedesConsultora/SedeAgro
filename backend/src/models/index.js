@@ -10,6 +10,7 @@ import { definePermission } from './definitions/permission.model.js';
 import { defineRolePermission } from './definitions/rolePermission.model.js';
 import { defineTenant } from './definitions/tenant.model.js';
 import { defineMembership } from './definitions/membership.model.js';
+import { defineAuthSession } from './definitions/authSession.model.js';
 import { defineTenantModule } from './definitions/tenantModule.model.js';
 import { defineTenantIntegration } from './definitions/tenantIntegration.model.js';
 import { definePlatformAuditLog } from './definitions/platformAuditLog.model.js';
@@ -53,6 +54,7 @@ export const Permission = definePermission(sequelize, DataTypes);
 export const RolePermission = defineRolePermission(sequelize, DataTypes);
 export const Tenant = defineTenant(sequelize, DataTypes);
 export const Membership = defineMembership(sequelize, DataTypes);
+export const AuthSession = defineAuthSession(sequelize, DataTypes);
 export const TenantModule = defineTenantModule(sequelize, DataTypes);
 export const TenantIntegration = defineTenantIntegration(sequelize, DataTypes);
 export const PlatformAuditLog = definePlatformAuditLog(sequelize, DataTypes);
@@ -97,6 +99,7 @@ export const models = {
   RolePermission,
   Tenant,
   Membership,
+  AuthSession,
   TenantModule,
   TenantIntegration,
   PlatformAuditLog,
