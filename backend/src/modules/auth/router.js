@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { sequelize } from '../../core/db.js';
+import { sequelize, setLocalTenant, withTenantTransaction } from '../../core/db.js';
 import {
   Membership,
   Plan,
@@ -114,6 +114,10 @@ authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, 
       skipTenantScope: true
     });
 
+    // TenantModule has FORCE RLS: even registration must activate the new tenant
+    // inside its existing transaction before writing entitlement rows.
+    await setLocalTenant(transaction, tenant.id);
+
     await TenantModule.bulkCreate(planModules.map((planModule) => ({
       tenant_id: tenant.id,
       module_code: planModule.module_code,
@@ -164,7 +168,13 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
     return;
   }
 
-  res.json(await issueTenantSession(user, selectedMembership, req.dbTransaction));
+  // Login is a public route, so no request-level tenant transaction exists yet.
+  // Read FORCE-RLS entitlements in an explicit transaction for the selected tenant.
+  const session = await withTenantTransaction(
+    (transaction) => issueTenantSession(user, selectedMembership, transaction),
+    selectedMembership.tenant_id
+  );
+  res.json(session);
 }));
 
 authScopedRouter.get('/me', asyncHandler(async (req, res) => {
