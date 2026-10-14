@@ -36,6 +36,15 @@ try {
   const page = await context.newPage();
   await page.goto('http://127.0.0.1:4173/');
 
+  // Upgraded installations must scrub the old JWT-bearing localStorage key.
+  await page.evaluate(() => localStorage.setItem('sedeagro.session', JSON.stringify({
+    token: 'legacy-sensitive-jwt-never-persist', tenant: { id: 'old-tenant' }
+  })));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => localStorage.getItem('sedeagro.session') === null);
+  assert.equal(await page.evaluate(() => localStorage.getItem('sedeagro.session')), null);
+  console.log('PASS: Browser removes legacy localStorage JWT before rendering');
+
   const scope = '0b000000-0000-4000-8000-000000000001:0b000000-0000-4000-8000-000000000002';
   const uuid = '0b000000-0000-4000-8000-000000000003';
   const id = scope + ':' + uuid;
