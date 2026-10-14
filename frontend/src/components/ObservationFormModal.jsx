@@ -5,15 +5,18 @@ import { offlineQueue } from '../services/offlineQueue.js';
 import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
 import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
+import { localObservationDateTime } from '../services/observationLocation.js';
+
+const emptyObservation = () => ({
+  observation_type: 'weed',
+  severity: 'medium',
+  observed_at: localObservationDateTime(),
+  notes: ''
+});
 
 export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
   const { dataMode, session } = useSession();
-  const [form, setForm] = useState({
-    observation_type: 'weed',
-    severity: 'medium',
-    observed_at: new Date().toISOString().slice(0, 16),
-    notes: ''
-  });
+  const [form, setForm] = useState(emptyObservation);
   const [saving, setSaving] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -24,12 +27,16 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const selectedLocation = location?.key === locationKey ? location.fix : null;
   const [error, setError] = useState('');
 
+  // Cancelled/finished forms and actor/tenant/run changes must never reuse
+  // a previous operator's private notes, photo or explicitly approved GPS.
   useEffect(() => {
-    if (!isOpen) {
-      setLocation(null);
-      setLocating(false);
-    }
-  }, [isOpen]);
+    setForm(emptyObservation());
+    setLocation(null);
+    setLocating(false);
+    setPhoto(null);
+    setPhotoError('');
+    setError('');
+  }, [isOpen, locationKey]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
