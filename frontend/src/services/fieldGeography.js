@@ -114,3 +114,28 @@ export function fieldGeography(boundary, farmCentroid = null) {
     farmPoint
   };
 }
+
+
+/**
+ * Project an actual WGS84 coordinate onto the SAME local SVG frame used by
+ * fieldGeography(). No geography is fabricated and no external tiles are used.
+ * The resulting point may be outside the frame when the GPS fix is outside the
+ * field; callers must decide whether to render it.
+ */
+export function projectFieldPosition(geography, coordinates) {
+  if (geography?.kind !== 'polygon' || !isLonLat(coordinates)) return null;
+  const { west, east, south, north } = geography.bbox;
+  const latitude = (north + south) / 2;
+  const longitudeScale = Math.cos(latitude * Math.PI / 180);
+  const width = (east - west) * longitudeScale;
+  const height = north - south;
+  if (width <= 0 || height <= 0) return null;
+  const scale = Math.min((VIEW_WIDTH - 2 * MARGIN) / width,
+    (VIEW_HEIGHT - 2 * MARGIN) / height);
+  const offsetX = (VIEW_WIDTH - width * scale) / 2;
+  const offsetY = (VIEW_HEIGHT - height * scale) / 2;
+  return {
+    x: formatPoint(offsetX + (coordinates[0] - west) * longitudeScale * scale),
+    y: formatPoint(offsetY + (north - coordinates[1]) * scale)
+  };
+}
