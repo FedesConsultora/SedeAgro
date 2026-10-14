@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Field, Farm, RainfallEvent, IrrigationEvent } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const fieldsRouter = Router();
 
@@ -32,7 +33,7 @@ const irrigationSchema = z.object({
   notes: z.string().optional()
 });
 
-fieldsRouter.get('/', asyncHandler(async (req, res) => {
+fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const fields = await Field.findAll({
     include: [{ model: Farm, attributes: ['id', 'name', 'province', 'locality'] }],
     order: [['name', 'ASC']],
@@ -41,12 +42,12 @@ fieldsRouter.get('/', asyncHandler(async (req, res) => {
   res.json({ data: fields });
 }));
 
-fieldsRouter.post('/', validate(fieldSchema), asyncHandler(async (req, res) => {
+fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), asyncHandler(async (req, res) => {
   const field = await Field.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: field });
 }));
 
-fieldsRouter.get('/:id', asyncHandler(async (req, res) => {
+fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const field = await Field.findByPk(req.params.id, {
     include: [
       { model: Farm, attributes: ['id', 'name'] },
@@ -59,7 +60,7 @@ fieldsRouter.get('/:id', asyncHandler(async (req, res) => {
   res.json({ data: field });
 }));
 
-fieldsRouter.post('/:id/rainfall', validate(rainfallSchema), asyncHandler(async (req, res) => {
+fieldsRouter.post('/:id/rainfall', requireCapability('water.write'), validate(rainfallSchema), asyncHandler(async (req, res) => {
   const event = await RainfallEvent.create({
     ...req.body,
     field_id: req.params.id,
@@ -68,7 +69,7 @@ fieldsRouter.post('/:id/rainfall', validate(rainfallSchema), asyncHandler(async 
   res.status(201).json({ data: event });
 }));
 
-fieldsRouter.post('/:id/irrigation', validate(irrigationSchema), asyncHandler(async (req, res) => {
+fieldsRouter.post('/:id/irrigation', requireCapability('water.write'), validate(irrigationSchema), asyncHandler(async (req, res) => {
   const event = await IrrigationEvent.create({
     ...req.body,
     field_id: req.params.id,
@@ -77,7 +78,7 @@ fieldsRouter.post('/:id/irrigation', validate(irrigationSchema), asyncHandler(as
   res.status(201).json({ data: event });
 }));
 
-fieldsRouter.patch('/:id', validate(fieldSchema.partial()), asyncHandler(async (req, res) => {
+fieldsRouter.patch('/:id', requireCapability('gis.write'), validate(fieldSchema.partial()), asyncHandler(async (req, res) => {
   const field = await Field.findByPk(req.params.id, { transaction: req.dbTransaction });
   if (!field) return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
   await field.update(req.body, { transaction: req.dbTransaction });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AgriculturalInput, Machinery } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const assetsRouter = Router();
 
@@ -27,7 +28,7 @@ const inputSchema = z.object({
   metadata: z.record(z.any()).default({})
 });
 
-assetsRouter.get('/machinery', asyncHandler(async (req, res) => {
+assetsRouter.get('/machinery', requireCapability('assets.read'), asyncHandler(async (req, res) => {
   const machinery = await Machinery.findAll({
     order: [['kind', 'ASC'], ['name', 'ASC']],
     transaction: req.dbTransaction
@@ -35,12 +36,12 @@ assetsRouter.get('/machinery', asyncHandler(async (req, res) => {
   res.json({ data: machinery });
 }));
 
-assetsRouter.post('/machinery', validate(machinerySchema), asyncHandler(async (req, res) => {
+assetsRouter.post('/machinery', requireCapability('assets.write'), validate(machinerySchema), asyncHandler(async (req, res) => {
   const machine = await Machinery.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: machine });
 }));
 
-assetsRouter.get('/inputs', asyncHandler(async (req, res) => {
+assetsRouter.get('/inputs', requireCapability('assets.read'), asyncHandler(async (req, res) => {
   const inputs = await AgriculturalInput.findAll({
     order: [['category', 'ASC'], ['name', 'ASC']],
     transaction: req.dbTransaction
@@ -48,7 +49,7 @@ assetsRouter.get('/inputs', asyncHandler(async (req, res) => {
   res.json({ data: inputs });
 }));
 
-assetsRouter.post('/inputs', validate(inputSchema), asyncHandler(async (req, res) => {
+assetsRouter.post('/inputs', requireCapability('assets.write'), validate(inputSchema), asyncHandler(async (req, res) => {
   const input = await AgriculturalInput.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: input });
 }));

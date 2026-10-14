@@ -1,17 +1,21 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Op } from 'sequelize';
 import {
   AgriculturalInput,
   CampaignField,
   Field,
   Machinery,
+  Membership,
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderInput,
   WorkOrderMachinery
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, validate, HttpError } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { canTransitionWorkOrder } from './workOrderPolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -21,7 +25,7 @@ const workOrderSchema = z.object({
   campaign_field_id: z.string().uuid().optional().nullable(),
   field_id: z.string().uuid(),
   type: z.enum(['application', 'sowing', 'fertilization', 'harvest', 'irrigation', 'inspection', 'other']),
-  status: z.enum(['draft', 'pending_approval', 'approved', 'assigned', 'in_progress', 'completed', 'cancelled']).default('draft'),
+  status: z.literal('draft').optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).default('normal'),
   due_at: z.coerce.date().optional(),
   title: z.string().min(2).max(180),
@@ -50,8 +54,23 @@ const machinerySchema = z.object({
   role: z.string().max(80).default('primary')
 });
 
-workOrdersRouter.get('/', asyncHandler(async (req, res) => {
+async function contractorAssignedToOrder(req, orderId) {
+  return Boolean(await WorkOrderAssignee.findOne({
+    where: { tenant_id: req.tenantId, work_order_id: orderId, user_id: req.auth.user.id },
+    attributes: ['id'],
+    transaction: req.dbTransaction
+  }));
+}
+
+workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (req, res) => {
+  const contractor = req.auth.role.code === 'contractor';
+  const assignments = contractor ? await WorkOrderAssignee.findAll({
+    where: { tenant_id: req.tenantId, user_id: req.auth.user.id },
+    attributes: ['work_order_id'],
+    transaction: req.dbTransaction
+  }) : [];
   const orders = await WorkOrder.findAll({
+    ...(contractor ? { where: { id: { [Op.in]: assignments.map((item) => item.work_order_id) } } } : {}),
     include: [
       { model: Field, attributes: ['id', 'name', 'area_hectares'] },
       { model: CampaignField, attributes: ['id', 'campaign_id', 'crop_type_id'] },
@@ -65,15 +84,19 @@ workOrdersRouter.get('/', asyncHandler(async (req, res) => {
   res.json({ data: orders });
 }));
 
-workOrdersRouter.post('/', validate(workOrderSchema), asyncHandler(async (req, res) => {
+workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
   const order = await WorkOrder.create({
     ...req.body,
+    status: 'draft',
     requested_by: req.auth.user.id
   }, { transaction: req.dbTransaction });
   res.status(201).json({ data: order });
 }));
 
-workOrdersRouter.get('/:id', asyncHandler(async (req, res) => {
+workOrdersRouter.get('/:id', requireCapability('orders.read'), asyncHandler(async (req, res) => {
+  if (req.auth.role.code === 'contractor' && !(await contractorAssignedToOrder(req, req.params.id))) {
+    return res.status(404).json({ error: { message: 'Orden de trabajo no encontrada.' } });
+  }
   const order = await WorkOrder.findByPk(req.params.id, {
     include: [
       { model: Field },
@@ -88,11 +111,32 @@ workOrdersRouter.get('/:id', asyncHandler(async (req, res) => {
   res.json({ data: order });
 }));
 
-workOrdersRouter.patch('/:id/status', validate(statusSchema), asyncHandler(async (req, res) => {
-  const order = await WorkOrder.findByPk(req.params.id, { transaction: req.dbTransaction });
+workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), validate(statusSchema), asyncHandler(async (req, res) => {
+  const order = await WorkOrder.findByPk(req.params.id, {
+    transaction: req.dbTransaction,
+    lock: req.dbTransaction.LOCK.UPDATE
+  });
   if (!order) return res.status(404).json({ error: { message: 'Orden de trabajo no encontrada.' } });
 
+  const roleCode = req.auth.role.code;
+  const assigned = roleCode === 'contractor'
+    ? await contractorAssignedToOrder(req, order.id)
+    : false;
   const nextStatus = req.body.status;
+  if (!canTransitionWorkOrder(order.status, nextStatus, roleCode, assigned)) {
+    throw new HttpError(roleCode === 'contractor' ? 403 : 409,
+      'Transición de orden no permitida para este usuario o estado.',
+      undefined, 'WORK_ORDER_TRANSITION_DENIED');
+  }
+  if (nextStatus === 'assigned') {
+    const assignees = await WorkOrderAssignee.count({
+      where: { tenant_id: req.tenantId, work_order_id: order.id },
+      transaction: req.dbTransaction
+    });
+    if (assignees === 0) {
+      throw new HttpError(409, 'La orden necesita al menos un responsable para pasar a asignada.');
+    }
+  }
   await order.update({
     status: nextStatus,
     approved_at: nextStatus === 'approved' ? new Date() : order.approved_at,
@@ -102,7 +146,12 @@ workOrdersRouter.patch('/:id/status', validate(statusSchema), asyncHandler(async
   res.json({ data: order });
 }));
 
-workOrdersRouter.post('/:id/assignees', validate(assigneeSchema), asyncHandler(async (req, res) => {
+workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), validate(assigneeSchema), asyncHandler(async (req, res) => {
+  const membership = await Membership.findOne({
+    where: { tenant_id: req.tenantId, user_id: req.body.user_id, status: 'active' },
+    transaction: req.dbTransaction
+  });
+  if (!membership) throw new HttpError(422, 'El responsable debe ser un miembro activo de esta organización.');
   const assignee = await WorkOrderAssignee.create({
     ...req.body,
     work_order_id: req.params.id
@@ -110,7 +159,7 @@ workOrdersRouter.post('/:id/assignees', validate(assigneeSchema), asyncHandler(a
   res.status(201).json({ data: assignee });
 }));
 
-workOrdersRouter.post('/:id/inputs', validate(inputSchema), asyncHandler(async (req, res) => {
+workOrdersRouter.post('/:id/inputs', requireCapability('orders.write'), validate(inputSchema), asyncHandler(async (req, res) => {
   const input = await WorkOrderInput.create({
     ...req.body,
     work_order_id: req.params.id
@@ -118,7 +167,7 @@ workOrdersRouter.post('/:id/inputs', validate(inputSchema), asyncHandler(async (
   res.status(201).json({ data: input });
 }));
 
-workOrdersRouter.post('/:id/machinery', validate(machinerySchema), asyncHandler(async (req, res) => {
+workOrdersRouter.post('/:id/machinery', requireCapability('orders.write'), validate(machinerySchema), asyncHandler(async (req, res) => {
   const machine = await WorkOrderMachinery.create({
     ...req.body,
     work_order_id: req.params.id

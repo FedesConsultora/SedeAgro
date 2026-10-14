@@ -14,6 +14,7 @@ import { validatePasswordStrength } from '../../utils/password.js';
 import { signSession } from '../../utils/jwt.js';
 import { HttpError, asyncHandler, validate } from '../../utils/http.js';
 import { rateLimit } from '../../infra/http/middlewares/rateLimit.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
@@ -187,7 +188,7 @@ authScopedRouter.get('/me', asyncHandler(async (req, res) => {
   });
 }));
 
-authScopedRouter.get('/members', asyncHandler(async (req, res) => {
+authScopedRouter.get('/members', requireCapability('members.read'), asyncHandler(async (req, res) => {
   const memberships = await Membership.findAll({
     where: { tenant_id: req.tenantId },
     include: [{ model: User, attributes: ['id', 'email', 'full_name', 'status', 'is_platform_admin'] }],

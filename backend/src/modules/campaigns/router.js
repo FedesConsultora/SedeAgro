@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Campaign, CampaignField, CropType, CropVariety, Field } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const campaignsRouter = Router();
 
@@ -26,7 +27,7 @@ const campaignFieldSchema = z.object({
   status: z.enum(['planned', 'active', 'harvested', 'closed']).default('planned')
 });
 
-campaignsRouter.get('/', asyncHandler(async (req, res) => {
+campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
   const campaigns = await Campaign.findAll({
     include: [{
       model: CampaignField,
@@ -41,12 +42,12 @@ campaignsRouter.get('/', asyncHandler(async (req, res) => {
   res.json({ data: campaigns });
 }));
 
-campaignsRouter.post('/', validate(campaignSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignSchema), asyncHandler(async (req, res) => {
   const campaign = await Campaign.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: campaign });
 }));
 
-campaignsRouter.post('/:campaignId/fields', validate(campaignFieldSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldSchema), asyncHandler(async (req, res) => {
   const campaignField = await CampaignField.create({
     ...req.body,
     campaign_id: req.params.campaignId
@@ -54,7 +55,7 @@ campaignsRouter.post('/:campaignId/fields', validate(campaignFieldSchema), async
   res.status(201).json({ data: campaignField });
 }));
 
-campaignsRouter.get('/:id', asyncHandler(async (req, res) => {
+campaignsRouter.get('/:id', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
   const campaign = await Campaign.findByPk(req.params.id, {
     include: [{
       model: CampaignField,
@@ -70,7 +71,7 @@ campaignsRouter.get('/:id', asyncHandler(async (req, res) => {
   res.json({ data: campaign });
 }));
 
-campaignsRouter.patch('/:id', validate(campaignSchema.partial()), asyncHandler(async (req, res) => {
+campaignsRouter.patch('/:id', requireCapability('campaigns.write'), validate(campaignSchema.partial()), asyncHandler(async (req, res) => {
   const campaign = await Campaign.findByPk(req.params.id, { transaction: req.dbTransaction });
   if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
   await campaign.update(req.body, { transaction: req.dbTransaction });
@@ -78,7 +79,7 @@ campaignsRouter.patch('/:id', validate(campaignSchema.partial()), asyncHandler(a
 }));
 
 // All campaign-fields (for scouting run selectors etc.)
-campaignsRouter.get('/fields', asyncHandler(async (req, res) => {
+campaignsRouter.get('/fields', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
   const cfs = await CampaignField.findAll({
     include: [
       { model: Field, attributes: ['id', 'name', 'area_hectares'] },
@@ -91,7 +92,7 @@ campaignsRouter.get('/fields', asyncHandler(async (req, res) => {
   res.json({ data: cfs });
 }));
 
-campaignsRouter.patch('/:campaignId/fields/:cfId', validate(campaignFieldSchema.partial()), asyncHandler(async (req, res) => {
+campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.write'), validate(campaignFieldSchema.partial()), asyncHandler(async (req, res) => {
   const cf = await CampaignField.findOne({
     where: { id: req.params.cfId, campaign_id: req.params.campaignId },
     transaction: req.dbTransaction
