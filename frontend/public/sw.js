@@ -1,6 +1,6 @@
 // Cache only the public, immutable web application shell. Never cache API responses,
 // private evidence, session data or any request with an Authorization header.
-const CACHE = 'sedeagro-web-shell-v1';
+const CACHE = 'sedeagro-web-shell-v2';
 const PREFIX = 'sedeagro-web-shell-';
 
 async function cacheShell() {
@@ -11,7 +11,8 @@ async function cacheShell() {
   const html = await response.text();
   const assets = [...new Set([...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)]
     .map((match) => match[1]))];
-  await Promise.allSettled(assets.map((path) =>
+  // Do not install an incomplete offline shell that cannot boot after a crash.
+  await Promise.all(assets.map((path) =>
     cache.add(new Request(path, { credentials: 'omit' }))));
 }
 
@@ -35,6 +36,8 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   if (request.mode === 'navigate') {
+    // Only cache the public SPA entrypoint, never arbitrary server-rendered pages.
+    if (url.pathname !== '/') return;
     event.respondWith(fetch(request).then(async (response) => {
       if (response.ok) {
         const cache = await caches.open(CACHE);
