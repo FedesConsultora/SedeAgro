@@ -12,6 +12,8 @@ export function defineEvidenceAsset(sequelize, DataTypes) {
     original_name: DataTypes.STRING(240),
     mime_type: DataTypes.STRING(120),
     size_bytes: DataTypes.INTEGER,
+    client_upload_id: DataTypes.UUID,
+    content_sha256: DataTypes.STRING(64),
     captured_at: DataTypes.DATE,
     point: DataTypes.GEOMETRY('POINT', 4326)
   }, { tableName: 'evidence_assets' });
