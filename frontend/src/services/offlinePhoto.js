@@ -24,6 +24,19 @@ export function validateOfflinePhoto(photo) {
   if (!Number.isInteger(size) || size < 1 || size > MAX_OFFLINE_PHOTO_BYTES) {
     throw new Error('La foto offline debe pesar entre 1 byte y 512 KiB.');
   }
+  // Do not queue a file whose declared format will be rejected later by the
+  // backend. This is only a header check, not full image decoding/antivirus.
+  const header = atob(photo.content_base64.slice(0, 32));
+  const bytes = [...header].map((character) => character.charCodeAt(0));
+  const jpeg = photo.mime_type === 'image/jpeg' &&
+    bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  const png = photo.mime_type === 'image/png' &&
+    [137,80,78,71,13,10,26,10].every((value, index) => bytes[index] === value);
+  const webp = photo.mime_type === 'image/webp' &&
+    header.startsWith('RIFF') && header.slice(8, 12) === 'WEBP';
+  if (!jpeg && !png && !webp) {
+    throw new Error('El contenido de la fotografía no coincide con su formato.');
+  }
   return { ...photo, size_bytes: size };
 }
 
