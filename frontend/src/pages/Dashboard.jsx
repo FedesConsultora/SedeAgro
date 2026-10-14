@@ -1,158 +1,205 @@
-import { useEffect, useMemo, useState } from 'react';
-import { AreaChart, Calendar, ClipboardCheck, Compass, Eye, ShieldAlert, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { StatTile } from '../components/StatTile.jsx';
-import { WorkQueue } from '../components/WorkQueue.jsx';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, ArrowRight, CalendarDays, ClipboardList, Compass, MapPinned, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
+import {
+  accessibleHomeKeys, decodeHomeCollection, emptyHomeResources, homeSnapshot
+} from '../services/operationsHome.js';
+import './operations-home.css';
 
-function unwrap(response) {
-  if (Array.isArray(response)) return response;
-  if (Array.isArray(response?.data)) return response.data;
-  return [];
-}
+const RESOURCES = {
+  fields: { label: 'Lotes', method: 'fields', view: 'fields', icon: MapPinned },
+  campaigns: { label: 'Campañas', method: 'campaigns', view: 'campaigns', icon: CalendarDays },
+  scoutingRuns: { label: 'Monitoreo', method: 'scoutingRuns', view: 'scouting', icon: Compass },
+  orders: { label: 'Órdenes', method: 'workOrders', view: 'orders', icon: ClipboardList }
+};
+const DEMO_DATA = {
+  fields: mockData.fields, campaigns: mockData.campaigns,
+  scoutingRuns: mockData.scoutingRuns, orders: mockData.workOrders
+};
 
-function dashboardMock() {
-  return {
-    fields: mockData.fields,
-    orders: mockData.workOrders,
-    scoutingRuns: mockData.scoutingRuns,
-    campaigns: mockData.campaigns,
-    source: 'mock'
-  };
-}
-
-export function Dashboard() {
-  const { api, dataMode } = useSession();
-  const [data, setData] = useState(() => dashboardMock());
+export function Dashboard({ onNavigate }) {
+  const { api, dataMode, session, entitlements } = useSession();
+  const role = session?.membership?.roleCode || '';
+  const keys = useMemo(() => dataMode === 'mock'
+    ? Object.keys(RESOURCES) : accessibleHomeKeys(entitlements, role),
+    [dataMode, entitlements, role]);
+  const [resources, setResources] = useState(emptyHomeResources);
+  const [isLoading, setIsLoading] = useState(true);
+  const [revision, setRevision] = useState(0);
+  const [loadedAt, setLoadedAt] = useState(null);
 
   useEffect(() => {
-    let isMounted = true;
+    let cancelled = false;
+    setIsLoading(true);
+    setLoadedAt(null);
+    setResources(Object.fromEntries(Object.keys(RESOURCES).map(key => [
+      key, { state: keys.includes(key) ? 'loading' : 'unavailable', data: [] }
+    ])));
 
-    async function load() {
-      if (dataMode === 'mock') {
-        setData(dashboardMock());
-        return;
-      }
-
-      try {
-        const [fields, orders, scoutingRuns, campaigns] = await Promise.all([
-          api.fields(),
-          api.workOrders(),
-          api.scoutingRuns(),
-          api.campaigns()
-        ]);
-
-        if (isMounted) {
-          setData({
-            fields: unwrap(fields),
-            orders: unwrap(orders),
-            scoutingRuns: unwrap(scoutingRuns),
-            campaigns: unwrap(campaigns),
-            source: 'live'
-          });
-        }
-      } catch {
-        if (isMounted) setData({ ...dashboardMock(), source: 'fallback' });
-      }
+    if (dataMode === 'mock') {
+      setResources(Object.fromEntries(keys.map(key => [
+        key, { state: 'ready', data: DEMO_DATA[key] }
+      ])));
+      setIsLoading(false);
+      return () => { cancelled = true; };
     }
 
-    load();
-    return () => {
-      isMounted = false;
-    };
-  }, [api, dataMode]);
+    Promise.allSettled(keys.map(key => api[RESOURCES[key].method]()))
+      .then(results => {
+        if (cancelled) return;
+        setResources(Object.fromEntries(Object.keys(RESOURCES).map(key => {
+          const index = keys.indexOf(key);
+          if (index < 0) return [key, { state: 'unavailable', data: [] }];
+          const result = results[index];
+          if (result.status === 'rejected') return [key, {
+            state: 'error', data: [], error: result.reason?.message || 'No se pudo cargar.'
+          }];
+          try {
+            return [key, { state: 'ready', data: decodeHomeCollection(result.value) }];
+          } catch (error) {
+            return [key, { state: 'error', data: [], error: error.message }];
+          }
+        })));
+        setLoadedAt(new Date());
+      }).finally(() => { if (!cancelled) setIsLoading(false); });
+    return () => { cancelled = true; };
+  }, [api, dataMode, keys, revision]);
 
-  const stats = useMemo(() => {
-    const hectares = data.fields.reduce((total, field) => total + Number(field.area_hectares || 0), 0);
-    const openOrders = data.orders.filter((order) => !['completed', 'cancelled'].includes(order.status)).length;
-    const urgentOrders = data.orders.filter((order) => ['high', 'urgent'].includes(order.priority)).length;
-    const activeCampaigns = data.campaigns.filter((campaign) => campaign.status === 'active').length;
-
-    return {
-      hectares,
-      openOrders,
-      urgentOrders,
-      activeCampaigns,
-      scoutingRuns: data.scoutingRuns.length
-    };
-  }, [data]);
-
-  const queue = data.orders.slice(0, 4).map((order) => ({
-    title: order.title,
-    field: order.Field?.name || order.field_id || 'Sin lote',
-    status: order.status
-  }));
+  const summary = useMemo(() => homeSnapshot(resources), [resources]);
+  const availableAlerts = keys.filter(key => ['orders', 'scoutingRuns'].includes(key));
+  const alertLoadFailed = availableAlerts.some(key => resources[key]?.state === 'error');
+  const alertLoadPending = availableAlerts.some(key => resources[key]?.state === 'loading');
+  const noResources = keys.length === 0;
+  const allFailed = keys.length > 0 && keys.every(key => resources[key]?.state === 'error');
+  const open = useCallback((view, id) => onNavigate?.(view, id ? { id } : undefined), [onNavigate]);
 
   return (
-    <div className="page-grid">
-      <section className="page-heading">
-        <span className="eyebrow">Operación agronómica</span>
-        <h1>Panel de campaña</h1>
-        <span className={`source-chip source-chip--${data.source}`}>{data.source === 'live' ? 'Backend' : data.source === 'fallback' ? 'Mock fallback' : 'Mock'}</span>
+    <div className="page-grid operations-home">
+      <header className="operations-home__heading">
+        <div>
+          <span className="eyebrow">Centro de trabajo</span>
+          <h1>Tu operación agronómica</h1>
+          <p>Seguimiento y próximos pasos de los registros a los que tenés acceso.</p>
+        </div>
+        <div className="operations-home__heading-actions">
+          <span className={dataMode === 'mock' ? 'operations-home__demo' : 'operations-home__connected'}>
+            {dataMode === 'mock' ? 'Datos de demostración' : 'Datos de tu organización'}
+          </span>
+          <button type="button" className="ghost-action" onClick={() => setRevision(value => value + 1)}
+            disabled={isLoading} aria-label="Actualizar centro de trabajo">
+            <RefreshCw size={16} aria-hidden="true" /> Actualizar
+          </button>
+        </div>
+      </header>
+
+      {dataMode === 'mock' && (
+        <p className="operations-home__notice" role="status">
+          Vista de demostración: los ejemplos no representan tareas reales de una empresa.
+        </p>
+      )}
+      {!isLoading && allFailed && (
+        <section className="operations-home__failure" role="alert">
+          <AlertCircle size={19} aria-hidden="true" />
+          <div><strong>No pudimos consultar la operación.</strong>
+            <p>Los datos de ejemplo no reemplazan una respuesta del servidor. Probá nuevamente.</p></div>
+          <button type="button" className="ghost-action" onClick={() => setRevision(value => value + 1)}>Reintentar</button>
+        </section>
+      )}
+      {!isLoading && !allFailed && summary.failedKeys.length > 0 && (
+        <section className="operations-home__notice" role="status">
+          Parte de la información no se pudo consultar: {summary.failedKeys.map(key => RESOURCES[key].label).join(', ')}.
+          Las cifras no disponibles se muestran con un guion, no como cero.
+        </section>
+      )}
+      {noResources && !isLoading && (
+        <section className="operations-home__notice">
+          No tenés módulos de seguimiento asignados en esta empresa. Consultá con el administrador.
+        </section>
+      )}
+
+      <section aria-label="Indicadores de la operación" className="operations-home__metrics">
+        {summary.metrics.filter(item => keys.includes(item.key)).map(item => (
+          <article className="operations-home__metric" key={item.key}>
+            <span>{item.label}</span>
+            <strong>{resources[item.key]?.state === 'loading' ? '…' : item.value ?? '—'}
+              {item.value !== null && item.unit && <small> {item.unit}</small>}</strong>
+            <button type="button" className="operations-home__text-action"
+              onClick={() => open(RESOURCES[item.key].view)}>
+              Ver {RESOURCES[item.key].label.toLowerCase()} <ArrowRight size={14} aria-hidden="true" />
+            </button>
+          </article>
+        ))}
       </section>
-      
-      <div className="stats-row">
-        <StatTile label="Hectáreas activas" value={stats.hectares.toLocaleString('es-AR')} tone="green" icon={AreaChart} />
-        <StatTile label="Campañas activas" value={stats.activeCampaigns} tone="amber" icon={Calendar} />
-        <StatTile label="Monitoreos" value={stats.scoutingRuns} tone="blue" icon={Compass} />
-        <StatTile label="OT abiertas" value={stats.openOrders} tone="rose" icon={ClipboardCheck} />
+
+      <div className="operations-home__content">
+        <section className="operations-home__priority" aria-labelledby="home-priorities-title">
+          <div className="operations-home__section-heading">
+            <div>
+              <h2 id="home-priorities-title">Requieren atención</h2>
+              <p>Órdenes vencidas o prioritarias, aprobaciones y recorridas pendientes.</p>
+            </div>
+            {summary.alertCount > 0 && <span>{summary.alertCount} registros</span>}
+          </div>
+          {alertLoadPending ? <p role="status" className="operations-home__placeholder">Consultando prioridades…</p>
+            : summary.alerts.length > 0 ? (
+              <div className="operations-home__priority-list">
+                {summary.alerts.map(item => (
+                  <button type="button" key={item.kind + ':' + item.id}
+                    className="operations-home__priority-item" onClick={() => open(item.view, item.id)}>
+                    <span className={'operations-home__priority-mark operations-home__priority-mark--' +
+                      (item.weight < 2 ? 'urgent' : item.weight < 4 ? 'warning' : 'neutral')}>
+                      {item.kind === 'order' ? <ClipboardList size={17} aria-hidden="true" /> :
+                        <Compass size={17} aria-hidden="true" />}
+                    </span>
+                    <span className="operations-home__priority-description">
+                      <strong>{item.title}</strong><span>{item.context} · {item.reason}</span>
+                    </span>
+                    <ArrowRight size={17} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            ) : alertLoadFailed ? (
+              <p role="status" className="operations-home__placeholder">
+                No podemos confirmar si hay tareas pendientes: falló una consulta. Reintentá.
+              </p>
+            ) : availableAlerts.length === 0 ? (
+              <p className="operations-home__placeholder">Tu rol no tiene acceso a órdenes ni a recorridas.</p>
+            ) : (
+              <div className="operations-home__empty"><ShieldAlert size={22} aria-hidden="true" />
+                <strong>No hay registros que requieran atención en los datos consultados.</strong>
+                <p>Podés revisar las órdenes y recorridas para continuar con la operación.</p>
+              </div>
+            )}
+          {summary.alertCount > summary.alerts.length && (
+            <p className="operations-home__more">
+              Se muestran las primeras {summary.alerts.length} prioridades. Abrí cada módulo para ver todas.
+            </p>
+          )}
+        </section>
+        <aside className="operations-home__shortcuts" aria-labelledby="home-shortcuts-title">
+          <div className="operations-home__section-heading">
+            <div><h2 id="home-shortcuts-title">Ir a trabajar</h2>
+              <p>Accesos a los módulos disponibles.</p></div>
+          </div>
+          <div className="operations-home__shortcut-list">
+            {keys.map(key => {
+              const Icon = RESOURCES[key].icon;
+              return (
+                <button className="operations-home__shortcut" type="button" key={key}
+                  onClick={() => open(RESOURCES[key].view)}>
+                  <Icon size={19} aria-hidden="true" />
+                  <span>{RESOURCES[key].label}</span>
+                  <ArrowRight size={16} aria-hidden="true" />
+                </button>
+              );
+            })}
+          </div>
+          {loadedAt && dataMode === 'live' &&
+            <p className="operations-home__updated">Consulta realizada: {loadedAt.toLocaleTimeString('es-AR',
+              { hour: '2-digit', minute: '2-digit' })}</p>}
+        </aside>
       </div>
-      
-      <section className="map-panel">
-        <div className="map-panel__canvas">
-          {/* Stylized vector contour polygons simulating satellite land lots */}
-          <svg className="map-panel__vector-bg" viewBox="0 0 500 300" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="grad-green" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="rgba(16, 185, 129, 0.25)" />
-                <stop offset="100%" stopColor="rgba(52, 211, 153, 0.05)" />
-              </linearGradient>
-              <linearGradient id="grad-amber" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="rgba(245, 158, 11, 0.25)" />
-                <stop offset="100%" stopColor="rgba(251, 191, 36, 0.05)" />
-              </linearGradient>
-              <linearGradient id="grad-rose" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="rgba(244, 63, 94, 0.25)" />
-                <stop offset="100%" stopColor="rgba(251, 113, 133, 0.05)" />
-              </linearGradient>
-            </defs>
-            {/* Grid pattern lines */}
-            <path d="M 0,50 L 500,50 M 0,100 L 500,100 M 0,150 L 500,150 M 0,200 L 500,200 M 0,250 L 500,250" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-            <path d="M 100,0 L 100,300 M 200,0 L 200,300 M 300,0 L 300,300 M 400,0 L 400,300" stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-            
-            {/* Field Lot polygons */}
-            <polygon points="50,40 180,30 160,110 40,120" fill="url(#grad-green)" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1.5" />
-            <polygon points="280,60 440,70 410,160 290,140" fill="url(#grad-amber)" stroke="rgba(245, 158, 11, 0.4)" strokeWidth="1.5" />
-            <polygon points="120,160 260,150 240,240 110,250" fill="url(#grad-rose)" stroke="rgba(244, 63, 94, 0.4)" strokeWidth="1.5" />
-          </svg>
-          
-          {data.fields.slice(0, 3).map((field, index) => (
-            <span className={`lot lot--${['one', 'two', 'three'][index]}`} key={field.id || field.name}>
-              <span className="lot__index">LOTE {index + 1}</span>
-              <span className="lot__name">{field.name}</span>
-            </span>
-          ))}
-        </div>
-        <div className="map-panel__aside">
-          <h2>Semáforo de lotes</h2>
-          <p>Priorización en tiempo real por severidad, campaña y órdenes.</p>
-          <ul className="semaforo-list">
-            <li className="semaforo-item semaforo-item--critical">
-              <ShieldAlert size={16} />
-              <span><strong>{stats.urgentOrders}</strong> Críticos</span>
-            </li>
-            <li className="semaforo-item semaforo-item--warning">
-              <AlertTriangle size={16} />
-              <span><strong>{stats.openOrders}</strong> En seguimiento</span>
-            </li>
-            <li className="semaforo-item semaforo-item--ok">
-              <CheckCircle2 size={16} />
-              <span><strong>{Math.max(data.fields.length - stats.urgentOrders, 0)}</strong> Sin alertas</span>
-            </li>
-          </ul>
-        </div>
-      </section>
-      <WorkQueue items={queue} />
     </div>
   );
 }

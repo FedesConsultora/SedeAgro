@@ -14,6 +14,7 @@ import {
   Users
 } from 'lucide-react';
 import { useSession } from './context/SessionContext.jsx';
+import { canNavigateView } from './services/navigationAccess.js';
 import { Sidebar } from './components/Sidebar.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { NotificationToast } from './components/NotificationToast.jsx';
@@ -35,7 +36,7 @@ import { LoginPage } from './pages/LoginPage.jsx';
 import { RegisterPage } from './pages/RegisterPage.jsx';
 
 const views = [
-  { id: 'dashboard', label: 'Panel', icon: LayoutDashboard, entitlement: 'analytics' },
+  { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard, entitlement: null },
   { id: 'teams', label: 'Equipos', icon: Users, entitlement: 'org' },
   { id: 'fields', label: 'Establecimientos', icon: Map, entitlement: 'gis' },
   { id: 'campaigns', label: 'Campañas', icon: Sprout, entitlement: 'campaigns' },
@@ -51,24 +52,17 @@ const views = [
 function Shell() {
   const { entitlements, logout, session } = useSession();
   const isPlatformAdmin = session?.user?.isPlatformAdmin;
+  const role = session?.membership?.roleCode;
+  const access = { entitlements, role, platformAdmin: Boolean(isPlatformAdmin) };
 
-  const availableViews = useMemo(
-    () => views.filter((view) =>
-      (!view.entitlement || entitlements.includes(view.entitlement)) &&
-      (view.id !== 'sync' ||
-        ['tenant_admin', 'agronomic_coordinator', 'scout'].includes(session?.membership?.roleCode))
-    ),
-    [entitlements, session?.membership?.roleCode]
-  );
+  const availableViews = views.filter((view) => canNavigateView(view.id, access));
   const [activeView, setActiveView] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [focused, setFocused] = useState(null);
 
-  const currentView = ['admin', 'platform'].includes(activeView)
-    ? activeView
-    : (availableViews.some((view) => view.id === activeView)
-        ? activeView
-        : availableViews[0]?.id || 'dashboard');
+  const currentView = canNavigateView(activeView, access)
+    ? activeView : availableViews[0]?.id || 'sessions';
 
   // Logout action appended to sidebar views
   const sidebarViews = useMemo(() => [
@@ -76,9 +70,11 @@ function Shell() {
     { id: '__logout__', label: 'Cerrar sesión', icon: LogOut, entitlement: 'analytics' }
   ], [availableViews]);
 
-  const handleViewChange = (id) => {
-    if (id === '__logout__') { logout(); return; }
+  const handleViewChange = (id, focus = null) => {
+    if (id === '__logout__') { void logout(); return; }
+    if (!canNavigateView(id, access)) return;
     setActiveView(id);
+    setFocused(focus?.id ? { view: id, id: focus.id } : null);
     setSidebarOpen(false);
   };
 
@@ -116,11 +112,11 @@ function Shell() {
           activeView={currentView}
           onViewChange={handleViewChange}
         />
-        {currentView === 'dashboard'  && <Dashboard />}
+        {currentView === 'dashboard'  && <Dashboard onNavigate={handleViewChange} />}
         {currentView === 'fields'     && <FarmsPage />}
         {currentView === 'campaigns'  && <CampaignsPage />}
-        {currentView === 'scouting'   && <ScoutingPage />}
-        {currentView === 'orders'     && <WorkOrdersPage />}
+        {currentView === 'scouting'   && <ScoutingPage focusRunId={focused?.view === 'scouting' ? focused.id : null} />}
+        {currentView === 'orders'     && <WorkOrdersPage focusOrderId={focused?.view === 'orders' ? focused.id : null} />}
         {currentView === 'reports'    && <ReportsPage />}
         {currentView === 'teams'      && <TeamPage />}
         {currentView === 'admin'      && <TenantAdminPage />}

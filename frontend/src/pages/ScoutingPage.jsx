@@ -159,6 +159,10 @@ function RunDetail({ run, onChanged }) {
           </button>}
         </div>
       </div>
+      {!loading && !error && focusRunId && !runs.some(run => run.id === focusRunId) &&
+        <p className="auth-error" role="status">
+          La recorrida solicitada no está disponible para esta cuenta.
+        </p>}
       {error && <div className="auth-error" role="alert">{error} <button type="button" onClick={() => refresh()}>Reintentar</button></div>}
       {actionError && <div className="auth-error" role="alert">{actionError}</div>}
       {queuedNotice && <div role="status" style={{ padding: '10px 12px',
@@ -234,7 +238,7 @@ function RunDetail({ run, onChanged }) {
   );
 }
 
-export function ScoutingPage() {
+export function ScoutingPage({ focusRunId = null }) {
   const { api, dataMode, session } = useSession();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -264,6 +268,11 @@ export function ScoutingPage() {
   }, [api, dataMode]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (!focusRunId) return;
+    setFilter('Todos');
+    setExpanded(current => ({ ...current, [focusRunId]: true }));
+  }, [focusRunId]);
   const visible = filter === 'Todos' ? runs : runs.filter((r) => r.status === filter);
 
   return (
