@@ -11,7 +11,7 @@ const severities = new Set(['low', 'medium', 'high', 'critical']);
 export function sessionScope(session) {
   const userId = session?.user?.id;
   const tenantId = session?.tenant?.id;
-  if (!userId || !tenantId || !session?.token) return null;
+  if (!userId || !tenantId || !(session?.authenticated === true || session?.token)) return null;
   return `${tenantId}:${userId}`;
 }
 
