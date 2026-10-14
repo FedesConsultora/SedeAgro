@@ -154,6 +154,12 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Atomicidad de solicitudes y módulos por tenant
+
+Las rutas protegidas esperan la confirmación de su transacción SQL **antes** de transmitir una respuesta HTTP exitosa. Los errores de commit se informan como errores del servidor; los estados de error y solicitudes abandonadas revierten los cambios pendientes. Se prohíben respuestas streaming dentro de estas transacciones.
+
+El registro y el login cargan los módulos habilitados dentro de su contexto RLS. El flujo se prueba con PostgreSQL real en el workflow CI. Consulta [el contrato de atomicidad](docs/security/transaction-response-atomicity.md).
+
 ## Aislamiento PostgreSQL y pruebas reales
 
 Los endpoints de negocio utilizan `tenant_id` + permisos y, en producción, el backend debe conectarse con un rol PostgreSQL **no privilegiado**, separado del usuario de migraciones. El contexto RLS se configura exclusivamente dentro de transacciones.
