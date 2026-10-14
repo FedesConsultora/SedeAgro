@@ -41,8 +41,17 @@ function validPolygon(boundary) {
     const first = ring[0];
     const last = ring[ring.length - 1];
     if (first[0] !== last[0] || first[1] !== last[1]) return false;
-    // A closed ring needs at least three different positions.
-    return new Set(ring.slice(0, -1).map(p => p.join(','))).size >= 3;
+    // A closed ring needs at least three distinct, non-collinear positions.
+    if (new Set(ring.slice(0, -1).map(p => p.join(','))).size < 3) return false;
+    let doubleArea = 0;
+    const [originLon, originLat] = first;
+    for (let index = 1; index < ring.length - 2; index += 1) {
+      const a = ring[index];
+      const b = ring[index + 1];
+      doubleArea += (a[0] - originLon) * (b[1] - originLat) -
+        (b[0] - originLon) * (a[1] - originLat);
+    }
+    return Math.abs(doubleArea) > 1e-16;
   });
 }
 
