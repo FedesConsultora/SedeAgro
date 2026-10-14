@@ -154,6 +154,12 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Cola offline web para observaciones
+
+Las observaciones se guardan primero en una cola IndexedDB por usuario/tenant y se envían con **reintentos idempotentes** al reconectar. La pantalla Sincronizaciones distingue los borradores locales de recibos efectivamente confirmados por el backend, permite revisar conflictos, reintentar y descartar. El shell estático puede abrirse offline tras una instalación inicial del service worker en HTTPS, sin almacenar respuestas privadas.
+
+**Importante:** los borradores guardados en IndexedDB no están cifrados. No usar equipos compartidos; las operaciones pendientes permanecen localmente tras cerrar sesión y solo se muestran de nuevo a la misma cuenta/tenant. Esto es una cola web, **no** una aplicación móvil nativa. [Alcance, privacidad y validación](docs/offline-browser-queue.md).
+
 ## Sincronización atómica y bitácora de recorridas
 
 Los lotes offline compatibles ahora aplican observaciones reales de monitoreo en una sola transacción y responden con IDs de operaciones procesadas. Los reintentos requieren una clave de idempotencia; no se admiten tipos arbitrarios ni cambios fuera de una recorrida autorizada. La página web muestra **recibos reales** y ya no simula una sincronización. Los administradores y coordinadores pueden consultar el historial de cambios de recorridas. [Contrato y límites de sincronización](docs/sync-atomic-observations.md).
