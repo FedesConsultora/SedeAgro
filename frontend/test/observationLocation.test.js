@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FIELD_GPS_OPTIONS, MAX_FIELD_ACCURACY_METERS,
-  confirmedFieldLocation, fieldGpsErrorMessage, validateObservationPoint
+  confirmedFieldLocation, fieldGpsErrorMessage, validateObservationPoint, localObservationDateTime
 } from '../src/services/observationLocation.js';
 
 const FIXED_TIME = Date.parse('2026-10-14T20:00:00.000Z');
@@ -52,4 +52,12 @@ test('GPS status explains permission, timeout and no-signal without making up a 
   assert.match(fieldGpsErrorMessage({ code: 2 }), /no pudo determinar/);
   assert.match(fieldGpsErrorMessage({ code: 3 }), /tiempo/);
   assert.match(fieldGpsErrorMessage(new Error('Sin soporte GPS')), /Sin soporte GPS/);
+});
+
+test('datetime-local defaults reflect device local time instead of UTC', () => {
+  const date = new Date('2026-10-14T20:00:00Z');
+  const pad = value => String(value).padStart(2, '0');
+  const expected = `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  assert.equal(localObservationDateTime(date), expected);
+  assert.throws(() => localObservationDateTime(new Date(NaN)), /Fecha local inválida/);
 });
