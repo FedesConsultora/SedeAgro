@@ -1,4 +1,4 @@
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
+export const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export class ApiError extends Error {
   constructor({ message, code, status, details, requestId, hint }) {
@@ -117,6 +117,10 @@ export function createApiClient(session, feedback) {
     me: () => request('/auth/me', { silent: true, preserveSessionOnAuthError: true }),
     logout: () => request('/auth/logout', {
       method: 'POST', silent: true, preserveSessionOnAuthError: true
+    }),
+    sessions: () => request('/auth/sessions', { silent: true }),
+    revokeSession: (id) => request(`/auth/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE', silent: true
     }),
     members: () => request('/auth/members'),
     bootstrap: () => request('/catalogs/bootstrap'),

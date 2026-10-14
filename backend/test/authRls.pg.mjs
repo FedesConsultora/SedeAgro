@@ -133,6 +133,71 @@ test('registration and login return real enabled modules under FORCE RLS', async
     });
     assert.equal(bearerStillLive.status, 200);
 
+    // Six independent logins, deliberately concurrent, must never exceed the
+    // five-session cap even when the backend handles requests simultaneously.
+    const concurrent = await Promise.all(Array.from({ length: 6 }, () =>
+      fetch(`${baseUrl}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, tenantSlug: slug })
+      }).then(async (res) => ({ status: res.status, body: await res.json() }))
+    ));
+    for (const attempt of concurrent) {
+      assert.equal(attempt.status, 200, JSON.stringify(attempt.body));
+    }
+    // The order of Promise resolutions is not the lock acquisition order.
+    // Obtain one deterministic newest session after all six requests settle.
+    const newestResponse = await fetch(`${baseUrl}/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, tenantSlug: slug })
+    });
+    assert.equal(newestResponse.status, 200);
+    const newestToken = (await newestResponse.json()).token;
+    const current = await fetch(`${baseUrl}/sessions`, {
+      headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(current.status, 200);
+    const listing = await current.json();
+    assert.equal(listing.maxActiveSessions, 5);
+    assert.equal(listing.data.length, 5, 'simultaneous logins must enforce the cap');
+    assert.equal(listing.data.filter((row) => row.isCurrent).length, 1);
+    assert.ok(listing.data.every((row) => !Object.hasOwn(row, 'token') &&
+      !Object.hasOwn(row, 'password_hash')), 'session listing must expose no secrets');
+
+    const stale = await fetch(`${baseUrl}/me`, {
+      headers: { Authorization: `Bearer ${login.token}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(stale.status, 401, 'oldest session must have been revoked by cap');
+
+    const another = listing.data.find((row) => !row.isCurrent);
+    assert.ok(another, 'a remote session must be available to revoke');
+    const csrfMissing = await fetch(`${baseUrl}/sessions/${another.id}`, {
+      method: 'DELETE', headers: { Cookie: cookie, 'x-tenant-id': tenantId }
+    });
+    // The original browser session was logged out; it cannot revoke anyone.
+    assert.equal(csrfMissing.status, 401);
+    const self = listing.data.find((row) => row.isCurrent);
+    const selfRevoke = await fetch(`${baseUrl}/sessions/${self.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(selfRevoke.status, 409, 'current session requires explicit logout');
+    const remoteRevoke = await fetch(`${baseUrl}/sessions/${another.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(remoteRevoke.status, 204);
+    const repeated = await fetch(`${baseUrl}/sessions/${another.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(repeated.status, 404);
+    const afterRevoke = await fetch(`${baseUrl}/sessions`, {
+      headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(afterRevoke.status, 200);
+    assert.equal((await afterRevoke.json()).data.length, 4);
+
   } finally {
     if (tenantId) await owner.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
     if (userId) await owner.query('DELETE FROM users WHERE id = $1', [userId]);

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { Op } from 'sequelize';
 import { sequelize, setLocalTenant, withTenantTransaction } from '../../core/db.js';
 import {
   Membership,
@@ -17,6 +18,7 @@ import { signSession, verifySession } from '../../utils/jwt.js';
 import { clearSessionCookie, sessionCookie, wantsCookieSession } from '../../infra/security/sessionTransport.js';
 import { HttpError, asyncHandler, validate } from '../../utils/http.js';
 import { rateLimit } from '../../infra/http/middlewares/rateLimit.js';
+import { reserveSessionSlot, MAX_ACTIVE_SESSIONS } from './sessionPolicy.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const authPublicRouter = Router();
@@ -61,6 +63,7 @@ async function issueTenantSession(user, membership, transaction) {
     skipTenantScope: true
   });
 
+  await reserveSessionSlot({ userId: user.id, tenantId: membership.tenant_id, transaction });
   const id = randomUUID();
   const token = signSession({ ...sessionPayload(user, membership), jti: id });
   const signed = verifySession(token);
@@ -209,6 +212,44 @@ authScopedRouter.post('/logout', asyncHandler(async (req, res) => {
     transaction: req.dbTransaction
   });
   res.setHeader('Set-Cookie', clearSessionCookie());
+  res.status(204).end();
+}));
+
+// A user can inspect and revoke only their own live sessions in the active
+// tenant. Never return bearer tokens, cookie values or session secrets.
+authScopedRouter.get('/sessions', asyncHandler(async (req, res) => {
+  const rows = await AuthSession.findAll({
+    where: {
+      tenant_id: req.tenantId, user_id: req.auth.user.id,
+      revoked_at: null, expires_at: { [Op.gt]: new Date() }
+    },
+    attributes: ['id', 'created_at', 'expires_at'],
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: MAX_ACTIVE_SESSIONS,
+    transaction: req.dbTransaction
+  });
+  res.json({ data: rows.map((row) => ({
+    id: row.id, createdAt: row.created_at, expiresAt: row.expires_at,
+    isCurrent: row.id === req.auth.session?.id
+  })), maxActiveSessions: MAX_ACTIVE_SESSIONS });
+}));
+
+authScopedRouter.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {
+  const parsed = z.string().uuid().safeParse(req.params.sessionId);
+  if (!parsed.success) throw new HttpError(422, 'Identificador de sesión inválido.');
+  if (!req.auth.session) throw new HttpError(401, 'La sesión debe estar registrada.');
+  if (parsed.data === req.auth.session.id) {
+    throw new HttpError(409, 'Para cerrar esta sesión utilizá Cerrar sesión.');
+  }
+  const [count] = await AuthSession.update({ revoked_at: new Date() }, {
+    where: {
+      id: parsed.data, tenant_id: req.tenantId,
+      user_id: req.auth.user.id, revoked_at: null,
+      expires_at: { [Op.gt]: new Date() }
+    },
+    transaction: req.dbTransaction
+  });
+  if (count === 0) throw new HttpError(404, 'Sesión no encontrada o ya finalizada.');
   res.status(204).end();
 }));
 
