@@ -49,6 +49,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   const [loading, setLoading] = useState(true);
   const [loadingLocal, setLoadingLocal] = useState(false);
   const [sending, setSending] = useState(false);
+  const [sendingOne, setSendingOne] = useState(null);
   const [online, setOnline] = useState(() => navigator.onLine !== false);
   const [error, setError] = useState('');
   const [localError, setLocalError] = useState('');
@@ -124,7 +125,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   }, [loadLocal]);
 
   const sendPending = async () => {
-    if (dataMode !== 'live' || !online || focus.mode === 'invalid') return;
+    if (dataMode !== 'live' || !online || sending || sendingOne || focus.mode === 'invalid') return;
     // Background queue flush has scope-level semantics. A screen filter never
     // silently narrows transmission and must not imply selective delivery.
     if (focus.mode === 'run' && !window.confirm(
@@ -149,13 +150,49 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
     }
   };
 
-  const retry = async (item) => {
+  const sendOne = async (item) => {
+    // The selected row is only a presentation hint. The queue rereads the
+    // immutable encrypted record under its scope lock before any HTTP call.
+    const scope = activeScope;
+    if (dataMode !== 'live' || !scope || !online || sending || sendingOne ||
+      focus.mode === 'invalid' || item.scope !== scope ||
+      !visiblePending.some(row => row.id === item.id)) return;
+    if (item.evidence && item.syncedObservationId) {
+      setNotice('La observación ya está aplicada. Recuperá solo su foto desde Conciliar observaciones.');
+      return;
+    }
+    if (item.state !== 'pending' && !window.confirm(
+      'Esta captura necesita revisión o una sesión renovada. Se reintentará SOLO esta captura, conservando sus identificadores. ¿Continuar?'
+    )) return;
+    setSendingOne(item.id);
+    setNotice('');
+    setLocalError('');
     try {
-      await offlineQueue.allowRetry(session, item.id, { notifyChange: false });
-      await loadLocal();
-      if (online) await sendPending();
+      const result = await offlineQueue.flushOne(session, item.id,
+        (body) => api.submitSyncBatch(body), {
+          sendEvidence: (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence)
+        });
+      if (scopeRef.current !== scope) return;
+      if (result.skipped) setNotice('Otra pestaña está procesando esta cuenta. Probá nuevamente.');
+      else if (result.photoRecoveryRequired) setNotice(
+        'Esta observación está aplicada: usá la recuperación de fotografía con recibo verificado.'
+      );
+      else if (result.invalidDraft) setLocalError(
+        'La captura local cambió o está dañada. No se envió ningún dato.'
+      );
+      else if (result.missing) setNotice('La captura ya no se encuentra en este dispositivo.');
+      else if (result.sent === 1) setNotice('Esta captura se confirmó y se retiró de la cola local.');
+      else if (result.attempted === 1) setNotice(
+        'No hubo confirmación completa del servidor. La captura permanece para reintentar.'
+      );
+      else setNotice('No se realizó el envío individual. Consultá su estado y actualizá.');
+      await Promise.all([loadData(), loadLocal()]);
     } catch (err) {
-      setLocalError(err?.message || 'No se pudo reintentar la operación.');
+      if (scopeRef.current === scope) {
+        setLocalError(err?.message || 'No se pudo enviar esta captura. Los datos locales se conservan.');
+      }
+    } finally {
+      if (scopeRef.current === scope) setSendingOne(null);
     }
   };
 
@@ -208,7 +245,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {dataMode === 'live' && <button type="button" className="primary-action"
-            disabled={!online || sending || pendingCount === 0 || focus.mode === 'invalid'}
+            disabled={!online || sending || Boolean(sendingOne) || pendingCount === 0 || focus.mode === 'invalid'}
             onClick={() => void sendPending()}>
             <Send size={15}/> {sending ? 'Enviando…' : focus.mode === 'run' ? 'Enviar todos mis pendientes' : 'Enviar pendientes'}
           </button>}
@@ -310,10 +347,19 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
                 </p>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                {item.state !== 'pending' &&
-                  <button type="button" className="ghost-action" disabled={sending}
-                    onClick={() => void retry(item)}>Reintentar</button>}
+                {!(item.evidence && item.syncedObservationId) &&
+                  <button type="button" className="ghost-action"
+                    disabled={!online || sending || Boolean(sendingOne) || loadingLocal || Boolean(localError)}
+                    onClick={() => void sendOne(item)}>
+                    {sendingOne === item.id ? 'Enviando esta…' :
+                      item.state === 'pending' ? 'Enviar solo esta' : 'Reintentar solo esta'}
+                  </button>}
+                {item.evidence && item.syncedObservationId &&
+                  <span style={{ fontSize: 12, color: '#9a5a16' }}>
+                    Recuperar foto en conciliación
+                  </span>}
                 <button type="button" className="ghost-action"
+                  disabled={sending || Boolean(sendingOne)}
                   onClick={() => void discard(item)} aria-label="Eliminar observación pendiente">
                   <Trash2 size={14}/> Eliminar
                 </button>
