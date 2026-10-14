@@ -47,6 +47,7 @@ try {
   if (!/[_-]test(?:[_-]|$)/i.test(database)) throw new Error('Refusing non-test database');
   backend = start('backend', ['src/server.js'], {
     PORT: '3001', DATABASE_URL: appUrl, NODE_ENV: 'test',
+    CORS_ORIGIN: 'http://127.0.0.1:4177',
     JWT_SECRET: 'not-for-production-rls-integration-only'
   });
   await waitUntil('http://127.0.0.1:3001/health');
