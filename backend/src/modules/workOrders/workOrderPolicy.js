@@ -11,7 +11,7 @@ export const WORK_ORDER_TRANSITIONS = Object.freeze({
 });
 
 export function canTransitionWorkOrder(current, next, roleCode, assignedToActor = false) {
-  if (!WORK_ORDER_TRANSITIONS[current]?.includes(next)) return false;
+  if (!Object.hasOwn(WORK_ORDER_TRANSITIONS, current) || !WORK_ORDER_TRANSITIONS[current].includes(next)) return false;
   if (roleCode === 'tenant_admin' || roleCode === 'agronomic_coordinator') return true;
   return roleCode === 'contractor' && assignedToActor &&
     ((current === 'assigned' && next === 'in_progress') ||
