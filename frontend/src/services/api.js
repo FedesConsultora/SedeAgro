@@ -118,6 +118,10 @@ export function createApiClient(session, feedback) {
     logout: () => request('/auth/logout', {
       method: 'POST', silent: true, preserveSessionOnAuthError: true
     }),
+    sessions: () => request('/auth/sessions', { silent: true }),
+    revokeSession: (id) => request(`/auth/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE', silent: true
+    }),
     members: () => request('/auth/members'),
     bootstrap: () => request('/catalogs/bootstrap'),
     producers: () => request('/farms/producers'),
