@@ -9,6 +9,7 @@ import {
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const scoutingRouter = Router();
 
@@ -41,7 +42,7 @@ const evidenceSchema = z.object({
   point: z.any().optional()
 });
 
-scoutingRouter.get('/runs', asyncHandler(async (req, res) => {
+scoutingRouter.get('/runs', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
   const runs = await ScoutingRun.findAll({
     include: [{ model: CampaignField, include: [{ model: Field, attributes: ['id', 'name'] }] }],
     order: [['scheduled_at', 'DESC']],
@@ -50,12 +51,12 @@ scoutingRouter.get('/runs', asyncHandler(async (req, res) => {
   res.json({ data: runs });
 }));
 
-scoutingRouter.post('/runs', validate(runSchema), asyncHandler(async (req, res) => {
+scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSchema), asyncHandler(async (req, res) => {
   const run = await ScoutingRun.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: run });
 }));
 
-scoutingRouter.get('/runs/:id', asyncHandler(async (req, res) => {
+scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
   const run = await ScoutingRun.findByPk(req.params.id, {
     include: [
       { model: CampaignField, include: [{ model: Field }] },
@@ -67,7 +68,7 @@ scoutingRouter.get('/runs/:id', asyncHandler(async (req, res) => {
   res.json({ data: run });
 }));
 
-scoutingRouter.post('/runs/:runId/observations', validate(observationSchema), asyncHandler(async (req, res) => {
+scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.observe'), validate(observationSchema), asyncHandler(async (req, res) => {
   const observation = await ScoutingObservation.create({
     ...req.body,
     scouting_run_id: req.params.runId,
@@ -76,7 +77,7 @@ scoutingRouter.post('/runs/:runId/observations', validate(observationSchema), as
   res.status(201).json({ data: observation });
 }));
 
-scoutingRouter.post('/observations/:observationId/evidence', validate(evidenceSchema), asyncHandler(async (req, res) => {
+scoutingRouter.post('/observations/:observationId/evidence', requireCapability('scouting.evidence'), validate(evidenceSchema), asyncHandler(async (req, res) => {
   const evidence = await EvidenceAsset.create({
     ...req.body,
     scouting_observation_id: req.params.observationId,
@@ -85,7 +86,7 @@ scoutingRouter.post('/observations/:observationId/evidence', validate(evidenceSc
   res.status(201).json({ data: evidence });
 }));
 
-scoutingRouter.patch('/runs/:id', validate(runSchema.partial()), asyncHandler(async (req, res) => {
+scoutingRouter.patch('/runs/:id', requireCapability('scouting.plan'), validate(runSchema.partial()), asyncHandler(async (req, res) => {
   const run = await ScoutingRun.findByPk(req.params.id, { transaction: req.dbTransaction });
   if (!run) return res.status(404).json({ error: { message: 'Monitoreo no encontrado.' } });
   await run.update(req.body, { transaction: req.dbTransaction });
