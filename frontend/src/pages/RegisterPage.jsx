@@ -34,7 +34,8 @@ export function RegisterPage({ onSwitchToLogin }) {
     try {
       const res = await fetch(`${API_URL}/auth/register-tenant`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        headers: { 'content-type': 'application/json', 'x-sedeagro-session': 'cookie', 'x-sedeagro-request': '1' },
         body: JSON.stringify({ ...form, planCode: 'starter' })
       });
       const data = await res.json();
