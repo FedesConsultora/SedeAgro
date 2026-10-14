@@ -21,6 +21,7 @@ const receipt = (id, results) => ({
 
 test('UUID run focus is valid; missing focus shows all; invalid focus never expands', () => {
   assert.deepEqual(focus, { mode: 'run', runId: RUN });
+  assert.deepEqual(resolveSyncRunFocus(RUN.toUpperCase()), { mode: 'run', runId: RUN });
   assert.deepEqual(resolveSyncRunFocus(), { mode: 'all', runId: null });
   assert.deepEqual(resolveSyncRunFocus(null), { mode: 'all', runId: null });
   for (const input of ['', 'all', '../admin', RUN + 'x', { runId: RUN }, 42]) {
