@@ -78,6 +78,61 @@ test('registration and login return real enabled modules under FORCE RLS', async
     const profile = await scoped.json();
     assert.equal(scoped.status, 200, JSON.stringify(profile));
     assert.deepEqual([...profile.entitlements].sort(), [...registered.entitlements].sort());
+
+    const browserLogin = await fetch(`${baseUrl}/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-sedeagro-session': 'cookie',
+        'x-sedeagro-request': '1'
+      },
+      body: JSON.stringify({ email, password, tenantSlug: slug })
+    });
+    const web = await browserLogin.json();
+    assert.equal(browserLogin.status, 200, JSON.stringify(web));
+    assert.equal(web.token, undefined, 'HttpOnly browser session must never expose JWT in JSON');
+    assert.equal(web.tenant.id, tenantId);
+    const cookies = browserLogin.headers.get('set-cookie');
+    assert.match(cookies, /sedeagro_session=/);
+    assert.match(cookies, /HttpOnly/);
+    assert.match(cookies, /SameSite=Strict/);
+    const cookie = cookies.split(';')[0];
+
+    const browserMe = await fetch(`${baseUrl}/me`, {
+      headers: { Cookie: cookie, 'x-tenant-id': tenantId }
+    });
+    assert.equal(browserMe.status, 200, await browserMe.text());
+    const foreignId = randomUUID();
+    const tenantMismatch = await fetch(`${baseUrl}/me`, {
+      headers: { Cookie: cookie, 'x-tenant-id': foreignId }
+    });
+    assert.notEqual(tenantMismatch.status, 200, 'Cookie cannot cross tenant routing');
+    const noCsrf = await fetch(`${baseUrl}/logout`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'x-tenant-id': tenantId }
+    });
+    assert.equal(noCsrf.status, 403);
+    const stillAlive = await fetch(`${baseUrl}/me`, {
+      headers: { Cookie: cookie, 'x-tenant-id': tenantId }
+    });
+    assert.equal(stillAlive.status, 200, 'CSRF rejection must not revoke session');
+    const logout = await fetch(`${baseUrl}/logout`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'x-tenant-id': tenantId, 'x-sedeagro-request': '1' }
+    });
+    assert.equal(logout.status, 204);
+    assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
+    const revoked = await fetch(`${baseUrl}/me`, {
+      headers: { Cookie: cookie, 'x-tenant-id': tenantId }
+    });
+    assert.equal(revoked.status, 401, 'Replay after logout must be rejected server-side');
+    // Other sessions are independent; revoking this cookie must not revoke
+    // the original bearer session issued on login.
+    const bearerStillLive = await fetch(`${baseUrl}/me`, {
+      headers: { Authorization: `Bearer ${login.token}`, 'x-tenant-id': tenantId }
+    });
+    assert.equal(bearerStillLive.status, 200);
+
   } finally {
     if (tenantId) await owner.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
     if (userId) await owner.query('DELETE FROM users WHERE id = $1', [userId]);

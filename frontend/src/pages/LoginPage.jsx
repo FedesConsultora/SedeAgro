@@ -19,7 +19,8 @@ export function LoginPage({ onSwitchToRegister }) {
     try {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        headers: { 'content-type': 'application/json', 'x-sedeagro-session': 'cookie', 'x-sedeagro-request': '1' },
         body: JSON.stringify(body)
       });
       const data = await res.json();
