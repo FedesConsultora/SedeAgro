@@ -114,7 +114,10 @@ export function SyncPage() {
     setLocalError('');
     try {
       const result = await offlineQueue.flush(session,
-        (body) => api.submitSyncBatch(body), { force: true });
+        (body) => api.submitSyncBatch(body), {
+          force: true,
+          sendEvidence: (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence)
+        });
       await Promise.all([loadData(), loadLocal()]);
       setNotice(result.skipped ? 'La cola ya está siendo procesada en otra pestaña.'
         : `Envíos aplicados: ${result.sent}. Conflictos detectados: ${result.conflicts}.`);
@@ -242,6 +245,11 @@ export function SyncPage() {
                   {QUEUE_STATUS[item.state] || item.state} · {new Date(item.createdAt).toLocaleString('es-AR')}
                   {' · '}Recorrida {item.runId.slice(0, 8)}…
                 </div>
+                {item.evidence && <div style={{ fontSize: 12, color: '#475569' }}>
+                  Foto: {item.evidence.original_name} · {item.syncedObservationId
+                    ? 'Observación confirmada; foto pendiente de confirmación'
+                    : 'Observación y foto pendientes'}
+                </div>}
                 {item.lastError && <p role="alert" style={{ margin: '4px 0 0', fontSize: 12, color: '#b45309' }}>
                   {item.lastError}
                 </p>}
