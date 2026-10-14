@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Op } from 'sequelize';
 import { Campaign, CampaignField, CropType, CropVariety, Field } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
 
 export const campaignsRouter = Router();
 
@@ -28,9 +30,19 @@ const campaignFieldSchema = z.object({
 });
 
 campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
+  const scopedFields = await assignedFieldIds(req);
+  const scopedCampaignFields = scopedFields === null ? null : await CampaignField.findAll({
+    where: { field_id: { [Op.in]: scopedFields } },
+    attributes: ['campaign_id'],
+    transaction: req.dbTransaction
+  });
   const campaigns = await Campaign.findAll({
+    ...(scopedCampaignFields === null ? {} : {
+      where: { id: { [Op.in]: scopedCampaignFields.map((item) => item.campaign_id) } }
+    }),
     include: [{
       model: CampaignField,
+      ...(scopedFields === null ? {} : { where: { field_id: { [Op.in]: scopedFields } }, required: true }),
       include: [
         { model: Field, attributes: ['id', 'name', 'area_hectares'] },
         { model: CropType, attributes: ['id', 'name', 'code'] }
@@ -57,7 +69,9 @@ campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write')
 
 // All campaign-fields (for scouting run selectors etc.)
 campaignsRouter.get('/fields', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
+  const scopedFields = await assignedFieldIds(req);
   const cfs = await CampaignField.findAll({
+    ...(scopedFields === null ? {} : { where: { field_id: { [Op.in]: scopedFields } } }),
     include: [
       { model: Field, attributes: ['id', 'name', 'area_hectares'] },
       { model: CropType, attributes: ['id', 'name', 'code'] },
@@ -70,9 +84,12 @@ campaignsRouter.get('/fields', requireCapability('campaigns.read'), asyncHandler
 }));
 
 campaignsRouter.get('/:id', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
-  const campaign = await Campaign.findByPk(req.params.id, {
+  const scopedFields = await assignedFieldIds(req);
+  const campaign = await Campaign.findOne({
+    where: { id: req.params.id },
     include: [{
       model: CampaignField,
+      ...(scopedFields === null ? {} : { where: { field_id: { [Op.in]: scopedFields } }, required: true }),
       include: [
         { model: Field },
         { model: CropType },

@@ -76,7 +76,7 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       [tenantA, adminId, scoutId, otherScoutId]
     );
     await owner.query(
-      "INSERT INTO tenant_modules (tenant_id,module_code,is_enabled,source) VALUES ($1,'scouting',true,'plan'),($2,'scouting',true,'plan')",
+      "INSERT INTO tenant_modules (tenant_id,module_code,is_enabled,source) VALUES ($1,'scouting',true,'plan'),($2,'scouting',true,'plan'),($1,'gis',true,'plan'),($1,'campaigns',true,'plan')",
       [tenantA, tenantB]
     );
     const farmA = await insert("INSERT INTO farms (tenant_id,name) VALUES ($1,$2) RETURNING id",
@@ -99,6 +99,10 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       "INSERT INTO campaign_fields (tenant_id,campaign_id,field_id,crop_type_id) VALUES ($1,$2,$3,$4) RETURNING id",
       [tenantA, campaign, fieldA, crop.id]
     );
+    const campaignFieldB = await insert(
+      "INSERT INTO campaign_fields (tenant_id,campaign_id,field_id,crop_type_id) VALUES ($1,$2,$3,$4) RETURNING id",
+      [tenantA, campaign, fieldA2, crop.id]
+    );
     const adminToken = signSession({ sub: adminId, role_code: 'tenant_admin', tenant_id: tenantA });
     const scoutToken = signSession({ sub: scoutId, role_code: 'scout', tenant_id: tenantA });
     const otherToken = signSession({ sub: otherScoutId, role_code: 'scout', tenant_id: tenantA });
@@ -116,6 +120,25 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       const json = await response.json();
       return { status: response.status, json };
     }
+    const assigneeOptions = await request('/assignees', adminToken);
+    assert.equal(assigneeOptions.status, 200);
+    assert.deepEqual(new Set(assigneeOptions.json.data.map((member) => member.id)),
+      new Set([scoutId, otherScoutId]));
+    assert.equal((await request('/assignees', scoutToken)).status, 403);
+    assert.equal((await request('/runs', adminToken, 'POST', {
+      campaign_field_id: campaignField,
+      assigned_to: adminId,
+      status: 'planned'
+    })).status, 422);
+
+    const unassignedRun = await request('/runs', adminToken, 'POST', {
+      campaign_field_id: campaignField,
+      status: 'planned'
+    });
+    assert.equal(unassignedRun.status, 201);
+    assert.equal((await request(`/runs/${unassignedRun.json.data.id}`, adminToken, 'PATCH',
+      { status: 'in_progress' })).status, 409);
+
     const newRun = await request('/runs', adminToken, 'POST', {
       campaign_field_id: campaignField, assigned_to: scoutId, status: 'in_progress'
     });
@@ -123,7 +146,7 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     const runId = newRun.json.data.id;
 
     const otherRun = await request('/runs', adminToken, 'POST', {
-      campaign_field_id: campaignField, assigned_to: otherScoutId
+      campaign_field_id: campaignFieldB, assigned_to: otherScoutId
     });
     assert.equal(otherRun.status, 201);
 
@@ -132,6 +155,53 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.deepEqual(mine.json.data.map(r => r.id), [runId]);
     assert.equal((await request(`/runs/${otherRun.json.data.id}`)).status, 404);
     assert.equal((await request(`/runs/${runId}`, otherToken)).status, 404);
+
+    assert.equal((await request(`/runs/${runId}`, adminToken, 'PATCH', {
+      assigned_to: otherScoutId
+    })).status, 409, 'running assignments cannot be changed');
+
+    async function scopedRequest(path, token = scoutToken, method = 'GET', body = undefined) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/v1${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          'x-tenant-id': tenantA,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' })
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) })
+      });
+      return { status: response.status, json: await response.json() };
+    }
+    const myFields = await scopedRequest('/fields');
+    assert.equal(myFields.status, 200, JSON.stringify(myFields.json));
+    assert.deepEqual(myFields.json.data.map((item) => item.id), [fieldA]);
+    assert.deepEqual((await scopedRequest('/fields', otherToken)).json.data.map((item) => item.id), [fieldA2]);
+    assert.equal((await scopedRequest(`/fields/${fieldA2}`)).status, 404);
+    assert.equal((await scopedRequest(`/farms/${extraFarmA}`)).status, 404);
+    const myFarms = await scopedRequest('/farms');
+    assert.equal(myFarms.status, 200);
+    assert.deepEqual(myFarms.json.data.map((item) => item.id), [farmA]);
+    assert.deepEqual(myFarms.json.data[0].Fields.map((item) => item.id), [fieldA]);
+    const campaignFieldsForScout = await scopedRequest('/campaigns/fields');
+    assert.equal(campaignFieldsForScout.status, 200);
+    assert.deepEqual(campaignFieldsForScout.json.data.map((item) => item.id), [campaignField]);
+    const campaignDetail = await scopedRequest(`/campaigns/${campaign}`);
+    assert.equal(campaignDetail.status, 200);
+    assert.deepEqual(campaignDetail.json.data.CampaignFields.map((item) => item.field_id), [fieldA]);
+    const campaigns = await scopedRequest('/campaigns');
+    assert.equal(campaigns.status, 200);
+    assert.deepEqual(campaigns.json.data[0].CampaignFields.map((item) => item.field_id), [fieldA]);
+
+    assert.equal((await scopedRequest(`/fields/${fieldA2}/rainfall`, scoutToken, 'POST', {
+      amount_mm: 14, measured_at: new Date().toISOString()
+    })).status, 404);
+    assert.equal((await scopedRequest(`/fields/${fieldA2}/irrigation`, scoutToken, 'POST', {
+      amount_mm: 14, started_at: new Date().toISOString()
+    })).status, 404);
+    assert.equal((await scopedRequest(`/fields/${fieldA}/rainfall`, scoutToken, 'POST', {
+      amount_mm: 14, measured_at: new Date().toISOString()
+    })).status, 201);
+
 
     const wrongField = await request(`/runs/${runId}/observations`, scoutToken, 'POST', {
       field_id: fieldA2, observation_type: 'pest', severity: 'high', notes: 'Test mismatch'
@@ -187,6 +257,30 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     })).status, 409);
     assert.equal((await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', evidenceBody)).status, 409);
     assert.equal((await request(`/runs/${runId}`, adminToken, 'PATCH', { status: 'in_progress' })).status, 409);
+    const reassigned = await request(`/runs/${otherRun.json.data.id}`, adminToken, 'PATCH',
+      { assigned_to: scoutId });
+    assert.equal(reassigned.status, 200);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}`, otherToken)).status, 404);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}`, scoutToken)).status, 200);
+    assert.deepEqual((await scopedRequest('/fields', otherToken)).json.data, []);
+    assert.deepEqual(new Set((await scopedRequest('/fields')).json.data.map((item) => item.id)),
+      new Set([fieldA, fieldA2]));
+
+    assert.equal((await scopedRequest(`/campaigns/${campaign}`, otherToken)).status, 404);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, otherToken, 'PATCH',
+      { status: 'in_progress' })).status, 404);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'completed' })).status, 409, 'scout cannot skip start');
+    const startedByScout = await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'in_progress' });
+    assert.equal(startedByScout.status, 200, JSON.stringify(startedByScout.json));
+    const finishedByScout = await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'completed' });
+    assert.equal(finishedByScout.status, 200, JSON.stringify(finishedByScout.json));
+    assert.ok(finishedByScout.json.data.completed_at);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/status`, scoutToken, 'PATCH',
+      { status: 'in_progress' })).status, 409);
+
   } finally {
     if (connected) {
       try {

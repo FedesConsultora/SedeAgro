@@ -156,7 +156,7 @@ x-tenant-id: <tenant.id>
 
 ## Monitoreo real y carga de archivos
 
-El detalle de recorridas consulta observaciones reales, los monitoreadores ven únicamente recorridas asignadas y las observaciones obtienen su lote del servidor. Fotos JPEG/PNG/WebP y PDF de hasta 2 MiB se almacenan en PostgreSQL de forma transaccional, con descarga autenticada; no se admiten URLs arbitrarias como falsa evidencia. [Contrato y límites](docs/scouting-real-workflow.md).
+El detalle de recorridas consulta observaciones reales, los monitoreadores ven únicamente recorridas asignadas y las observaciones obtienen su lote del servidor. Un monitoreador puede iniciar y completar sus propias recorridas, y únicamente ver establecimientos, lotes y campañas de sus asignaciones. Los responsables se eligen por nombre entre miembros activos; ver [permisos y flujo por lote](docs/scouting-assignments-field-scope.md). Fotos JPEG/PNG/WebP y PDF de hasta 2 MiB se almacenan en PostgreSQL de forma transaccional, con descarga autenticada; no se admiten URLs arbitrarias como falsa evidencia. [Contrato y límites](docs/scouting-real-workflow.md).
 
 ## Atomicidad de solicitudes y módulos por tenant
 

@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import {
-  CampaignField, EvidenceAsset, EvidenceBlob, Field, Membership,
+  CampaignField, EvidenceAsset, Field, Membership, User,
   ScoutingObservation, ScoutingRun
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
-import { assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
+import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
+import { getPrivateEvidence, putPrivateEvidence } from './evidenceStorage.js';
 
 export const scoutingRouter = Router();
 scoutingRouter.use(requireEntitlement('scouting'));
@@ -31,6 +32,10 @@ const updateRunSchema = z.object({
   status: z.enum(['planned', 'in_progress', 'completed', 'cancelled']).optional(),
   summary: z.string().max(5000).nullable().optional()
 }).strict();
+const advanceStatusSchema = z.object({
+  status: z.enum(['in_progress', 'completed'])
+}).strict();
+
 const observationSchema = z.object({
   field_id: z.string().uuid().optional(), // accepted for older clients, never trusted
   observation_type: z.enum(['weed', 'pest', 'disease', 'phenology', 'nutrition', 'water', 'general']),
@@ -47,8 +52,11 @@ const evidenceSchema = z.object({
   captured_at: z.coerce.date().optional()
 }).strict();
 
-async function findRun(req, id) {
-  const run = await ScoutingRun.findByPk(id, { transaction: req.dbTransaction });
+async function findRun(req, id, forUpdate = false) {
+  const run = await ScoutingRun.findByPk(id, {
+    transaction: req.dbTransaction,
+    ...(forUpdate ? { lock: req.dbTransaction.LOCK.UPDATE } : {})
+  });
   if (!run || !canReadScoutingRun(req.auth, run)) {
     throw new HttpError(404, 'Recorrida no encontrada.', undefined, 'SCOUTING_RUN_NOT_FOUND');
   }
@@ -58,16 +66,45 @@ async function findRun(req, id) {
 async function verifyAssignee(req, userId) {
   if (!userId) return;
   const member = await Membership.findOne({
-    where: { tenant_id: req.tenantId, user_id: userId, status: 'active' },
+    where: {
+      tenant_id: req.tenantId,
+      user_id: userId,
+      status: 'active',
+      role_code: ASSIGNABLE_ROLES
+    },
+    include: [{ model: User, attributes: ['id'], where: { status: 'active' }, required: true }],
     transaction: req.dbTransaction
   });
-  if (!member) throw new HttpError(422, 'El responsable debe tener una membresía activa.', undefined, 'SCOUTING_ASSIGNEE_INVALID');
+  if (!member) {
+    throw new HttpError(422, 'Elegí un monitoreador o coordinador activo de esta empresa.',
+      undefined, 'SCOUTING_ASSIGNEE_INVALID');
+  }
 }
+
+scoutingRouter.get('/assignees', requireCapability('scouting.plan'), asyncHandler(async (req, res) => {
+  const members = await Membership.findAll({
+    where: { tenant_id: req.tenantId, status: 'active', role_code: ASSIGNABLE_ROLES },
+    include: [{
+      model: User, attributes: ['id', 'full_name'],
+      where: { status: 'active' }, required: true
+    }],
+    order: [[User, 'full_name', 'ASC']],
+    transaction: req.dbTransaction
+  });
+  res.json({ data: members.map((membership) => ({
+    id: membership.user_id,
+    name: membership.User.full_name,
+    role_code: membership.role_code
+  })) });
+}));
 
 scoutingRouter.get('/runs', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
   const runs = await ScoutingRun.findAll({
     ...(req.auth.role.code === 'scout' ? { where: { assigned_to: req.auth.user.id } } : {}),
-    include: [{ model: CampaignField, include: [{ model: Field, attributes: ['id', 'name'] }] }],
+    include: [
+      { model: CampaignField, include: [{ model: Field, attributes: ['id', 'name'] }] },
+      { model: User, as: 'assignee', attributes: ['id', 'full_name'] }
+    ],
     order: [['scheduled_at', 'DESC'], ['created_at', 'DESC']],
     transaction: req.dbTransaction
   });
@@ -78,6 +115,9 @@ scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSch
   const campaignField = await CampaignField.findByPk(req.body.campaign_field_id, { transaction: req.dbTransaction });
   if (!campaignField) throw new HttpError(404, 'Lote de campaña no encontrado.');
   await verifyAssignee(req, req.body.assigned_to);
+  if (req.body.status === 'in_progress') {
+    assertRunReadyToStart(null, req.body.assigned_to);
+  }
   const run = await ScoutingRun.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: run });
 }));
@@ -87,6 +127,7 @@ scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler
   const run = await ScoutingRun.findByPk(req.params.id, {
     include: [
       { model: CampaignField, include: [{ model: Field }] },
+      { model: User, as: 'assignee', attributes: ['id', 'full_name'] },
       { model: ScoutingObservation, include: [{ model: EvidenceAsset }] }
     ],
     transaction: req.dbTransaction
@@ -95,7 +136,7 @@ scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler
 }));
 
 scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.observe'), validate(observationSchema), asyncHandler(async (req, res) => {
-  const run = await findRun(req, req.params.runId);
+  const run = await findRun(req, req.params.runId, true);
   assertScoutingWritable(req.auth, run);
   const campaignField = await CampaignField.findByPk(run.campaign_field_id, { transaction: req.dbTransaction });
   if (!campaignField) throw new HttpError(409, 'La recorrida no tiene un lote válido.');
@@ -115,7 +156,7 @@ scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.obs
 scoutingRouter.post('/observations/:observationId/evidence', requireCapability('scouting.evidence'), validate(evidenceSchema), asyncHandler(async (req, res) => {
   const observation = await ScoutingObservation.findByPk(req.params.observationId, { transaction: req.dbTransaction });
   if (!observation) throw new HttpError(404, 'Observación no encontrada.');
-  const run = await findRun(req, observation.scouting_run_id);
+  const run = await findRun(req, observation.scouting_run_id, true);
   assertScoutingWritable(req.auth, run);
   const bytes = decodeEvidenceContent(req.body);
   const id = randomUUID();
@@ -130,11 +171,12 @@ scoutingRouter.post('/observations/:observationId/evidence', requireCapability('
     size_bytes: bytes.length,
     captured_at: req.body.captured_at || new Date()
   }, { transaction: req.dbTransaction });
-  await EvidenceBlob.create({
-    tenant_id: req.tenantId,
-    evidence_id: evidence.id,
-    content: bytes
-  }, { transaction: req.dbTransaction });
+  await putPrivateEvidence({
+    tenantId: req.tenantId,
+    evidenceId: evidence.id,
+    bytes,
+    transaction: req.dbTransaction
+  });
   res.status(201).json({ data: evidence });
 }));
 
@@ -144,28 +186,55 @@ scoutingRouter.get('/evidence/:id/content', requireCapability('scouting.read'), 
   const observation = await ScoutingObservation.findByPk(evidence.scouting_observation_id, { transaction: req.dbTransaction });
   if (!observation) throw new HttpError(404, 'Evidencia no encontrada.');
   await findRun(req, observation.scouting_run_id);
-  const blob = await EvidenceBlob.findOne({
-    where: { evidence_id: evidence.id, tenant_id: req.tenantId },
+  const bytes = await getPrivateEvidence({
+    tenantId: req.tenantId,
+    evidenceId: evidence.id,
     transaction: req.dbTransaction
   });
-  if (!blob) throw new HttpError(404, 'El archivo no está disponible; solo se registraron metadatos.');
+  if (!bytes) throw new HttpError(404, 'El archivo no está disponible; solo se registraron metadatos.');
   res.set('Cache-Control', 'private, no-store');
   res.json({ data: {
     id: evidence.id,
     original_name: evidence.original_name,
     mime_type: evidence.mime_type,
     size_bytes: evidence.size_bytes,
-    content_base64: Buffer.from(blob.content).toString('base64')
+    content_base64: bytes.toString('base64')
   } });
 }));
 
+// Assigned field operators can advance only their own runs. Planning, cancellation
+// and assignment remain limited to administrative/coordinator capabilities.
+scoutingRouter.patch('/runs/:id/status', requireCapability('scouting.observe'), validate(advanceStatusSchema),
+  asyncHandler(async (req, res) => {
+    const run = await findRun(req, req.params.id, true);
+    assertRunTransition(run.status, req.body.status);
+    if (req.body.status === 'in_progress') {
+      assertRunReadyToStart(run, run.assigned_to);
+      await verifyAssignee(req, run.assigned_to);
+    }
+    await run.update({
+      status: req.body.status,
+      ...(req.body.status === 'completed' ? { completed_at: new Date() } : {})
+    }, { transaction: req.dbTransaction });
+    res.json({ data: run });
+  }));
+
 scoutingRouter.patch('/runs/:id', requireCapability('scouting.plan'), validate(updateRunSchema), asyncHandler(async (req, res) => {
-  const run = await findRun(req, req.params.id);
+  const run = await findRun(req, req.params.id, true);
   if (req.body.status) assertRunTransition(run.status, req.body.status);
   if (['completed', 'cancelled'].includes(run.status)) {
     throw new HttpError(409, 'No se puede modificar una recorrida cerrada.');
   }
-  await verifyAssignee(req, req.body.assigned_to);
+  if (Object.hasOwn(req.body, 'assigned_to')) {
+    assertRunAssignmentChange(run, req.body.assigned_to);
+    await verifyAssignee(req, req.body.assigned_to);
+  }
+  if (req.body.status === 'in_progress' && run.status === 'planned') {
+    const nextAssignee = Object.hasOwn(req.body, 'assigned_to') ?
+      req.body.assigned_to : run.assigned_to;
+    assertRunReadyToStart(run, nextAssignee);
+    await verifyAssignee(req, nextAssignee);
+  }
   const update = { ...req.body };
   if (req.body.status === 'completed') update.completed_at = new Date();
   await run.update(update, { transaction: req.dbTransaction });

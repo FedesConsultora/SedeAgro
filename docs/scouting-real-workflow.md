@@ -49,11 +49,11 @@ La migración `202610140003_evidence_blobs.js` crea `evidence_blobs` con `conten
 
 ## Autorización y estados
 
-`tenant_admin` y coordinador pueden planificar recorridas, añadir observaciones y registrar evidencias. `scout` puede observar y consultar **solo la recorrida asignada**, no cambiar responsables ni cerrar la recorrida. El servidor valida membresía activa del responsable y evita cambios a estados terminales.
+`tenant_admin` y coordinador pueden planificar recorridas, añadir observaciones y registrar evidencias. `scout` puede observar y consultar **solo la recorrida asignada** y avanzar sus estados `planned → in_progress → completed` desde la ruta específica protegida. No puede cambiar responsables ni cancelar la recorrida; las reasignaciones son exclusivas de la etapa planificada. El servidor valida membresía activa del responsable y evita cambios a estados terminales.
 
 Transiciones admitidas: `planned → in_progress → completed`, con `cancelled` desde `planned` o `in_progress`. No se permiten saltos al estado completado ni volver a abrir recorridas cerradas.
 
-El sistema **todavía no** aplica permisos por lote a todos los módulos del monitoreador: sigue pendiente la autorización por recursos en campañas e informes.
+El Bloque 0G restringe además las lecturas GIS/campañas y escrituras de lluvia/riego de `scout` a los lotes de sus recorridas asignadas. Persisten otros endpoints con permisos por rol o tenant que deben auditarse; ver [alcance de recorridas](scouting-assignments-field-scope.md).
 
 ## Interfaz y modo de datos
 

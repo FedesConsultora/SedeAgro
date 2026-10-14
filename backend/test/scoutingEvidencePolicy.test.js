@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { decodeEvidenceContent, safeEvidenceFileName, MAX_EVIDENCE_BYTES } from '../src/modules/scouting/evidenceContent.js';
-import { canReadScoutingRun, assertScoutingWritable, assertRunTransition } from '../src/modules/scouting/scoutingPolicy.js';
+import { canReadScoutingRun, assertScoutingWritable, assertRunTransition, assertRunAssignmentChange, assertRunReadyToStart, ASSIGNABLE_ROLES } from '../src/modules/scouting/scoutingPolicy.js';
 
 const png = Buffer.from('89504e470d0a1a0a00000000', 'hex');
 const jpg = Buffer.from('ffd8ffdb0000000000', 'hex');
@@ -50,4 +50,16 @@ test('run state machine rejects skipped and terminal transitions', () => {
   assert.throws(() => assertRunTransition('planned', 'completed'), /transición/i);
   assert.throws(() => assertRunTransition('completed', 'in_progress'), /transición/i);
   assert.throws(() => assertRunTransition('constructor', 'in_progress'), /transición/i);
+});
+
+test('scouting planning requires a responsible active operator before starting', () => {
+  assert.deepEqual(ASSIGNABLE_ROLES, ['scout', 'agronomic_coordinator']);
+  assert.throws(() => assertRunReadyToStart({ status: 'planned' }, null), /responsable activo/i);
+  assert.doesNotThrow(() => assertRunReadyToStart({ status: 'planned' }, 'user-1'));
+  assert.doesNotThrow(() => assertRunAssignmentChange({ status: 'planned', assigned_to: null }, 'user-1'));
+  assert.throws(() => assertRunAssignmentChange({ status: 'in_progress', assigned_to: 'a' }, 'b'),
+    /planificadas/i);
+  assert.doesNotThrow(() => assertRunAssignmentChange({ status: 'in_progress', assigned_to: 'a' }, 'a'));
+  assert.throws(() => assertRunAssignmentChange({ status: 'completed', assigned_to: 'a' }, null),
+    /planificadas/i);
 });

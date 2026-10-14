@@ -6,6 +6,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { grantedProducerIds } from '../farms/producerAccess.js';
+import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
 
 export const fieldsRouter = Router();
 
@@ -37,7 +38,9 @@ const irrigationSchema = z.object({
 
 fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFields = await assignedFieldIds(req);
   const fields = await Field.findAll({
+    ...(scoutFields === null ? {} : { where: { id: { [Op.in]: scoutFields } } }),
     include: [{
       model: Farm,
       attributes: ['id', 'name', 'province', 'locality'],
@@ -59,6 +62,10 @@ fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), as
 
 fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFields = await assignedFieldIds(req);
+  if (scoutFields !== null && !scoutFields.includes(req.params.id)) {
+    return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  }
   const field = await Field.findOne({
     where: { id: req.params.id },
     include: [
@@ -80,6 +87,12 @@ fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req,
 }));
 
 fieldsRouter.post('/:id/rainfall', requireCapability('water.write'), validate(rainfallSchema), asyncHandler(async (req, res) => {
+  const assigned = await assignedFieldIds(req);
+  if (assigned !== null && !assigned.includes(req.params.id)) {
+    return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  }
+  const field = await Field.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!field) return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
   const event = await RainfallEvent.create({
     ...req.body,
     field_id: req.params.id,
@@ -89,6 +102,12 @@ fieldsRouter.post('/:id/rainfall', requireCapability('water.write'), validate(ra
 }));
 
 fieldsRouter.post('/:id/irrigation', requireCapability('water.write'), validate(irrigationSchema), asyncHandler(async (req, res) => {
+  const assigned = await assignedFieldIds(req);
+  if (assigned !== null && !assigned.includes(req.params.id)) {
+    return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  }
+  const field = await Field.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!field) return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
   const event = await IrrigationEvent.create({
     ...req.body,
     field_id: req.params.id,
