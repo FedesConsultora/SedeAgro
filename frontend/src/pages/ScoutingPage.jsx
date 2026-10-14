@@ -6,6 +6,7 @@ import { ScoutingRunFormModal } from '../components/ScoutingRunFormModal.jsx';
 import { ObservationFormModal } from '../components/ObservationFormModal.jsx';
 import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
+import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 
 const RUN_STATUS_ES = { planned: 'Planificado', in_progress: 'En curso', completed: 'Completado', cancelled: 'Cancelado' };
 const SEV_ES = { low: 'Leve', medium: 'Moderado', high: 'Alto', critical: 'Crítico' };
@@ -27,6 +28,7 @@ function RunDetail({ run, onChanged }) {
   const [showEvidModal, setShowEvidModal] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
   const [preview, setPreview] = useState(null);
+  const [showAudit, setShowAudit] = useState(false);
   const [eligibleAssignees, setEligibleAssignees] = useState([]);
   const [selectedAssignee, setSelectedAssignee] = useState('');
   const [loadingAssignees, setLoadingAssignees] = useState(false);
@@ -144,6 +146,10 @@ function RunDetail({ run, onChanged }) {
               onClick={() => { if (window.confirm('¿Cancelar esta recorrida? No se podrá reabrir.')) void changeStatus('cancelled'); }}>
               Cancelar recorrida
             </button>}
+          {canManage && <button type="button" className="ghost-action"
+            aria-expanded={showAudit} onClick={() => setShowAudit((value) => !value)}>
+            {showAudit ? 'Ocultar historial' : 'Ver historial'}
+          </button>}
           <button type="button" className="ghost-action" onClick={() => refresh()} disabled={loading}>
             <RefreshCw size={14} /> Actualizar
           </button>
@@ -207,6 +213,7 @@ function RunDetail({ run, onChanged }) {
               ))}
             </div>
           )}
+      {showAudit && canManage && <ScoutingAuditPanel runId={run.id} />}
       {dataMode !== 'live' && <p style={{ fontSize: 12, color: '#a16207', margin: 0 }}>Modo demo: estos datos no provienen del backend; no se guardan modificaciones.</p>}
       {showObsModal && <ObservationFormModal isOpen runId={run.id} onClose={() => setShowObsModal(false)}
         onCreated={() => { setShowObsModal(false); void refresh(); onChanged?.(); }} />}
