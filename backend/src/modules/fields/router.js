@@ -63,11 +63,11 @@ fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), as
 fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
   const scoutFields = await assignedFieldIds(req);
+  if (scoutFields !== null && !scoutFields.includes(req.params.id)) {
+    return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  }
   const field = await Field.findOne({
-    where: {
-      id: req.params.id,
-      ...(scoutFields === null ? {} : { id: { [Op.in]: scoutFields, [Op.eq]: req.params.id } })
-    },
+    where: { id: req.params.id },
     include: [
       {
         model: Farm,
