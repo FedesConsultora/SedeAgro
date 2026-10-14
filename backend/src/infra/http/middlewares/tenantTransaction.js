@@ -1,5 +1,6 @@
 import { sequelize, setLocalTenant } from '../../../core/db.js';
 import { logger } from '../../../core/logger.js';
+import { deferResponseUntilTransactionSettles } from './transactionalResponse.js';
 
 export async function tenantTransaction(req, res, next) {
   if (!req.tenantId) return next();
@@ -10,37 +11,19 @@ export async function tenantTransaction(req, res, next) {
     await setLocalTenant(transaction, req.tenantId);
   } catch (error) {
     if (transaction && !transaction.finished) {
-      await transaction.rollback().catch(() => {});
+      await transaction.rollback().catch((rollbackError) => {
+        logger.error('db.tenant_transaction_setup_rollback_failed', {
+          request_id: req.requestId,
+          error: rollbackError
+        });
+      });
     }
     return next(error);
   }
 
   req.dbTransaction = transaction;
-  let completed = false;
-
-  async function closeTransaction(event) {
-    if (completed) return;
-    completed = true;
-    try {
-      // A client disconnect must not commit work from an incomplete response.
-      if (event === 'finish' && res.writableFinished && res.statusCode < 400) {
-        await transaction.commit();
-      } else {
-        await transaction.rollback();
-      }
-    } catch (error) {
-      // The response has already been sent or aborted, so log the error for investigation.
-      logger.error('db.tenant_transaction_finalize_failed', {
-        request_id: req.requestId,
-        event,
-        message: error.message
-      });
-      if (!transaction.finished) await transaction.rollback().catch(() => {});
-    }
-  }
-
-  res.once('finish', () => { void closeTransaction('finish'); });
-  res.once('close', () => { void closeTransaction('close'); });
-
+  // Commit BEFORE the response goes on the wire. Error/abort paths roll back.
+  // Unsupported streaming attempts are rejected rather than committing prematurely.
+  deferResponseUntilTransactionSettles(req, res, next, transaction, logger);
   next();
 }
