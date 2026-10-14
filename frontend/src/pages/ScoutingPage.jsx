@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ChevronRight, Download, Plus, RefreshCw } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
@@ -7,6 +7,8 @@ import { ObservationFormModal } from '../components/ObservationFormModal.jsx';
 import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
+import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
+import './scouting-workspace.css';
 
 const RUN_STATUS_ES = { planned: 'Planificado', in_progress: 'En curso', completed: 'Completado', cancelled: 'Cancelado' };
 const SEV_ES = { low: 'Leve', medium: 'Moderado', high: 'Alto', critical: 'Crítico' };
@@ -33,55 +35,68 @@ function RunDetail({ run, onChanged }) {
   const [eligibleAssignees, setEligibleAssignees] = useState([]);
   const [selectedAssignee, setSelectedAssignee] = useState('');
   const [loadingAssignees, setLoadingAssignees] = useState(false);
+  const detailRequestSequence = useRef(0);
 
   const refresh = useCallback(async () => {
+    const sequence = ++detailRequestSequence.current;
+    setError('');
+    setLoading(dataMode === 'live');
     if (dataMode !== 'live') {
       setDetails(run);
-      setError('');
-      setLoading(false);
-      return;
+      return true;
     }
-    setLoading(true);
-    setError('');
+    // Never display stale details from another session or a previous request.
+    setDetails(null);
     try {
       const response = await api.getScoutingRun(run.id);
-      setDetails(response.data);
-      setSelectedAssignee(response.data.assigned_to || '');
+      if (detailRequestSequence.current !== sequence) return false;
+      const next = parseScoutingRunDetail(response, run.id);
+      setDetails(next);
+      setSelectedAssignee(next.assigned_to || '');
+      return true;
     } catch (err) {
+      if (detailRequestSequence.current !== sequence) return false;
       setDetails(null);
       setError(err?.message || 'No se pudo cargar la recorrida.');
+      return false;
     } finally {
-      setLoading(false);
+      if (detailRequestSequence.current === sequence) setLoading(false);
     }
   }, [api, dataMode, run]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    return () => { detailRequestSequence.current += 1; };
+  }, [refresh]);
 
   useEffect(() => {
     if (dataMode !== 'live' || !['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode)) return;
     let cancelled = false;
     setLoadingAssignees(true);
     api.scoutingAssignees()
-      .then((result) => { if (!cancelled) setEligibleAssignees(result.data || []); })
+      .then((result) => {
+        if (!Array.isArray(result?.data)) {
+          throw new Error('El servidor no devolvió una lista válida de responsables.');
+        }
+        if (!cancelled) setEligibleAssignees(result.data);
+      })
       .catch((err) => { if (!cancelled) setActionError(err?.message || 'No se pudieron cargar responsables.'); })
       .finally(() => { if (!cancelled) setLoadingAssignees(false); });
     return () => { cancelled = true; };
   }, [api, dataMode, session?.membership?.roleCode]);
 
   const role = session?.membership?.roleCode;
-  const canManage = dataMode === 'live' && ['tenant_admin', 'agronomic_coordinator'].includes(role);
-  const canOperate = dataMode === 'live' && (
-    canManage || (role === 'scout' && details?.assigned_to === session?.user?.id)
-  );
-  const canObserve = canOperate && ['planned', 'in_progress'].includes(details?.status);
+  const { canManage, canOperate, canObserve } =
+    scoutingRunCapabilities(details, session, dataMode);
 
   const assign = async () => {
     setWorking(true);
     setActionError('');
     try {
       await api.updateScoutingRun(run.id, { assigned_to: selectedAssignee || null });
-      await refresh();
-      onChanged?.();
+      const fresh = await refresh();
+      if (fresh) onChanged?.();
+      else setActionError('El cambio se guardó, pero no pudimos volver a consultar la recorrida. Reintentá actualizar.');
     } catch (err) {
       setActionError(err?.message || 'No se pudo actualizar el responsable.');
     } finally {
@@ -95,8 +110,9 @@ function RunDetail({ run, onChanged }) {
     try {
       if (role === 'scout') await api.advanceScoutingRun(run.id, status);
       else await api.updateScoutingRun(run.id, { status });
-      await refresh();
-      onChanged?.();
+      const fresh = await refresh();
+      if (fresh) onChanged?.();
+      else setActionError('El servidor confirmó el cambio, pero no pudimos volver a consultar la recorrida. Reintentá actualizar.');
     } catch (err) {
       setActionError(err?.message || 'No se pudo actualizar el estado.');
     } finally {
@@ -159,10 +175,6 @@ function RunDetail({ run, onChanged }) {
           </button>}
         </div>
       </div>
-      {!loading && !error && focusRunId && !runs.some(run => run.id === focusRunId) &&
-        <p className="auth-error" role="status">
-          La recorrida solicitada no está disponible para esta cuenta.
-        </p>}
       {error && <div className="auth-error" role="alert">{error} <button type="button" onClick={() => refresh()}>Reintentar</button></div>}
       {actionError && <div className="auth-error" role="alert">{actionError}</div>}
       {queuedNotice && <div role="status" style={{ padding: '10px 12px',
@@ -246,11 +258,15 @@ export function ScoutingPage({ focusRunId = null }) {
   const [filter, setFilter] = useState('Todos');
   const [expanded, setExpanded] = useState({});
   const [showModal, setShowModal] = useState(false);
-  const canPlan = dataMode === 'live' && ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const listRequestSequence = useRef(0);
+  const canPlan = dataMode === 'live' && session?.authenticated === true &&
+    ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
 
   const load = useCallback(async () => {
+    const sequence = ++listRequestSequence.current;
     setLoading(true);
     setError('');
+    setRuns([]);
     if (dataMode === 'mock') {
       setRuns(mockData.scoutingRuns);
       setLoading(false);
@@ -258,16 +274,22 @@ export function ScoutingPage({ focusRunId = null }) {
     }
     try {
       const response = await api.scoutingRuns();
-      setRuns(response.data || []);
+      if (listRequestSequence.current !== sequence) return;
+      setRuns(parseScoutingRuns(response));
     } catch (err) {
-      setRuns([]);
-      setError(err?.message || 'No se pudo consultar el servidor de monitoreos.');
+      if (listRequestSequence.current === sequence) {
+        setRuns([]);
+        setError(err?.message || 'No se pudo consultar el servidor de monitoreos.');
+      }
     } finally {
-      setLoading(false);
+      if (listRequestSequence.current === sequence) setLoading(false);
     }
   }, [api, dataMode]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { listRequestSequence.current += 1; };
+  }, [load]);
   useEffect(() => {
     if (!focusRunId) return;
     setFilter('Todos');
@@ -295,8 +317,13 @@ export function ScoutingPage({ focusRunId = null }) {
         </span>
       </div>
       {error && <div className="auth-error" role="alert">
-        {error} <button type="button" onClick={() => load()}>Reintentar</button>
+        {error} <button type="button" onClick={() => void load()}>Reintentar</button>
       </div>}
+      {isFocusedScoutingRunUnavailable(focusRunId, runs, loading, error) && (
+        <p className="auth-error" role="status">
+          La recorrida solicitada no está disponible para esta cuenta o empresa.
+        </p>
+      )}
       <div className="data-table-wrapper">
         <div className="data-table">
           <div className="data-table__row data-table__row--head" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px' }}>
