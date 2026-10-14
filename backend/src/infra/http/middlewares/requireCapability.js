@@ -1,8 +1,8 @@
 import { HttpError } from '../../../utils/http.js';
 
 // Server-side tenant RBAC. Entitlements only select paid modules; they do not authorize actions.
-// Producer-to-field grants do not exist yet: producer_viewer is deliberately limited to
-// self-service auth and own notifications until resource-scoped access is implemented.
+// producer_viewer can read GIS only through explicit producer_access_grants;
+// the farms/fields routers must filter every returned resource by those grants.
 const CAPABILITIES = Object.freeze({
   tenant_admin: ['*'],
   agronomic_coordinator: [
@@ -19,7 +19,7 @@ const CAPABILITIES = Object.freeze({
     'scouting.observe', 'scouting.evidence', 'water.write', 'sync.submit'
   ],
   contractor: ['orders.read', 'orders.execute'],
-  producer_viewer: []
+  producer_viewer: ['gis.read']
 });
 
 export function hasCapability(auth, tenantId, capability) {
