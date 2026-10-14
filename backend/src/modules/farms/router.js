@@ -6,6 +6,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { grantedProducerIds, isProducerViewer } from './producerAccess.js';
+import { assignedFarmIds, assignedFieldIds, isScout } from '../scouting/scoutFieldScope.js';
 
 export const farmsRouter = Router();
 
@@ -35,9 +36,18 @@ const farmSchema = z.object({
 
 farmsRouter.get('/producers', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFarms = await assignedFarmIds(req);
+  const scopedFarms = scoutFarms === null ? null : await Farm.findAll({
+    where: { id: { [Op.in]: scoutFarms } },
+    attributes: ['producer_id'],
+    transaction: req.dbTransaction
+  });
+  const scopedProducerIds = scopedFarms === null ? null :
+    [...new Set(scopedFarms.map((farm) => farm.producer_id).filter(Boolean))];
+  const producerIds = grants === null ? scopedProducerIds : grants;
   const producers = await Producer.findAll({
-    ...(grants === null ? {} : {
-      where: { id: { [Op.in]: grants } },
+    ...(producerIds === null ? {} : {
+      where: { id: { [Op.in]: producerIds } },
       attributes: ['id', 'name']
     }),
     order: [['name', 'ASC']],
@@ -53,11 +63,19 @@ farmsRouter.post('/producers', requireCapability('gis.write'), validate(producer
 
 farmsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFarms = await assignedFarmIds(req);
+  const scoutFields = await assignedFieldIds(req);
   const farms = await Farm.findAll({
-    ...(grants === null ? {} : { where: { producer_id: { [Op.in]: grants } } }),
+    where: {
+      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } }),
+      ...(scoutFarms === null ? {} : { id: { [Op.in]: scoutFarms } })
+    },
     include: [
       { model: Producer, attributes: ['id', 'name'] },
-      { model: Field, attributes: ['id', 'name', 'area_hectares', 'status'] }
+      {
+        model: Field, attributes: ['id', 'name', 'area_hectares', 'status'],
+        ...(scoutFields === null ? {} : { where: { id: { [Op.in]: scoutFields } }, required: false })
+      }
     ],
     order: [['name', 'ASC']],
     transaction: req.dbTransaction
@@ -72,14 +90,20 @@ farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyn
 
 farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFarms = await assignedFarmIds(req);
+  const scoutFields = await assignedFieldIds(req);
   const farm = await Farm.findOne({
     where: {
       id: req.params.id,
-      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } })
+      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } }),
+      ...(scoutFarms === null ? {} : { id: { [Op.in]: scoutFarms } })
     },
     include: [
-      { model: Producer, attributes: isProducerViewer(req) ? ['id', 'name'] : ['id', 'name', 'contact_email'] },
-      { model: Field, order: [['name', 'ASC']] }
+      { model: Producer, attributes: isProducerViewer(req) || isScout(req) ? ['id', 'name'] : ['id', 'name', 'contact_email'] },
+      {
+        model: Field, order: [['name', 'ASC']],
+        ...(scoutFields === null ? {} : { where: { id: { [Op.in]: scoutFields } }, required: false })
+      }
     ],
     transaction: req.dbTransaction
   });
