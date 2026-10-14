@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "./dev.sh",
     "prod:deploy": "./scripts/deploy-prod.sh",
-    "validate": "npm run audit && npm run check:syntax && npm --workspace backend run test && npm --workspace frontend run build",
+    "validate": "npm run audit && npm run check:syntax && npm --workspace backend run test && npm --workspace frontend run test && npm --workspace frontend run build",
     "check:syntax": "find backend/src backend/db backend/scripts scripts -type f \\( -name '*.js' -o -name '*.mjs' \\) -print | sort | xargs -n 1 node --check",
     "audit": "npm run audit:sass && npm --workspace backend run audit:raw-sql",
     "audit:sass": "node scripts/audit-sass.mjs"
