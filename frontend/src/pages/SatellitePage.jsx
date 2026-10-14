@@ -4,6 +4,7 @@ import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
+import { cloudCoverLabel, ndviMeanLabel } from '../services/satelliteMetadata.js';
 import './satellite-workspace.css';
 
 const LAYER_ES = {
@@ -15,16 +16,6 @@ function dateLabel(value) {
   if (!value) return 'Fecha no informada';
   const date = new Date(value);
   return Number.isFinite(date.getTime()) ? date.toLocaleDateString('es-AR') : 'Fecha no informada';
-}
-function cloudLabel(value) {
-  const n = Number(value);
-  return value == null || !Number.isFinite(n) || n < 0 || n > 1
-    ? 'No informado' : (n * 100).toLocaleString('es-AR', { maximumFractionDigits: 1 }) + '%';
-}
-function ndviLabel(value) {
-  const n = Number(value);
-  return value == null || !Number.isFinite(n) || n < -1 || n > 1
-    ? 'No informado' : n.toLocaleString('es-AR', { maximumFractionDigits: 3 });
 }
 
 export function SatellitePage() {
@@ -80,8 +71,8 @@ export function SatellitePage() {
               <div><dt><CalendarDays size={15} aria-hidden="true" /> Captura</dt>
                 <dd>{dateLabel(current.captured_at)}</dd></div>
               <div><dt><Cloud size={15} aria-hidden="true" /> Nubosidad</dt>
-                <dd>{cloudLabel(current.metadata?.cloud_cover)}</dd></div>
-              <div><dt>NDVI medio</dt><dd>{ndviLabel(current.metadata?.ndvi_mean)}</dd></div>
+                <dd>{cloudCoverLabel(current.metadata?.cloud_cover)}</dd></div>
+              <div><dt>NDVI medio</dt><dd>{ndviMeanLabel(current.metadata?.ndvi_mean)}</dd></div>
             </dl>
             <p className="satellite-workspace__disclaimer">
               Los valores no informados no se estiman. La visualización georreferenciada estará
