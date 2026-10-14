@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Team, TeamMember, User } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const teamsRouter = Router();
 
@@ -20,7 +21,7 @@ const memberSchema = z.object({
   role_label: z.string().max(80).default('member')
 });
 
-teamsRouter.get('/', asyncHandler(async (req, res) => {
+teamsRouter.get('/', requireCapability('teams.read'), asyncHandler(async (req, res) => {
   const teams = await Team.findAll({
     include: [{ model: TeamMember, include: [{ model: User, attributes: ['id', 'full_name', 'email'] }] }],
     order: [['name', 'ASC']],
@@ -29,12 +30,12 @@ teamsRouter.get('/', asyncHandler(async (req, res) => {
   res.json({ data: teams });
 }));
 
-teamsRouter.post('/', validate(teamSchema), asyncHandler(async (req, res) => {
+teamsRouter.post('/', requireCapability('teams.write'), validate(teamSchema), asyncHandler(async (req, res) => {
   const team = await Team.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: team });
 }));
 
-teamsRouter.post('/:id/members', validate(memberSchema), asyncHandler(async (req, res) => {
+teamsRouter.post('/:id/members', requireCapability('teams.write'), validate(memberSchema), asyncHandler(async (req, res) => {
   const member = await TeamMember.create({
     ...req.body,
     team_id: req.params.id
