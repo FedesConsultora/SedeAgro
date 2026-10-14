@@ -46,7 +46,7 @@ SedeAgro/
 - Roles por membresía: un usuario puede ser admin en un tenant y viewer en otro.
 - Entitlements por plan y overrides mediante `tenant_modules`.
 - PostGIS para polígonos de lotes, puntos de monitoreo y futuras capas.
-- RLS activado en tablas de negocio con `SET LOCAL app.current_tenant` por request.
+- RLS activado en tablas de negocio usando `set_config('app.current_tenant', id, true)` dentro de la transacción por request.
 - SQL crudo bloqueado fuera de `queryTenant()` mediante auditoría.
 - Modelos en archivos individuales por tabla; asociaciones separadas del registry.
 - API versionada: `/api/v1` es el contrato recomendado y `/api` queda como alias.
@@ -129,7 +129,7 @@ Antes de desplegar el cambio en una base existente, seguir la [guía de auditor�
 
 ## Roles y permisos de empresa
 
-Las rutas de negocio requieren permisos server-side por operación, además de la sesión JWT y el entitlement del módulo. Consulta la [matriz de autorización y sus limitaciones](docs/security/authorization-matrix.md). Las cuentas productoras no tienen acceso a lotes ajenos mientras no exista un modelo de permisos por cliente/establecimiento. El contratista solo puede ver y ejecutar órdenes que tenga asignadas.
+Las rutas de negocio requieren permisos server-side por operación, además de la sesión JWT y el entitlement del módulo. Consulta la [matriz de autorización y sus limitaciones](docs/security/authorization-matrix.md). Los productores pueden leer únicamente los establecimientos y lotes vinculados a productores autorizados mediante concesiones explícitas. Ver [asignación y revocación de permisos](docs/security/producer-access-grants.md). El contratista solo puede ver y ejecutar órdenes que tenga asignadas.
 
 ## Primer tenant
 
