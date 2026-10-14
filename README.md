@@ -84,7 +84,7 @@ Usar preferentemente `/api/v1`; `/api` existe como alias.
 | Auth | `POST /auth/register-tenant`, `POST /auth/login`, `GET /auth/me` |
 | GIS | `/farms`, `/farms/producers`, `/fields`, `/fields/:id/rainfall`, `/fields/:id/irrigation` |
 | Campañas | `/campaigns`, `/campaigns/:campaignId/fields` |
-| Monitoreo | `/scouting/runs`, `/scouting/runs/:runId/observations`, `/scouting/observations/:id/evidence` |
+| Monitoreo | `/scouting/runs`, `/scouting/runs/:runId/observations`, `/scouting/observations/:id/evidence`, `/scouting/evidence/:id/content` |
 | Órdenes | `/work-orders`, `/work-orders/:id/assignees`, `/work-orders/:id/inputs`, `/work-orders/:id/machinery` |
 | Equipos | `/teams`, `/teams/:id/members` |
 | Activos | `/assets/machinery`, `/assets/inputs` |
@@ -117,7 +117,7 @@ El botón de conexión del encabezado permite alternar entre `Mock` y `Backend`.
 - `Mock`: usa datos locales relacionados entre sí para diseñar y navegar sin token.
 - `Backend`: usa `VITE_API_URL` o `http://localhost:3001/api/v1`, enviando `Authorization` y `x-tenant-id`.
 - Cada módulo tiene tablas, estado de origen, botón de refresco y formulario de alta con el payload esperado por el endpoint.
-- Si el backend falla, la pantalla vuelve a datos mock y el toast muestra el error con `request_id` cuando existe.
+- En el modo **Backend**, el banco de endpoints y la página de Monitoreo muestran los errores del servidor y dejan de sustituir resultados fallidos por datos simulados. Algunas otras pantallas particulares aún deben auditarse.
 
 ## Cuentas demo y seguridad
 
@@ -153,6 +153,10 @@ La respuesta devuelve `token`, `tenant.id` y `entitlements`. Para llamadas prote
 Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
+
+## Monitoreo real y carga de archivos
+
+El detalle de recorridas consulta observaciones reales, los monitoreadores ven únicamente recorridas asignadas y las observaciones obtienen su lote del servidor. Fotos JPEG/PNG/WebP y PDF de hasta 2 MiB se almacenan en PostgreSQL de forma transaccional, con descarga autenticada; no se admiten URLs arbitrarias como falsa evidencia. [Contrato y límites](docs/scouting-real-workflow.md).
 
 ## Atomicidad de solicitudes y módulos por tenant
 
