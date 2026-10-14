@@ -91,12 +91,14 @@ farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyn
 farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
   const scoutFarms = await assignedFarmIds(req);
+  if (scoutFarms !== null && !scoutFarms.includes(req.params.id)) {
+    return res.status(404).json({ error: { message: 'Establecimiento no encontrado.' } });
+  }
   const scoutFields = await assignedFieldIds(req);
   const farm = await Farm.findOne({
     where: {
       id: req.params.id,
-      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } }),
-      ...(scoutFarms === null ? {} : { id: { [Op.in]: scoutFarms } })
+      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } })
     },
     include: [
       { model: Producer, attributes: isProducerViewer(req) || isScout(req) ? ['id', 'name'] : ['id', 'name', 'contact_email'] },
