@@ -62,3 +62,12 @@ test('UI requires explicit GPS click; no watchPosition or automatic location upl
   assert.match(form, /disabled=\{saving \|\| locating\}/);
   assert.match(form, /key=\{locationKey\}/);
 });
+
+test('closing form or switching tenant/run clears private GPS, photos and notes', () => {
+  const form = readFileSync(new URL('../src/components/ObservationFormModal.jsx', import.meta.url), 'utf8');
+  assert.match(form, /setForm\(emptyObservation\(\)\)/);
+  assert.match(form, /setLocation\(null\)/);
+  assert.match(form, /setPhoto\(null\)/);
+  assert.match(form, /\[isOpen, locationKey\]/);
+  assert.match(form, /location\?\.key === locationKey \? location\.fix : null/);
+});
