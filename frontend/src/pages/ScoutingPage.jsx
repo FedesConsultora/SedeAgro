@@ -5,6 +5,7 @@ import { mockData } from '../services/mockData.js';
 import { ScoutingRunFormModal } from '../components/ScoutingRunFormModal.jsx';
 import { ObservationFormModal } from '../components/ObservationFormModal.jsx';
 import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
+import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 
 const RUN_STATUS_ES = { planned: 'Planificado', in_progress: 'En curso', completed: 'Completado', cancelled: 'Cancelado' };
 const SEV_ES = { low: 'Leve', medium: 'Moderado', high: 'Alto', critical: 'Crítico' };
@@ -25,6 +26,10 @@ function RunDetail({ run, onChanged }) {
   const [showObsModal, setShowObsModal] = useState(false);
   const [showEvidModal, setShowEvidModal] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [eligibleAssignees, setEligibleAssignees] = useState([]);
+  const [selectedAssignee, setSelectedAssignee] = useState('');
+  const [loadingAssignees, setLoadingAssignees] = useState(false);
 
   const refresh = useCallback(async () => {
     if (dataMode !== 'live') {
@@ -38,6 +43,7 @@ function RunDetail({ run, onChanged }) {
     try {
       const response = await api.getScoutingRun(run.id);
       setDetails(response.data);
+      setSelectedAssignee(response.data.assigned_to || '');
     } catch (err) {
       setDetails(null);
       setError(err?.message || 'No se pudo cargar la recorrida.');
@@ -48,12 +54,37 @@ function RunDetail({ run, onChanged }) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  useEffect(() => {
+    if (dataMode !== 'live' || !['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode)) return;
+    let cancelled = false;
+    setLoadingAssignees(true);
+    api.scoutingAssignees()
+      .then((result) => { if (!cancelled) setEligibleAssignees(result.data || []); })
+      .catch((err) => { if (!cancelled) setActionError(err?.message || 'No se pudieron cargar responsables.'); })
+      .finally(() => { if (!cancelled) setLoadingAssignees(false); });
+    return () => { cancelled = true; };
+  }, [api, dataMode, session?.membership?.roleCode]);
+
   const role = session?.membership?.roleCode;
   const canManage = dataMode === 'live' && ['tenant_admin', 'agronomic_coordinator'].includes(role);
   const canOperate = dataMode === 'live' && (
     canManage || (role === 'scout' && details?.assigned_to === session?.user?.id)
   );
   const canObserve = canOperate && ['planned', 'in_progress'].includes(details?.status);
+
+  const assign = async () => {
+    setWorking(true);
+    setActionError('');
+    try {
+      await api.updateScoutingRun(run.id, { assigned_to: selectedAssignee || null });
+      await refresh();
+      onChanged?.();
+    } catch (err) {
+      setActionError(err?.message || 'No se pudo actualizar el responsable.');
+    } finally {
+      setWorking(false);
+    }
+  };
 
   const changeStatus = async (status) => {
     setWorking(true);
@@ -102,9 +133,16 @@ function RunDetail({ run, onChanged }) {
         <strong style={{ fontSize: 13, color: '#334155' }}>Observaciones ({observations.length})</strong>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {canManage && details?.status === 'planned' &&
-            <button type="button" className="ghost-action" disabled={working} onClick={() => changeStatus('in_progress')}>Iniciar recorrida</button>}
+            <button type="button" className="ghost-action" disabled={working || !details?.assigned_to}
+              title={!details?.assigned_to ? 'Primero asigná un responsable' : undefined}
+              onClick={() => changeStatus('in_progress')}>Iniciar recorrida</button>}
           {canManage && details?.status === 'in_progress' &&
             <button type="button" className="ghost-action" disabled={working} onClick={() => changeStatus('completed')}>Completar recorrida</button>}
+          {canManage && ['planned', 'in_progress'].includes(details?.status) &&
+            <button type="button" className="ghost-action" disabled={working}
+              onClick={() => { if (window.confirm('¿Cancelar esta recorrida? No se podrá reabrir.')) void changeStatus('cancelled'); }}>
+              Cancelar recorrida
+            </button>}
           <button type="button" className="ghost-action" onClick={() => refresh()} disabled={loading}>
             <RefreshCw size={14} /> Actualizar
           </button>
@@ -115,6 +153,25 @@ function RunDetail({ run, onChanged }) {
       </div>
       {error && <div className="auth-error" role="alert">{error} <button type="button" onClick={() => refresh()}>Reintentar</button></div>}
       {actionError && <div className="auth-error" role="alert">{actionError}</div>}
+      {canManage && details?.status === 'planned' && (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+          <label className="form-field" style={{ minWidth: 220 }}>
+            <span>Responsable de la recorrida</span>
+            <select value={selectedAssignee} onChange={(event) => setSelectedAssignee(event.target.value)}
+              disabled={working || loadingAssignees}>
+              <option value="">Sin asignar</option>
+              {eligibleAssignees.map((person) => <option key={person.id} value={person.id}>
+                {person.name} · {person.role_code === 'scout' ? 'Monitoreador' : 'Coordinador'}
+              </option>)}
+            </select>
+          </label>
+          <button type="button" className="ghost-action" disabled={working || loadingAssignees || selectedAssignee === (details.assigned_to || '')}
+            onClick={() => void assign()}>Guardar responsable</button>
+          {!details.assigned_to && <span style={{ color: '#a16207', fontSize: 12 }}>
+            Es obligatorio asignar antes de iniciar.
+          </span>}
+        </div>
+      )}
       {loading ? <p style={{ color: '#64748b', fontSize: 13 }}>Cargando datos de la recorrida…</p>
         : !details ? null
           : observations.length === 0 ? (
@@ -135,6 +192,8 @@ function RunDetail({ run, onChanged }) {
                     {(obs.EvidenceAssets || []).map((ev) => (
                       <div key={ev.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
                         <span style={{ flex: 1, color: '#64748b' }}>{ev.original_name || 'Archivo'} · {ev.size_bytes ? `${Math.ceil(ev.size_bytes / 1024)} KiB` : 'Archivo legado'}</span>
+                        {dataMode === 'live' && ev.mime_type?.startsWith('image/') && <button className="ghost-action" type="button"
+                          onClick={() => setPreview(ev)}>Ver foto</button>}
                         {dataMode === 'live' && <button className="ghost-action" type="button" disabled={downloadingId === ev.id} onClick={() => download(ev)}>
                           <Download size={13} /> {downloadingId === ev.id ? 'Descargando…' : 'Descargar'}
                         </button>}
@@ -152,6 +211,7 @@ function RunDetail({ run, onChanged }) {
         onCreated={() => { setShowObsModal(false); void refresh(); onChanged?.(); }} />}
       {showEvidModal && <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)}
         onCreated={() => { setShowEvidModal(null); void refresh(); }} />}
+      {preview && <EvidencePreviewModal isOpen evidence={preview} api={api} onClose={() => setPreview(null)} />}
     </div>
   );
 }
@@ -230,7 +290,7 @@ export function ScoutingPage() {
                   <span><strong>{run.CampaignField?.Field?.name || 'Lote'}</strong></span>
                   <span>{run.scheduled_at ? new Date(run.scheduled_at).toLocaleDateString('es-AR') : '–'}</span>
                   <span><StatusBadge status={run.status} /></span>
-                  <span>{run.assigned_to || 'Sin asignar'}</span>
+                  <span>{run.assignee?.full_name || (run.assigned_to ? 'Responsable asignado' : 'Sin asignar')}</span>
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
                 {expanded[run.id] && <RunDetail run={run} onChanged={load} />}
