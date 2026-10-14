@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
+import { offlineQueue } from '../services/offlineQueue.js';
 
-export function ObservationFormModal({ isOpen, onClose, onCreated, runId }) {
-  const { api, dataMode } = useSession();
+export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
+  const { dataMode, session } = useSession();
   const [form, setForm] = useState({
     observation_type: 'weed',
     severity: 'medium',
@@ -20,14 +21,14 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, runId }) {
     setSaving(true);
     setError('');
     try {
-      if (dataMode === 'mock') { setError('El modo demo no guarda observaciones. Conectá el backend para continuar.'); return; }
-      await api.createObservation(runId, {
-        observation_type: form.observation_type,
-        severity: form.severity,
-        observed_at: form.observed_at || undefined,
-        notes: form.notes || undefined
-      });
-      onCreated();
+      if (dataMode !== 'live') {
+        setError('El modo demo no guarda observaciones. Conectá el backend para continuar.');
+        return;
+      }
+      // Persist before telling the user the operation was saved. Background
+      // delivery runs through the idempotent batch API, even when online.
+      const item = await offlineQueue.queueObservation(session, runId, form);
+      onQueued?.(item);
     } catch (err) {
       setError(err?.message || 'Error al guardar');
     } finally {
@@ -40,7 +41,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, runId }) {
       footer={<>
         <button type="button" className="ghost-action" onClick={onClose}>Cancelar</button>
         <button type="submit" form="obs-form" className="primary-action" disabled={saving}>
-          {saving ? 'Guardando…' : 'Registrar'}
+          {saving ? 'Guardando…' : 'Guardar observación'}
         </button>
       </>}
     >
@@ -76,6 +77,11 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, runId }) {
           <input id="obs-date" type="datetime-local" value={form.observed_at} onChange={set('observed_at')} />
         </label>
 
+        <p style={{ color: '#64748b', fontSize: 12, margin: 0 }}>
+          La observación se guarda primero en este dispositivo y se enviará con una clave
+          de reintento segura cuando haya conexión. No se considera registrada en el servidor
+          hasta aparecer como «Aplicada» en Sincronizaciones.
+        </p>
         <label className="form-field">
           <span>Notas *</span>
           <textarea id="obs-notes" value={form.notes} onChange={set('notes')} required rows={3}
