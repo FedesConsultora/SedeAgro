@@ -94,3 +94,64 @@ farmsRouter.patch('/:id', requireCapability('gis.write'), validate(farmSchema.pa
   res.json({ data: farm });
 }));
 
+
+function notFoundProducer() {
+  return new HttpError(404, 'Productor no encontrado en esta organización.');
+}
+
+farmsRouter.get('/producers/:producerId/access', requireCapability('producer_access.manage'),
+  validate(producerAccessParams, 'params'), asyncHandler(async (req, res) => {
+    const producer = await Producer.findByPk(req.params.producerId, { transaction: req.dbTransaction });
+    if (!producer) throw notFoundProducer();
+    const grants = await ProducerAccessGrant.findAll({
+      where: { producer_id: producer.id, tenant_id: req.tenantId },
+      attributes: ['id', 'user_id', 'granted_by', 'created_at'],
+      order: [['created_at', 'DESC']],
+      transaction: req.dbTransaction
+    });
+    res.json({ data: grants });
+  }));
+
+farmsRouter.post('/producers/:producerId/access', requireCapability('producer_access.manage'),
+  validate(producerAccessParams, 'params'), validate(producerAccessSchema), asyncHandler(async (req, res) => {
+    const producer = await Producer.findByPk(req.params.producerId, { transaction: req.dbTransaction });
+    if (!producer) throw notFoundProducer();
+    const membership = await Membership.findOne({
+      where: {
+        tenant_id: req.tenantId,
+        user_id: req.body.user_id,
+        role_code: 'producer_viewer',
+        status: 'active'
+      },
+      transaction: req.dbTransaction
+    });
+    if (!membership) {
+      throw new HttpError(422, 'Solo se puede autorizar a productores con membresía activa.');
+    }
+    const [grant, created] = await ProducerAccessGrant.findOrCreate({
+      where: {
+        tenant_id: req.tenantId,
+        user_id: membership.user_id,
+        producer_id: producer.id
+      },
+      defaults: { granted_by: req.auth.user.id },
+      transaction: req.dbTransaction
+    });
+    res.status(created ? 201 : 200).json({
+      data: { id: grant.id, user_id: grant.user_id, producer_id: grant.producer_id }
+    });
+  }));
+
+farmsRouter.delete('/producers/:producerId/access/:userId', requireCapability('producer_access.manage'),
+  validate(producerRevokeParams, 'params'), asyncHandler(async (req, res) => {
+    const count = await ProducerAccessGrant.destroy({
+      where: {
+        tenant_id: req.tenantId,
+        producer_id: req.params.producerId,
+        user_id: req.params.userId
+      },
+      transaction: req.dbTransaction
+    });
+    if (!count) throw new HttpError(404, 'Autorización no encontrada.');
+    res.status(204).end();
+  }));
