@@ -10,7 +10,9 @@ const coords = (n) => n.toFixed(5);
 export function FieldGeographyPanel({ field, farm, onClose }) {
   const { api, dataMode, session } = useSession();
   const scope = dataMode === 'mock' ? `demo:${farm.id}:${field.id}` :
-    `${session?.tenant?.id || ''}:${session?.user?.id || ''}:${farm.id}:${field.id}`;
+    [session?.authenticated ? 'auth' : 'anonymous', session?.tenant?.id || '',
+      session?.user?.id || '', session?.membership?.roleCode || '',
+      (session?.entitlements || []).join(','), farm.id, field.id].join(':');
   const [revision, setRevision] = useState(0);
   const [result, setResult] = useState({ scope: null, status: 'loading', record: null, error: '' });
 
@@ -36,7 +38,8 @@ export function FieldGeographyPanel({ field, farm, onClose }) {
     });
     return () => { cancelled = true; };
   }, [api, dataMode, field, field.id, farm.id, revision, scope,
-      session?.authenticated, session?.tenant?.id, session?.user?.id]);
+      session?.authenticated, session?.tenant?.id, session?.user?.id,
+      session?.membership?.roleCode, session?.entitlements]);
 
   const visible = result.scope === scope ? result :
     { scope, status: 'loading', record: null, error: '' };
@@ -44,9 +47,9 @@ export function FieldGeographyPanel({ field, farm, onClose }) {
   const geo = record ? fieldGeography(record.boundary, farm.centroid) : null;
 
   return (
-    <section className="field-geography" aria-label={`Geografía del lote ${field.name}`}>
+    <section className="field-geography" aria-label={`Geografía del lote ${record?.name || field.name}`}>
       <div className="field-geography__header">
-        <div><span className="field-geography__eyebrow">Contexto territorial</span><h3>{field.name}</h3></div>
+        <div><span className="field-geography__eyebrow">Contexto territorial</span><h3>{record?.name || field.name}</h3></div>
         <div className="field-geography__actions">
           {dataMode === 'live' && <button type="button" className="ghost-action"
             disabled={visible.status === 'loading'}
@@ -74,7 +77,7 @@ export function FieldGeographyPanel({ field, farm, onClose }) {
           <div className="field-geography__layout">
             <figure className="field-geography__figure">
               <svg viewBox="0 0 400 240" role="img"
-                aria-label={`Croquis del perímetro real del lote ${field.name}, con ${geo.rings} anillos GeoJSON`}
+                aria-label={`Croquis del perímetro registrado del lote ${record.name}, con ${geo.rings} anillos GeoJSON`}
                 preserveAspectRatio="xMidYMid meet">
                 <path d={geo.path} fill="#d9ede0" stroke="#267448" strokeWidth="2.5"
                   strokeLinejoin="round" fillRule="evenodd" />
