@@ -192,3 +192,36 @@ test('queue enforces a bounded per-user draft quota', async () => {
   assert.equal((await h.queue.list(session())).length, 100);
   await assert.rejects(h.queue.queueObservation(session(), RUN, values), /límite de 100/);
 });
+
+test('an acknowledgment with the wrong operation identity never deletes an offline draft', async () => {
+  const h = harness();
+  const item = await h.queue.queueObservation(session(), RUN, values);
+  const result = await h.queue.flush(session(), async (body) => ({
+    data: { ...receipt(body).data, operations: [{
+      ...receipt(body).data.operations[0], entity_client_id: 'another-operation'
+    }] }
+  }));
+  assert.equal(result.sent, 0);
+  assert.equal((await h.queue.list(session())).length, 1);
+  assert.equal((await h.queue.list(session()))[0].state, 'pending');
+  assert.equal(item.idempotencyKey, item.body.idempotency_key);
+});
+
+test('discard during an in-flight network failure cannot resurrect a removed draft', async () => {
+  const h = harness();
+  const item = await h.queue.queueObservation(session(), RUN, values);
+  let started;
+  let release;
+  const begun = new Promise((resolve) => { started = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const sending = h.queue.flush(session(), async () => {
+    started();
+    await gate;
+    throw new TypeError('network lost');
+  });
+  await begun;
+  await h.queue.discard(session(), item.id);
+  release();
+  await sending;
+  assert.equal((await h.queue.list(session())).length, 0);
+});
