@@ -6,6 +6,7 @@ import { offlineQueue } from '../services/offlineQueue.js';
 import { guidanceForDraft, queueSummary } from '../services/offlineConflictGuidance.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
+import { OfflineReconciliationPanel } from '../components/OfflineReconciliationPanel.jsx';
 
 const STATUS_ES = {
   received: 'Recibido, no aplicado',
@@ -33,8 +34,14 @@ export function SyncPage() {
   const { api, dataMode, session } = useSession();
   const canListAll = ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
   const activeScope = dataMode === 'live' ? sessionScope(session) : null;
+  const serverScope = [dataMode, activeScope || 'anonymous',
+    session?.membership?.roleCode || ''].join(':');
   const scopeRef = useRef(activeScope);
   scopeRef.current = activeScope;
+  const serverScopeRef = useRef(serverScope);
+  serverScopeRef.current = serverScope;
+  const serverRequest = useRef(0);
+  const [loadedServerScope, setLoadedServerScope] = useState(null);
   const [batches, setBatches] = useState([]);
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -48,8 +55,11 @@ export function SyncPage() {
   const [requestingPersistence, setRequestingPersistence] = useState(false);
 
   const loadData = useCallback(async () => {
+    const requestId = ++serverRequest.current;
+    setLoadedServerScope(serverScope);
     setLoading(true);
     setError('');
+    setBatches([]);
     if (dataMode === 'mock') {
       setBatches(mockData.syncBatches || []);
       setLoading(false);
@@ -57,14 +67,17 @@ export function SyncPage() {
     }
     try {
       const response = canListAll ? await api.syncBatches() : await api.mySyncBatches();
-      setBatches(response.data || []);
+      if (serverRequest.current !== requestId || serverScopeRef.current !== serverScope) return;
+      if (!Array.isArray(response?.data)) throw new Error('El servidor devolvió una lista inválida de recibos.');
+      setBatches(response.data);
     } catch (err) {
+      if (serverRequest.current !== requestId || serverScopeRef.current !== serverScope) return;
       setBatches([]);
       setError(err?.message || 'No se pudo consultar el servidor de sincronización.');
     } finally {
-      setLoading(false);
+      if (serverRequest.current === requestId && serverScopeRef.current === serverScope) setLoading(false);
     }
-  }, [api, canListAll, dataMode]);
+  }, [api, canListAll, dataMode, serverScope]);
 
   const loadLocal = useCallback(async () => {
     const requestedScope = dataMode === 'live' ? sessionScope(session) : null;
@@ -169,7 +182,13 @@ export function SyncPage() {
     }
   };
 
-  const { pending: pendingCount, review: conflictCount, photoOnly } = queueSummary(pending);
+  // While switching tenants/users, never render the old actor's decrypted
+  // draft metadata or server receipts, even before the effects refetch them.
+  const scopedPending = activeScope ? pending.filter(row => row.scope === activeScope) : [];
+  const scopedBatches = loadedServerScope === serverScope ? batches : [];
+  const serverLoading = loading || loadedServerScope !== serverScope;
+  const serverError = loadedServerScope === serverScope ? error : '';
+  const { pending: pendingCount, review: conflictCount, photoOnly } = queueSummary(scopedPending);
 
   return (
     <div className="page-grid">
@@ -207,7 +226,7 @@ export function SyncPage() {
         </div>
         <section className="admin-panel" style={{ padding: 16, display: 'grid', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <strong>En este dispositivo ({pending.length})</strong>
+            <strong>En este dispositivo ({scopedPending.length})</strong>
             <span style={{ fontSize: 12, color: '#64748b' }}>Datos locales de esta cuenta y empresa</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: '#a16207' }}>
@@ -233,11 +252,11 @@ export function SyncPage() {
           )}
           {localError && <div role="alert" className="auth-error">{localError}</div>}
           {notice && <p role="status" style={{ margin: 0, color: '#166534', fontSize: 12 }}>{notice}</p>}
-          {!loadingLocal && !localError && pending.length === 0 &&
+          {!loadingLocal && !localError && scopedPending.length === 0 &&
             <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
               No hay observaciones pendientes. Las confirmadas aparecen en los recibos del servidor.
             </p>}
-          {pending.map((item) => (
+          {scopedPending.map((item) => (
             <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between',
               alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 4px',
               borderBottom: '1px solid rgba(15,23,42,0.08)' }}>
@@ -273,6 +292,13 @@ export function SyncPage() {
         </section>
       </>}
 
+      {dataMode === 'live' && <OfflineReconciliationPanel
+        drafts={scopedPending}
+        localLoading={loadingLocal}
+        localError={localError}
+        onLocalChange={loadLocal}
+      />}
+
       {dataMode === 'mock' && <p role="status" style={{ color: '#a16207', fontSize: 12 }}>
         Vista demo: los estados que se muestran abajo no representan operaciones persistidas.
       </p>}
@@ -282,8 +308,8 @@ export function SyncPage() {
           Los lotes históricos «Recibido» no fueron aplicados automáticamente. Las operaciones nuevas
           figuran como «Aplicado» después de la confirmación PostgreSQL.
         </p>
-        {error && <div className="auth-error" role="alert">
-          <AlertTriangle size={16}/> {error}
+        {serverError && <div className="auth-error" role="alert">
+          <AlertTriangle size={16}/> {serverError}
           <button type="button" onClick={() => void loadData()}>Reintentar</button>
         </div>}
         <div className="admin-tab-content" style={{ padding: 0 }}>
@@ -291,10 +317,10 @@ export function SyncPage() {
             <div className="admin-table__head" style={{ gridTemplateColumns: '2fr 2fr 1fr 1fr' }}>
               <span>Cliente</span><span>Dispositivo</span><span>Operaciones</span><span>Estado</span>
             </div>
-            {loading ? <div className="empty-state"><span>Consultando servidor…</span></div>
-              : error ? null : batches.length === 0 ? <div className="empty-state" style={{ padding: 40 }}>
+            {serverLoading ? <div className="empty-state"><span>Consultando servidor…</span></div>
+              : serverError ? null : scopedBatches.length === 0 ? <div className="empty-state" style={{ padding: 40 }}>
                 <CheckCircle size={30}/><h3>Sin recibos</h3>
-              </div> : batches.map((batch) => (
+              </div> : scopedBatches.map((batch) => (
                 <div key={batch.id} className="admin-table__row" style={{ gridTemplateColumns: '2fr 2fr 1fr 1fr' }}>
                   <strong>{batch.client_id}</strong>
                   <span className="admin-table__muted">{batch.device_id || 'Sin dispositivo'}</span>
