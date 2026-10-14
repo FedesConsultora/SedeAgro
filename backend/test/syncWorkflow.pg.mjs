@@ -121,7 +121,8 @@ test('offline observation batches apply exactly once, deny revoked resources and
       });
       return { status: response.status, json: await response.json() };
     }
-    const operation = (runId = run, opId = randomUUID()) => ({
+    const gpsPoint = { type: 'Point', coordinates: [-57.9521, -34.9205] };
+    const operation = (runId = run, opId = randomUUID(), point = null) => ({
       entity_type: 'scouting_observation',
       entity_client_id: opId,
       operation: 'create',
@@ -129,6 +130,7 @@ test('offline observation batches apply exactly once, deny revoked resources and
         scouting_run_id: runId,
         observation_type: 'pest',
         severity: 'high',
+        ...(point ? { point } : {}),
         notes: 'Sensitive raw scouting notes must not be copied into audit'
       }
     });
@@ -137,7 +139,7 @@ test('offline observation batches apply exactly once, deny revoked resources and
       idempotency_key: key,
       client_id: 'offline-mobile-client',
       device_id: 'test-device',
-      operations: [operation()]
+      operations: [operation(run, randomUUID(), gpsPoint)]
     };
     const created = await request('/sync/batches', 'scout', 'POST', body);
     assert.equal(created.status, 201, JSON.stringify(created.json));
@@ -147,6 +149,12 @@ test('offline observation batches apply exactly once, deny revoked resources and
     const obsId = created.json.data.operations[0].result.observation_id;
     assert.ok(obsId);
     assert.equal((await owner.query('SELECT count(*)::int AS n FROM scouting_observations WHERE id = $1', [obsId])).rows[0].n, 1);
+    const gps = (await owner.query(
+      'SELECT ST_X(point) AS longitude, ST_Y(point) AS latitude FROM scouting_observations WHERE id = $1',
+      [obsId]
+    )).rows[0];
+    assert.deepEqual(gps, { longitude: gpsPoint.coordinates[0], latitude: gpsPoint.coordinates[1] },
+      'PostGIS must persist the opt-in WGS84 position, longitude before latitude');
 
     const duplicate = await request('/sync/batches', 'scout', 'POST', body);
     assert.equal(duplicate.status, 200, JSON.stringify(duplicate.json));

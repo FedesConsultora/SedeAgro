@@ -3,20 +3,40 @@ import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
+import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
+import { sessionScope } from '../services/offlineSyncModel.js';
+import { localObservationDateTime } from '../services/observationLocation.js';
+
+const emptyObservation = () => ({
+  observation_type: 'weed',
+  severity: 'medium',
+  observed_at: localObservationDateTime(),
+  notes: ''
+});
 
 export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
   const { dataMode, session } = useSession();
-  const [form, setForm] = useState({
-    observation_type: 'weed',
-    severity: 'medium',
-    observed_at: new Date().toISOString().slice(0, 16),
-    notes: ''
-  });
+  const [form, setForm] = useState(emptyObservation);
   const [saving, setSaving] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoError, setPhotoError] = useState('');
+  const [location, setLocation] = useState(null);
+  const [locating, setLocating] = useState(false);
+  const locationKey = `${dataMode}:${sessionScope(session) || 'anonymous'}:${runId}`;
+  const selectedLocation = location?.key === locationKey ? location.fix : null;
   const [error, setError] = useState('');
+
+  // Cancelled/finished forms and actor/tenant/run changes must never reuse
+  // a previous operator's private notes, photo or explicitly approved GPS.
+  useEffect(() => {
+    setForm(emptyObservation());
+    setLocation(null);
+    setLocating(false);
+    setPhoto(null);
+    setPhotoError('');
+    setError('');
+  }, [isOpen, locationKey]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -54,11 +74,14 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
         setError('El modo demo no guarda observaciones. Conectá el backend para continuar.');
         return;
       }
+      if (locating) throw new Error('Esperá que termine la consulta GPS antes de guardar.');
       // Persist before telling the user the operation was saved. Background
       // delivery runs through the idempotent batch API, even when online.
       const attachment = photo ? await readOfflinePhoto(photo) : null;
       const item = await offlineQueue.queueObservation(session, runId, {
-        ...form, ...(attachment ? { photo: attachment } : {})
+        ...form,
+        ...(selectedLocation ? { point: selectedLocation.point } : {}),
+        ...(attachment ? { photo: attachment } : {})
       });
       onQueued?.(item);
     } catch (err) {
@@ -72,7 +95,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
     <Modal isOpen={isOpen} onClose={onClose} title="Agregar observación"
       footer={<>
         <button type="button" className="ghost-action" onClick={onClose} disabled={saving}>Cancelar</button>
-        <button type="submit" form="obs-form" className="primary-action" disabled={saving}>
+        <button type="submit" form="obs-form" className="primary-action" disabled={saving || locating}>
           {saving ? 'Preparando y guardando…' : 'Guardar observación'}
         </button>
       </>}
@@ -114,6 +137,12 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
           de reintento segura cuando haya conexión. No se considera registrada en el servidor
           hasta aparecer como «Aplicada» en Sincronizaciones.
         </p>
+        <ObservationLocationPicker key={locationKey}
+          location={selectedLocation}
+          disabled={saving || dataMode !== 'live'}
+          onBusyChange={setLocating}
+          onChange={(fix) => setLocation(fix ? { key: locationKey, fix } : null)}
+        />
         <div className="field-photo-picker">
           <strong style={{ fontSize: 13 }}>Fotografía opcional</strong>
           <div className="field-photo-picker__actions">
