@@ -27,6 +27,7 @@ import { ReportsPage } from './pages/ReportsPage.jsx';
 import { AssetsPage } from './pages/AssetsPage.jsx';
 import { SatellitePage } from './pages/SatellitePage.jsx';
 import { SyncPage } from './pages/SyncPage.jsx';
+import { SessionsPage } from './pages/SessionsPage.jsx';
 import { TeamPage } from './pages/TeamPage.jsx';
 import { TenantAdminPage } from './pages/TenantAdminPage.jsx';
 import { PlatformAdminPage } from './pages/PlatformAdminPage.jsx';
@@ -43,7 +44,8 @@ const views = [
   { id: 'assets', label: 'Activos', icon: Tractor, entitlement: 'work_orders' },
   { id: 'reports', label: 'Reportes', icon: FileSpreadsheet, entitlement: 'reports' },
   { id: 'imagery', label: 'Satélite', icon: Satellite, entitlement: 'imagery' },
-  { id: 'sync', label: 'Sync', icon: RefreshCw, entitlement: 'scouting' }
+  { id: 'sync', label: 'Sync', icon: RefreshCw, entitlement: 'scouting' },
+  { id: 'sessions', label: 'Sesiones', icon: ShieldAlert, entitlement: null }
 ];
 
 function Shell() {
@@ -52,7 +54,7 @@ function Shell() {
 
   const availableViews = useMemo(
     () => views.filter((view) =>
-      entitlements.includes(view.entitlement) &&
+      (!view.entitlement || entitlements.includes(view.entitlement)) &&
       (view.id !== 'sync' ||
         ['tenant_admin', 'agronomic_coordinator', 'scout'].includes(session?.membership?.roleCode))
     ),
@@ -126,6 +128,7 @@ function Shell() {
         {currentView === 'assets'     && <AssetsPage />}
         {currentView === 'imagery'    && <SatellitePage />}
         {currentView === 'sync'       && <SyncPage />}
+        {currentView === 'sessions'   && <SessionsPage />}
       </main>
     </div>
   );
