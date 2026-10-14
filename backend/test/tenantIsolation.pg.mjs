@@ -21,7 +21,8 @@ const requiredScopedTables = [
   'machinery', 'agricultural_inputs', 'work_order_inputs',
   'work_order_machinery', 'satellite_layers', 'report_templates',
   'report_runs', 'sync_batches', 'sync_operations', 'notifications',
-  'tenant_integrations', 'tenant_seat_usage'
+  'tenant_integrations', 'tenant_seat_usage',
+  'tenant_modules', 'producer_access_grants'
 ];
 
 test('postgres RLS isolates two tenants and blocks cross-tenant writes and FKs', async () => {

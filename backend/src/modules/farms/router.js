@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Farm, Field, Producer } from '../../models/index.js';
+import { Op } from 'sequelize';
+import { Farm, Field, Membership, Producer, ProducerAccessGrant } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { grantedProducerIds, isProducerViewer } from './producerAccess.js';
 
 export const farmsRouter = Router();
 
 farmsRouter.use(requireEntitlement('gis'));
+
+const producerAccessSchema = z.object({ user_id: z.string().uuid() });
+const producerAccessParams = z.object({ producerId: z.string().uuid() });
+const producerRevokeParams = producerAccessParams.extend({ userId: z.string().uuid() });
 
 const producerSchema = z.object({
   name: z.string().min(2).max(180),
@@ -28,7 +34,12 @@ const farmSchema = z.object({
 });
 
 farmsRouter.get('/producers', requireCapability('gis.read'), asyncHandler(async (req, res) => {
+  const grants = await grantedProducerIds(req);
   const producers = await Producer.findAll({
+    ...(grants === null ? {} : {
+      where: { id: { [Op.in]: grants } },
+      attributes: ['id', 'name']
+    }),
     order: [['name', 'ASC']],
     transaction: req.dbTransaction
   });
@@ -41,7 +52,9 @@ farmsRouter.post('/producers', requireCapability('gis.write'), validate(producer
 }));
 
 farmsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
+  const grants = await grantedProducerIds(req);
   const farms = await Farm.findAll({
+    ...(grants === null ? {} : { where: { producer_id: { [Op.in]: grants } } }),
     include: [
       { model: Producer, attributes: ['id', 'name'] },
       { model: Field, attributes: ['id', 'name', 'area_hectares', 'status'] }
@@ -58,9 +71,14 @@ farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyn
 }));
 
 farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
-  const farm = await Farm.findByPk(req.params.id, {
+  const grants = await grantedProducerIds(req);
+  const farm = await Farm.findOne({
+    where: {
+      id: req.params.id,
+      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } })
+    },
     include: [
-      { model: Producer, attributes: ['id', 'name', 'contact_email'] },
+      { model: Producer, attributes: isProducerViewer(req) ? ['id', 'name'] : ['id', 'name', 'contact_email'] },
       { model: Field, order: [['name', 'ASC']] }
     ],
     transaction: req.dbTransaction
@@ -76,3 +94,64 @@ farmsRouter.patch('/:id', requireCapability('gis.write'), validate(farmSchema.pa
   res.json({ data: farm });
 }));
 
+
+function notFoundProducer() {
+  return new HttpError(404, 'Productor no encontrado en esta organización.');
+}
+
+farmsRouter.get('/producers/:producerId/access', requireCapability('producer_access.manage'),
+  validate(producerAccessParams, 'params'), asyncHandler(async (req, res) => {
+    const producer = await Producer.findByPk(req.params.producerId, { transaction: req.dbTransaction });
+    if (!producer) throw notFoundProducer();
+    const grants = await ProducerAccessGrant.findAll({
+      where: { producer_id: producer.id, tenant_id: req.tenantId },
+      attributes: ['id', 'user_id', 'granted_by', 'created_at'],
+      order: [['created_at', 'DESC']],
+      transaction: req.dbTransaction
+    });
+    res.json({ data: grants });
+  }));
+
+farmsRouter.post('/producers/:producerId/access', requireCapability('producer_access.manage'),
+  validate(producerAccessParams, 'params'), validate(producerAccessSchema), asyncHandler(async (req, res) => {
+    const producer = await Producer.findByPk(req.params.producerId, { transaction: req.dbTransaction });
+    if (!producer) throw notFoundProducer();
+    const membership = await Membership.findOne({
+      where: {
+        tenant_id: req.tenantId,
+        user_id: req.body.user_id,
+        role_code: 'producer_viewer',
+        status: 'active'
+      },
+      transaction: req.dbTransaction
+    });
+    if (!membership) {
+      throw new HttpError(422, 'Solo se puede autorizar a productores con membresía activa.');
+    }
+    const [grant, created] = await ProducerAccessGrant.findOrCreate({
+      where: {
+        tenant_id: req.tenantId,
+        user_id: membership.user_id,
+        producer_id: producer.id
+      },
+      defaults: { granted_by: req.auth.user.id },
+      transaction: req.dbTransaction
+    });
+    res.status(created ? 201 : 200).json({
+      data: { id: grant.id, user_id: grant.user_id, producer_id: grant.producer_id }
+    });
+  }));
+
+farmsRouter.delete('/producers/:producerId/access/:userId', requireCapability('producer_access.manage'),
+  validate(producerRevokeParams, 'params'), asyncHandler(async (req, res) => {
+    const count = await ProducerAccessGrant.destroy({
+      where: {
+        tenant_id: req.tenantId,
+        producer_id: req.params.producerId,
+        user_id: req.params.userId
+      },
+      transaction: req.dbTransaction
+    });
+    if (!count) throw new HttpError(404, 'Autorización no encontrada.');
+    res.status(204).end();
+  }));

@@ -15,6 +15,7 @@ import { defineTenantIntegration } from './definitions/tenantIntegration.model.j
 import { definePlatformAuditLog } from './definitions/platformAuditLog.model.js';
 import { defineTenantSeatUsage } from './definitions/tenantSeatUsage.model.js';
 import { defineProducer } from './definitions/producer.model.js';
+import { defineProducerAccessGrant } from './definitions/producerAccessGrant.model.js';
 import { defineFarm } from './definitions/farm.model.js';
 import { defineField } from './definitions/field.model.js';
 import { defineCropType } from './definitions/cropType.model.js';
@@ -56,6 +57,7 @@ export const TenantIntegration = defineTenantIntegration(sequelize, DataTypes);
 export const PlatformAuditLog = definePlatformAuditLog(sequelize, DataTypes);
 export const TenantSeatUsage = defineTenantSeatUsage(sequelize, DataTypes);
 export const Producer = defineProducer(sequelize, DataTypes);
+export const ProducerAccessGrant = defineProducerAccessGrant(sequelize, DataTypes);
 export const Farm = defineFarm(sequelize, DataTypes);
 export const Field = defineField(sequelize, DataTypes);
 export const CropType = defineCropType(sequelize, DataTypes);
@@ -98,6 +100,7 @@ export const models = {
   PlatformAuditLog,
   TenantSeatUsage,
   Producer,
+  ProducerAccessGrant,
   Farm,
   Field,
   CropType,

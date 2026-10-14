@@ -33,6 +33,10 @@ test('contractors have only scoped order permissions; unscoped producers cannot 
   assert.equal(hasCapability(principal('contractor'), TENANT, 'orders.read'), true);
   assert.equal(hasCapability(principal('contractor'), TENANT, 'orders.write'), false);
   assert.equal(hasCapability(principal('producer_viewer'), TENANT, 'reports.read'), false);
+  assert.equal(hasCapability(principal('producer_viewer'), TENANT, 'gis.read'), true);
+  assert.equal(hasCapability(principal('producer_viewer'), TENANT, 'gis.write'), false);
+  assert.equal(hasCapability(principal('producer_viewer'), TENANT, 'producer_access.manage'), false);
+  assert.equal(hasCapability(principal('agronomic_coordinator'), TENANT, 'producer_access.manage'), false);
 });
 
 test('tenant mismatch, role tampering and inactive membership are denied', () => {

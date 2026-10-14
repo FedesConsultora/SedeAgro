@@ -38,13 +38,13 @@ npm --workspace backend run test:db
 
 Este test **requiere obligatoriamente** `TEST_DATABASE_ADMIN_URL` y `TEST_DATABASE_APP_URL`, apuntando ambas a una base **desechable** cuyo nombre incluya `test`. Si faltan las variables o la base no es de pruebas, el comando falla sin intentar modificar datos.
 
-El test comprueba las 27 tablas RLS verificadas, separación de lecturas por tenant, no filtración de credenciales de `tenant_integrations`, protección de la clave compuesta `(tenant_id, farm_id)` al insertar un lote y limpieza del `SET LOCAL` al finalizar la transacción. Crea datos temporales con prefijo `rls-test-` y los elimina al terminar.
+El test comprueba las 29 tablas RLS verificadas, separación de lecturas por tenant, no filtración de credenciales de `tenant_integrations`, protección de la clave compuesta `(tenant_id, farm_id)` al insertar un lote y limpieza del `SET LOCAL` al finalizar la transacción. Crea datos temporales con prefijo `rls-test-` y los elimina al terminar.
 
 ## Límites que requieren otro bloque
 
-- `memberships` y `tenant_modules` son tablas de alcance de empresa todavía no cubiertas por RLS, porque el login multitenant y la administración global consultan registros de varios tenants. Requieren rediseñar el acceso privilegiado mediante procedimientos mínimos o servicios separados.
-- La política protege en la base **por tenant**, no por lote. El seguimiento por campo, asesor externo y cliente productor necesita grants de recursos.
-- En el middleware HTTP existente, algunas transacciones se cierran después de que el cuerpo de respuesta terminó de enviarse. Este diseño debe migrar a un patrón de commit-antes-de-responder para eliminar fallos de persistencia no informados.
+- `tenant_modules` y `producer_access_grants` se protegieron con FORCE RLS en el Bloque 0E. `memberships` continúa sin RLS, porque el login multitenant necesita resolver las membresías globales; sigue pendiente rediseñar las consultas de identidad.
+- La política RLS protege **por tenant**; el Bloque 0E suma controles de aplicación para productores según `producer_access_grants`. Asesores, monitoreadores y acceso por lote individual siguen pendientes.
+- El Bloque 0D integró commit-antes-de-responder para rutas HTTP con tenant. Streaming y reintentos sin idempotencia aún requieren diseños específicos.
 - Las políticas existentes no sustituyen pruebas E2E completas de autorización, ni una auditoría de permisos de SQL fuera de los esquemas previstos.
 
 La Beta con datos de productores no debe anunciarse como segura hasta completar estos controles y verificar el despliegue real.

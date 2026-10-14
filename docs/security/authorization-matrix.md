@@ -17,7 +17,7 @@
 | Área | Admin tenant | Coordinador agronómico | Monitoreador | Contratista | Productor |
 | --- | --- | --- | --- | --- | --- |
 | Miembros (directorio) | Leer | Leer | No | No | No |
-| GIS / lotes | Leer/escribir | Leer/escribir | Leer | No | No |
+| GIS / lotes | Leer/escribir | Leer/escribir | Leer | No | Leer solo productores, establecimientos y lotes autorizados |
 | Lluvia y riego | Registrar | Registrar | Registrar | No | No |
 | Campañas | Leer/escribir | Leer/escribir | Leer | No | No |
 | Recorridas | Planificar/leer | Planificar/leer | Leer/cargar observaciones y evidencias | No | No |
@@ -28,7 +28,7 @@
 | Sync | Ver/enviar | Ver/enviar | Solo enviar | No | No |
 | Notificaciones personales | Propias | Propias | Propias | Propias | Propias |
 
-**Restricción deliberada:** el modelo actual no tiene permisos por establecimiento, cliente o lote asignado al productor. `producer_viewer` no puede leer datos agronómicos de toda la empresa hasta que exista esa asociación. `/auth/me` y sus notificaciones personales continúan disponibles. No confundir con una funcionalidad ya finalizada.
+**Alcance actualizado (Bloque 0E):** `producer_viewer` puede consultar GIS únicamente para los productores otorgados mediante `producer_access_grants` (y sus establecimientos/lotes). Las concesiones las crea y revoca `tenant_admin`; ver [guía del modelo](producer-access-grants.md). Campañas, reportes, observaciones y demás operaciones continúan denegadas. No hay grants independientes por lote ni asesor externo.
 
 ## Flujo protegido de órdenes
 
@@ -45,8 +45,8 @@ Se utiliza un bloqueo de escritura de fila al cambiar estado para serializar las
 ## Pruebas y límites
 
 - Pruebas unitarias del mapeo rol/capability, rechazo de otros tenants, transiciones y contratistas.
-- Prueba estática de 48 rutas de negocio: toda ruta debe declarar un `requireCapability` explícito.
+- Prueba estática de 51 rutas de negocio: toda ruta debe declarar un `requireCapability` explícito.
 - Regresión sobre consulta de notificaciones personales y directorio de miembros.
-- **Pendiente obligatorio:** ejecutar migraciones y pruebas de integración PostgreSQL/PostGIS/RLS con tenants A y B, incluidos cambios de membresía entre solicitudes, inserciones de referencias cruzadas y comprobación de visibilidad para cada actor.
+- **Integrado:** gate de PostgreSQL/PostGIS RLS para tenants A/B, con pruebas de concesión y revocación de productor. Aún falta ejecutar pruebas en el VPS y una auditoría completa antes del piloto.
 - **Pendiente de UX:** adaptar controles del frontend a los capabilities server-side y separar claramente el modo mock del modo real.
 - **Pendiente de negocio:** restringir recorridas a responsables por lote/campaña y definir grants para clientes/productores y asesores externos; hasta entonces la lectura del monitoreador se limita por tenant y rol, no por campo individual.

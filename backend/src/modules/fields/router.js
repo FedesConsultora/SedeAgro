@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Op } from 'sequelize';
 import { Field, Farm, RainfallEvent, IrrigationEvent } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { grantedProducerIds } from '../farms/producerAccess.js';
 
 export const fieldsRouter = Router();
 
@@ -34,8 +36,16 @@ const irrigationSchema = z.object({
 });
 
 fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
+  const grants = await grantedProducerIds(req);
   const fields = await Field.findAll({
-    include: [{ model: Farm, attributes: ['id', 'name', 'province', 'locality'] }],
+    include: [{
+      model: Farm,
+      attributes: ['id', 'name', 'province', 'locality'],
+      ...(grants === null ? {} : {
+        required: true,
+        where: { producer_id: { [Op.in]: grants } }
+      })
+    }],
     order: [['name', 'ASC']],
     transaction: req.dbTransaction
   });
@@ -48,9 +58,18 @@ fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), as
 }));
 
 fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
-  const field = await Field.findByPk(req.params.id, {
+  const grants = await grantedProducerIds(req);
+  const field = await Field.findOne({
+    where: { id: req.params.id },
     include: [
-      { model: Farm, attributes: ['id', 'name'] },
+      {
+        model: Farm,
+        attributes: ['id', 'name'],
+        ...(grants === null ? {} : {
+          required: true,
+          where: { producer_id: { [Op.in]: grants } }
+        })
+      },
       { model: RainfallEvent, limit: 20, order: [['measured_at', 'DESC']] },
       { model: IrrigationEvent, limit: 20, order: [['started_at', 'DESC']] }
     ],
