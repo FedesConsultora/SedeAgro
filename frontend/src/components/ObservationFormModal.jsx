@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
+import { readOfflinePhoto } from '../services/offlinePhoto.js';
 
 export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
   const { dataMode, session } = useSession();
@@ -12,6 +13,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
     notes: ''
   });
   const [saving, setSaving] = useState(false);
+  const [photo, setPhoto] = useState(null);
   const [error, setError] = useState('');
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -27,7 +29,10 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
       }
       // Persist before telling the user the operation was saved. Background
       // delivery runs through the idempotent batch API, even when online.
-      const item = await offlineQueue.queueObservation(session, runId, form);
+      const attachment = photo ? await readOfflinePhoto(photo) : null;
+      const item = await offlineQueue.queueObservation(session, runId, {
+        ...form, ...(attachment ? { photo: attachment } : {})
+      });
       onQueued?.(item);
     } catch (err) {
       setError(err?.message || 'Error al guardar');
@@ -82,6 +87,14 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
           de reintento segura cuando haya conexión. No se considera registrada en el servidor
           hasta aparecer como «Aplicada» en Sincronizaciones.
         </p>
+        <label className="form-field">
+          <span>Fotografía opcional para guardar offline</span>
+          <input type="file" accept="image/jpeg,image/png,image/webp"
+            onChange={(event) => setPhoto(event.target.files?.[0] || null)} disabled={saving} />
+          <span style={{ fontSize: 12, color: '#64748b' }}>
+            Máximo 512 KiB. Se guarda cifrada junto con las notas; se envía después de confirmar la observación.
+          </span>
+        </label>
         <label className="form-field">
           <span>Notas *</span>
           <textarea id="obs-notes" value={form.notes} onChange={set('notes')} required rows={3}
