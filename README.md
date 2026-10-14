@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Control de dispositivos y staging reproducible (Bloque 0O)
+
+Cada usuario puede mantener hasta **cinco sesiones activas por empresa**, con revocación de sesiones antiguas en inicios simultáneos. La nueva pantalla **Sesiones** permite cerrar dispositivos remotos sin exponer tokens ni borrar borradores locales cifrados. La limpieza de sesiones caducadas exige operación explícita: `backend/scripts/cleanup-auth-sessions.mjs --dry-run` o `--apply` con confirmación y máximo 500 registros. El CI incluye **Chromium autenticándose contra PostgreSQL real**, y genera un manifiesto de hashes del build de staging cuando `main` pasa sus controles; **no realiza despliegues ni restauraciones automáticas**. Ver [política de sesiones y procedimiento de staging](docs/security/session-operations-0o.md).
+
 ## Sesiones web revocables (Bloque 0N)
 
 El navegador ahora inicia sesión con **cookie HttpOnly, SameSite=Strict y Secure en producción**, y ya no guarda JWT en `localStorage`. Cada sesión tiene una fila revocable protegida por RLS en PostgreSQL. El logout invalida el token en el servidor; la aplicación valida `/auth/me` al recargar, conserva solo un identificador no secreto de tenant y preserva los borradores offline cifrados. Clientes API REST conservan Bearer explícito. La migración requiere inicio de sesión nuevo tras actualizar el backend y [un despliegue coordinado con pruebas de cookie/CSRF en staging](docs/security/revocable-cookie-sessions-0n.md). **No se ha desplegado ni certificado un VPS.**
