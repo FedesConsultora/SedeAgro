@@ -1,5 +1,7 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { createApiClient } from '../services/api.js';
+import { offlineQueue } from '../services/offlineQueue.js';
+import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { useFeedback } from './FeedbackContext.jsx';
 
 const SessionContext = createContext(null);
@@ -89,6 +91,43 @@ export function SessionProvider({ children }) {
       session?.tenant?.id && session.tenant.id.length > 0
     );
   }, [session]);
+
+  // Only a live authenticated session may transmit locally persisted records.
+  // The queue is partitioned by user and tenant, and retries use the immutable
+  // original batch/idempotency key from IndexedDB.
+  const syncScope = isAuthenticated && dataMode === 'live' ? sessionScope(session) : null;
+  useEffect(() => {
+    if (!syncScope) return undefined;
+    const controller = new AbortController();
+    let disposed = false;
+    const dispatch = (force = false) => {
+      if (disposed || navigator.onLine === false) return;
+      void offlineQueue.flush(
+        session,
+        (body) => api.submitSyncBatch(body, { signal: controller.signal }),
+        { force }
+      ).catch((error) => {
+        // Do not discard pending records if storage or HTTP fails.
+        if (!disposed) console.warn('offline_sync_flush_failed', error?.message);
+      });
+    };
+    const onOnline = () => dispatch(true);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') dispatch();
+    };
+    const onQueueUpdate = () => dispatch();
+    dispatch();
+    window.addEventListener('online', onOnline);
+    window.addEventListener(QUEUE_EVENT, onQueueUpdate);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener(QUEUE_EVENT, onQueueUpdate);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [syncScope, api, session]);
 
   const value = useMemo(() => ({
     session,
