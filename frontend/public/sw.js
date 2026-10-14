@@ -51,7 +51,7 @@ self.addEventListener('fetch', (event) => {
   // Vite emits content-hashed JS/CSS assets under /assets. The browser requests
   // them anonymously; only those public immutable files can be cached.
   if (url.pathname.startsWith('/assets/')) {
-    event.respondWith(caches.match(request).then(async (cached) => {
+    event.respondWith(caches.match(url.pathname, { ignoreVary: true }).then(async (cached) => {
       if (cached) return cached;
       const response = await fetch(request);
       if (response.ok) {

@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Fotografías offline vinculadas a observaciones
+
+Las observaciones del navegador pueden incluir **una fotografía JPEG/PNG/WebP de hasta 512 KiB**, cifrada junto a las notas. Se sincroniza primero la observación y luego el archivo, con **identificadores de idempotencia separados**: si la conexión se corta, ningún elemento se pierde ni se duplica al reintentar. La pantalla indica cuando la observación quedó confirmada pero su foto sigue pendiente. El CI incluye pruebas reales con Chromium para migración IndexedDB y apertura del shell offline. [Contrato, límites y QA](docs/offline-evidence-and-browser-qa.md).
+
 ## Cola offline web para observaciones
 
 Las observaciones se guardan primero en una cola IndexedDB por usuario/tenant y se envían con **reintentos idempotentes** al reconectar. La pantalla Sincronizaciones distingue los borradores locales de recibos efectivamente confirmados por el backend, permite revisar conflictos, reintentar y descartar. El shell estático puede abrirse offline tras una instalación inicial del service worker en HTTPS, sin almacenar respuestas privadas.

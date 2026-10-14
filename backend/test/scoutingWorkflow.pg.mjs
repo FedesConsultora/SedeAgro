@@ -234,10 +234,30 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     const evidenceId = added.json.data.id;
     assert.equal(added.json.data.size_bytes, png.length);
 
+    const offlineUploadId = randomUUID();
+    const offlineBody = {
+      ...evidenceBody,
+      client_upload_id: offlineUploadId,
+      original_name: 'offline-photo.png'
+    };
+    const offlineFirst = await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', offlineBody);
+    assert.equal(offlineFirst.status, 201, JSON.stringify(offlineFirst.json));
+    assert.equal(offlineFirst.json.data.client_upload_id, offlineUploadId);
+    const offlineReplay = await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', offlineBody);
+    assert.equal(offlineReplay.status, 200, JSON.stringify(offlineReplay.json));
+    assert.equal(offlineReplay.json.replayed, true);
+    assert.equal(offlineReplay.json.data.id, offlineFirst.json.data.id);
+    assert.equal((await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', {
+      ...offlineBody, original_name: 'changed-name.png'
+    })).status, 409, 'same upload UUID cannot silently attach another file');
+    assert.equal((await request(`/observations/${observationId}/evidence`, otherToken, 'POST', offlineBody)).status, 404);
+    assert.equal((await request(`/observations/${observationId}/evidence`, scoutToken, 'POST',
+      offlineBody, tenantB)).status, 403);
+
     const detail = await request(`/runs/${runId}`);
     assert.equal(detail.status, 200);
     assert.equal(detail.json.data.ScoutingObservations.length, 1);
-    assert.equal(detail.json.data.ScoutingObservations[0].EvidenceAssets.length, 1);
+    assert.equal(detail.json.data.ScoutingObservations[0].EvidenceAssets.length, 2);
     const downloaded = await request(`/evidence/${evidenceId}/content`);
     assert.equal(downloaded.status, 200);
     assert.deepEqual(Buffer.from(downloaded.json.data.content_base64, 'base64'), png);
@@ -252,6 +272,14 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     const completed = await request(`/runs/${runId}`, adminToken, 'PATCH', { status: 'completed' });
     assert.equal(completed.status, 200, JSON.stringify(completed.json));
     assert.ok(completed.json.data.completed_at);
+    const replayAfterClose = await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', offlineBody);
+    assert.equal(replayAfterClose.status, 200);
+    assert.equal(replayAfterClose.json.data.id, offlineFirst.json.data.id,
+      'lost upload response must be replayable after run completion');
+    assert.equal((await request(`/observations/${observationId}/evidence`, scoutToken, 'POST', {
+      ...offlineBody, client_upload_id: randomUUID()
+    })).status, 409, 'a closed run must reject genuinely new uploads');
+
     assert.equal((await request(`/runs/${runId}/observations`, scoutToken, 'POST', {
       observation_type: 'weed', notes: 'After closure'
     })).status, 409);
