@@ -9,7 +9,8 @@ const queue = read('services/offlineQueue.js');
 
 test('SyncPage embeds reconciliation and scopes decrypted rows to current account', () => {
   assert.match(page, /<OfflineReconciliationPanel/);
-  assert.match(page, /drafts=\{scopedPending\}/);
+  assert.match(page, /drafts=\{visiblePending\}/);
+  assert.match(page, /filterSyncRunDrafts\(scopedPending, activeScope, focus\)/);
   assert.match(page, /pending\.filter\(row => row\.scope === activeScope\)/);
   assert.match(page, /loadedServerScope === serverScope \? batches : \[\]/);
   assert.match(page, /serverRequest\.current !== requestId \|\| serverScopeRef\.current !== serverScope/);
