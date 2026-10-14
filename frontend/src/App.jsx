@@ -43,7 +43,7 @@ const views = [
   { id: 'assets', label: 'Activos', icon: Tractor, entitlement: 'work_orders' },
   { id: 'reports', label: 'Reportes', icon: FileSpreadsheet, entitlement: 'reports' },
   { id: 'imagery', label: 'Satélite', icon: Satellite, entitlement: 'imagery' },
-  { id: 'sync', label: 'Sync', icon: RefreshCw, entitlement: 'analytics' }
+  { id: 'sync', label: 'Sync', icon: RefreshCw, entitlement: 'scouting' }
 ];
 
 function Shell() {
@@ -51,8 +51,12 @@ function Shell() {
   const isPlatformAdmin = session?.user?.isPlatformAdmin;
 
   const availableViews = useMemo(
-    () => views.filter((view) => entitlements.includes(view.entitlement)),
-    [entitlements]
+    () => views.filter((view) =>
+      entitlements.includes(view.entitlement) &&
+      (view.id !== 'sync' ||
+        ['tenant_admin', 'agronomic_coordinator', 'scout'].includes(session?.membership?.roleCode))
+    ),
+    [entitlements, session?.membership?.roleCode]
   );
   const [activeView, setActiveView] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
