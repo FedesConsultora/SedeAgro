@@ -145,7 +145,14 @@ test('registration and login return real enabled modules under FORCE RLS', async
     for (const attempt of concurrent) {
       assert.equal(attempt.status, 200, JSON.stringify(attempt.body));
     }
-    const newestToken = concurrent[5].body.token;
+    // The order of Promise resolutions is not the lock acquisition order.
+    // Obtain one deterministic newest session after all six requests settle.
+    const newestResponse = await fetch(`${baseUrl}/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, tenantSlug: slug })
+    });
+    assert.equal(newestResponse.status, 200);
+    const newestToken = (await newestResponse.json()).token;
     const current = await fetch(`${baseUrl}/sessions`, {
       headers: { Authorization: `Bearer ${newestToken}`, 'x-tenant-id': tenantId }
     });
