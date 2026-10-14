@@ -37,7 +37,19 @@ test('cleanup uses fresh confirmation, explicit prompt and independent photo rul
 test('receipt status never silently means delivery of GPS/photo', () => {
   assert.match(panel, /GPS incluido/);
   assert.match(panel, /Fotografía conservada/);
-  assert.match(panel, /no reenvía datos, modifica GPS ni adjunta archivos/);
+  assert.match(panel, /Verificar recibos no reenvía datos ni modifica GPS/);
   assert.match(panel, /los 100 recibos/);
   assert.match(panel, /ausencia de un recibo no demuestra/);
+});
+
+test('partial evidence recovery requires fresh own receipt and posts photo only', () => {
+  assert.match(panel, /item.status === 'photo_pending'/);
+  assert.match(panel, /onClick=\{\(\) => void recover\(item.draft\)\}/);
+  assert.match(panel, /const response = await api\.mySyncBatches\(\)/);
+  assert.match(panel, /reconcileOfflineDraft\(draft, matches, session\)\.status !== 'photo_pending'/);
+  assert.match(panel, /offlineQueue\.recoverPhoto\(session, draft\.id, matches\[0\]/);
+  assert.match(panel, /api\.submitOfflineEvidence\(observationId, evidence\)/);
+  assert.doesNotMatch(panel, /api\.submitSyncBatch\(/);
+  assert.match(queue, /planConfirmedPhotoRecovery\(current, receipt, session\)/);
+  assert.match(queue, /verifiedPhotoUpload\(uploaded, plan\)/);
 });
