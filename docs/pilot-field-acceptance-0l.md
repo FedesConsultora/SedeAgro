@@ -8,7 +8,7 @@ En el formulario **Agregar observación** de una recorrida asignada, el monitore
 - **Origen de cámara:** JPEG/PNG/WebP, hasta **12 MiB** y máximo **40 millones de píxeles** decodificados para evitar consumos excesivos en teléfonos modestos.
 - **Guardado offline:** máximo **512 KiB**, compatibilidad con la API de evidencias del backend y firma inicial del formato.
 - **Compresión:** si el origen supera 512 KiB, se decodifica en el navegador, se escala preservando proporción y orientación informada por `createImageBitmap`, y se intenta JPEG desde 2048 hasta 640 píxeles de lado mayor con calidades decrecientes. El primer resultado que cumpla el límite se usa; si no existe, la aplicación muestra un error **sin afirmar que lo guardó**. El lienzo coloca fondo blanco en las zonas transparentes.
-- **Archivo pequeño:** se conserva sin reprocesarlo; un JPEG pequeño puede mantener metadatos EXIF, incluida información de ubicación. No se promete limpieza universal de metadatos. Los archivos recomprimidos se re-codifican y no reutilizan bytes EXIF originales.
+- **Actualización Bloque 0M:** todas las fotos offline **nuevas**, incluso pequeñas, se re-codifican a JPEG antes de guardar. Los borradores anteriores no se reescriben para preservar IDs; los uploads online deben auditarse por separado. Ver `docs/pilot-staging-readiness-0m.md`.
 
 La imagen y las notas se guardan **en la misma entrada cifrada AES-GCM** de IndexedDB. Se sigue enviando primero la observación y después el adjunto, con UUID de idempotencia independientes y ACK del servidor antes de eliminar la cola.
 
@@ -46,6 +46,6 @@ Estas son **condiciones de aceptación por ejecutar**, no una certificación ya 
 
 ## Límite y despliegue
 
-El frontend no realiza sincronización con la pestaña cerrada ni hace uploads de video/PDF offline. Un dispositivo sin soporte de decodificación JPEG o Canvas puede no reducir fotos grandes; ofrecer un archivo menor es el fallback. La cola no modifica la observación confirmada ni permite editar silenciosamente una foto conflictiva. Continúan pendientes compresión en worker, minimización de EXIF para archivos pequeños, test WebKit, endurecimiento CSP que respete estilos actuales y pruebas de carga de almacenamiento.
+El frontend no realiza sincronización con la pestaña cerrada ni hace uploads de video/PDF offline. Un dispositivo sin soporte de decodificación JPEG o Canvas puede no reducir fotos grandes; ofrecer un archivo menor es el fallback. La cola no modifica la observación confirmada ni permite editar silenciosamente una foto conflictiva. Continúan pendientes compresión en worker, revisión de EXIF en uploads online, pruebas en WebKit/dispositivos reales, eliminación de estilos inline de la CSP y pruebas de carga de almacenamiento.
 
 **No desplegar al VPS de producción** durante este bloque. Primero staging con backup de PostgreSQL, aplicar migraciones existentes, controlar roles RLS y verificar MOB/SEC/OPS con evidencia.
