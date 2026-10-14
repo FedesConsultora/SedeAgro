@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { createApiClient } from '../services/api.js';
+import { API_URL, createApiClient } from '../services/api.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { useFeedback } from './FeedbackContext.jsx';
@@ -26,17 +26,15 @@ function normalizeSession(value) {
       ...(value?.user || {})
     },
     membership: value?.membership || null,
-    entitlements: value?.entitlements?.length ? value.entitlements : demoSession.entitlements
+    entitlements: Array.isArray(value?.entitlements) ? value.entitlements : demoSession.entitlements,
+    authenticated: value?.authenticated === true
   };
 }
 
-const storedSession = (() => {
-  try {
-    return normalizeSession(JSON.parse(localStorage.getItem('sedeagro.session')));
-  } catch {
-    return demoSession;
-  }
-})();
+// Never persist bearer credentials. Old installations may have left JWTs in
+// localStorage; remove them before mounting the application.
+localStorage.removeItem('sedeagro.session');
+const tenantHint = localStorage.getItem('sedeagro.tenantHint') || '';
 
 const storedDataMode = (() => {
   const value = localStorage.getItem('sedeagro.dataMode');
@@ -44,7 +42,8 @@ const storedDataMode = (() => {
 })();
 
 export function SessionProvider({ children }) {
-  const [session, setSessionState] = useState(storedSession);
+  const [session, setSessionState] = useState(demoSession);
+  const [restoring, setRestoring] = useState(Boolean(tenantHint));
   const [dataMode, setDataModeState] = useState(storedDataMode);
   const { startLoading, stopLoading, showError } = useFeedback();
   // Toast/loading counts change on EVERY request. Keep the transport identity
@@ -56,8 +55,9 @@ export function SessionProvider({ children }) {
   const setSession = (nextSession) => {
     const normalized = nextSession ? normalizeSession(nextSession) : demoSession;
     setSessionState(normalized);
-    if (nextSession) localStorage.setItem('sedeagro.session', JSON.stringify(normalized));
-    else localStorage.removeItem('sedeagro.session');
+    if (nextSession?.tenant?.id) localStorage.setItem('sedeagro.tenantHint', normalized.tenant.id);
+    else localStorage.removeItem('sedeagro.tenantHint');
+    localStorage.removeItem('sedeagro.session');
   };
 
   const setDataMode = (nextMode) => {
@@ -69,7 +69,7 @@ export function SessionProvider({ children }) {
   // Login helper: sets real session + switches to live mode
   const login = (data) => {
     const next = {
-      token: data.token,
+      authenticated: true,
       tenant: data.tenant,
       user: data.user,
       membership: data.membership,
@@ -81,20 +81,57 @@ export function SessionProvider({ children }) {
   };
 
 
-  // Logout: clears session + returns to mock/demo mode
-  const logout = () => {
-    setSession(null);
-    setDataModeState('mock');
-    localStorage.setItem('sedeagro.dataMode', 'mock');
+  // Revoke server-side first. If the network fails we do not claim the
+  // session has ended; encrypted local offline drafts are never deleted.
+  const logout = async () => {
+    try {
+      await api.logout();
+      setSession(null);
+      setDataModeState('mock');
+      localStorage.setItem('sedeagro.dataMode', 'mock');
+    } catch (error) {
+      showError({ message: 'No se pudo cerrar la sesión en el servidor. Reintentá cuando tengas conexión.',
+        status: error?.status || 0 });
+    }
   };
 
-  // True only when a real JWT token + tenant ID are present
-  const isAuthenticated = useMemo(() => {
-    return !!(
-      session?.token && session.token.length > 0 &&
-      session?.tenant?.id && session.tenant.id.length > 0
-    );
-  }, [session]);
+  // Cookie-based authentication: the JWT is HttpOnly and never visible here.
+  const isAuthenticated = Boolean(session?.authenticated &&
+    session?.user?.id && session?.tenant?.id);
+
+  // Validate the cookie against the server on every page reload; the only
+  // persistent browser hint is the non-secret tenant ID used for routing.
+  useEffect(() => {
+    if (!tenantHint) return undefined;
+    let cancelled = false;
+    fetch(`${API_URL}/auth/me`, {
+      credentials: 'include', headers: { 'x-tenant-id': tenantHint }
+    }).then(async (res) => {
+      if (!res.ok) throw new Error('Session expired');
+      return res.json();
+    }).then((profile) => {
+      if (cancelled) return;
+      setSessionState(normalizeSession({ ...profile, authenticated: true }));
+      setDataModeState('live');
+      localStorage.setItem('sedeagro.dataMode', 'live');
+    }).catch(() => {
+      if (cancelled) return;
+      localStorage.removeItem('sedeagro.tenantHint');
+      setSessionState(demoSession);
+      setDataModeState('mock');
+    }).finally(() => { if (!cancelled) setRestoring(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    const expired = () => {
+      setSession(null);
+      setDataModeState('mock');
+      localStorage.setItem('sedeagro.dataMode', 'mock');
+    };
+    window.addEventListener('sedeagro:session-expired', expired);
+    return () => window.removeEventListener('sedeagro:session-expired', expired);
+  }, []);
 
   // Only a live authenticated session may transmit locally persisted records.
   // The queue is partitioned by user and tenant, and retries use the immutable
@@ -164,10 +201,11 @@ export function SessionProvider({ children }) {
     api,
     entitlements: session?.entitlements || [],
     isAuthenticated,
+    restoring,
     login,
     logout
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [session, dataMode, api, isAuthenticated]);
+  }), [session, dataMode, api, isAuthenticated, restoring]);
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
