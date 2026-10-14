@@ -6,7 +6,7 @@ const UUID = /^[a-f\d]{8}-[a-f\d]{4}-[1-8][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12
 export function resolveSyncRunFocus(focusRunId) {
   if (focusRunId == null) return { mode: 'all', runId: null };
   if (typeof focusRunId === 'string' && UUID.test(focusRunId)) {
-    return { mode: 'run', runId: focusRunId };
+    return { mode: 'run', runId: focusRunId.toLowerCase() };
   }
   return { mode: 'invalid', runId: null };
 }
