@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Clock, AlertTriangle, CheckCircle, Trash2, Send } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { offlineQueue } from '../services/offlineQueue.js';
-import { QUEUE_EVENT } from '../services/offlineSyncModel.js';
+import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
+import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 
 const STATUS_ES = {
   received: 'Recibido, no aplicado',
@@ -30,6 +31,9 @@ const OBS_LABELS = {
 export function SyncPage() {
   const { api, dataMode, session } = useSession();
   const canListAll = ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const activeScope = dataMode === 'live' ? sessionScope(session) : null;
+  const scopeRef = useRef(activeScope);
+  scopeRef.current = activeScope;
   const [batches, setBatches] = useState([]);
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +43,8 @@ export function SyncPage() {
   const [error, setError] = useState('');
   const [localError, setLocalError] = useState('');
   const [notice, setNotice] = useState('');
+  const [storageInfo, setStorageInfo] = useState(null);
+  const [requestingPersistence, setRequestingPersistence] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -60,18 +66,30 @@ export function SyncPage() {
   }, [api, canListAll, dataMode]);
 
   const loadLocal = useCallback(async () => {
-    if (dataMode !== 'live') {
+    const requestedScope = dataMode === 'live' ? sessionScope(session) : null;
+    if (!requestedScope) {
       setPending([]);
+      setStorageInfo(null);
+      setLocalError('');
       return;
     }
     setLoadingLocal(true);
     try {
-      setPending(await offlineQueue.list(session));
+      const rows = await offlineQueue.list(session);
+      const info = await browserStorageStatus();
+      if (scopeRef.current !== requestedScope) return;
+      setPending(rows);
+      setStorageInfo(info);
       setLocalError('');
     } catch (err) {
+      if (scopeRef.current !== requestedScope) return;
+      // Never leave a prior tenant/account's draft metadata on the screen
+      // when the new scope cannot be decrypted.
+      setPending([]);
+      setStorageInfo(null);
       setLocalError(err?.message || 'No se pudo acceder a los datos guardados en este dispositivo.');
     } finally {
-      setLoadingLocal(false);
+      if (scopeRef.current === requestedScope) setLoadingLocal(false);
     }
   }, [dataMode, session]);
 
@@ -114,6 +132,24 @@ export function SyncPage() {
       if (online) await sendPending();
     } catch (err) {
       setLocalError(err?.message || 'No se pudo reintentar la operación.');
+    }
+  };
+
+  const protectStorage = async () => {
+    setRequestingPersistence(true);
+    setLocalError('');
+    try {
+      const allowed = await requestDurableStorage();
+      setStorageInfo(await browserStorageStatus());
+      if (!allowed) {
+        setNotice('El navegador no concedió almacenamiento persistente. Los borradores siguen cifrados, pero pueden eliminarse por falta de espacio.');
+      } else {
+        setNotice('El navegador concedió almacenamiento persistente para reducir el riesgo de eliminación automática.');
+      }
+    } catch (err) {
+      setLocalError(err?.message || 'No se pudo proteger el almacenamiento local.');
+    } finally {
+      setRequestingPersistence(false);
     }
   };
 
@@ -170,9 +206,26 @@ export function SyncPage() {
             <span style={{ fontSize: 12, color: '#64748b' }}>Datos locales de esta cuenta y empresa</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: '#a16207' }}>
-            Los borradores offline se guardan sin cifrar en el almacenamiento de este navegador.
-            Usá un dispositivo confiable y eliminá las operaciones que no deban permanecer aquí.
+            Los borradores se cifran con AES-256-GCM antes de guardarse. La clave permanece en
+            este navegador: scripts del mismo origen con acceso a la sesión aún podrían
+            descifrarlos. Usá un dispositivo confiable.
           </p>
+          {storageInfo?.supported && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+              <span>
+                Espacio local estimado: {storageInfo.usage === null ? '—' : Math.round(storageInfo.usage / 1048576) + ' MiB'}
+                {' / '}
+                {storageInfo.quota === null ? '—' : Math.round(storageInfo.quota / 1048576) + ' MiB'}
+              </span>
+              <span>{storageInfo.persisted ? 'Almacenamiento persistente concedido' :
+                'El navegador puede liberar datos si necesita espacio'}</span>
+              {!storageInfo.persisted &&
+                <button type="button" className="ghost-action" onClick={() => void protectStorage()}
+                  disabled={requestingPersistence}>
+                  {requestingPersistence ? 'Solicitando…' : 'Proteger almacenamiento'}
+                </button>}
+            </div>
+          )}
           {localError && <div role="alert" className="auth-error">{localError}</div>}
           {notice && <p role="status" style={{ margin: 0, color: '#166534', fontSize: 12 }}>{notice}</p>}
           {!loadingLocal && !localError && pending.length === 0 &&

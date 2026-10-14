@@ -104,6 +104,24 @@ export function SessionProvider({ children }) {
     if (!syncScope) return undefined;
     const controller = new AbortController();
     let disposed = false;
+    let retryTimer = null;
+    const scheduleNext = async () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      if (disposed || navigator.onLine === false) return;
+      try {
+        const drafts = await offlineQueue.list(session);
+        if (disposed) return;
+        const due = drafts.filter((item) => item.state === 'pending')
+          .map((item) => item.nextRetryAt ? Date.parse(item.nextRetryAt) : Date.now())
+          .filter(Number.isFinite);
+        if (!due.length) return;
+        const delay = Math.max(1000, Math.min(300000, Math.min(...due) - Date.now()));
+        retryTimer = setTimeout(() => dispatch(), delay);
+      } catch (error) {
+        if (!disposed) console.warn('offline_sync_schedule_failed', error?.message);
+      }
+    };
     const dispatch = (force = false) => {
       if (disposed || navigator.onLine === false) return;
       void offlineQueue.flush(
@@ -113,13 +131,13 @@ export function SessionProvider({ children }) {
       ).catch((error) => {
         // Do not discard pending records if storage or HTTP fails.
         if (!disposed) console.warn('offline_sync_flush_failed', error?.message);
-      });
+      }).finally(() => { void scheduleNext(); });
     };
     const onOnline = () => dispatch(true);
     const onVisible = () => {
       if (document.visibilityState === 'visible') dispatch();
     };
-    const onQueueUpdate = () => dispatch();
+    const onQueueUpdate = () => { dispatch(); void scheduleNext(); };
     dispatch();
     window.addEventListener('online', onOnline);
     window.addEventListener(QUEUE_EVENT, onQueueUpdate);
@@ -127,6 +145,7 @@ export function SessionProvider({ children }) {
     return () => {
       disposed = true;
       controller.abort();
+      if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener('online', onOnline);
       window.removeEventListener(QUEUE_EVENT, onQueueUpdate);
       document.removeEventListener('visibilitychange', onVisible);

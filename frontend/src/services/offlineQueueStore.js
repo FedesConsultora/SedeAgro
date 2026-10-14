@@ -1,6 +1,12 @@
+import {
+  generateLocalKey, isSealedRecord, openOfflineDraft, sealOfflineDraft
+} from './offlineDraftCrypto.js';
+
 const DB_NAME = 'sedeagro-offline-sync';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'pending-observations';
+const KEY_STORE = 'draft-keys';
+const blockedMessage = 'Cerrá otras pestañas de SedeAgro y volvé a intentar.';
 
 function openQueueDb() {
   return new Promise((resolve, reject) => {
@@ -15,25 +21,29 @@ function openQueueDb() {
         const store = db.createObjectStore(STORE, { keyPath: 'id' });
         store.createIndex('scope', 'scope', { unique: false });
       }
+      if (!db.objectStoreNames.contains(KEY_STORE)) {
+        db.createObjectStore(KEY_STORE, { keyPath: 'scope' });
+      }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('No se pudo abrir la cola local.'));
-    req.onblocked = () => reject(new Error('Cerrá otras pestañas de SedeAgro y volvé a intentar.'));
+    req.onerror = () => reject(req.error || new Error('No se pudo abrir la cola offline.'));
+    req.onblocked = () => reject(new Error(blockedMessage));
   });
 }
 
-async function runTransaction(mode, run) {
+// All operations resolve only after IndexedDB commits. A crash after the
+// transaction starts cannot yield a misleading success acknowledgment.
+async function transact(stores, mode, submit) {
   const db = await openQueueDb();
   try {
     return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, mode);
-      let result;
-      tx.oncomplete = () => resolve(result);
-      tx.onerror = () => reject(tx.error || new Error('Falló el almacenamiento de observaciones.'));
-      tx.onabort = () => reject(tx.error || new Error('Se canceló el almacenamiento de observaciones.'));
+      const tx = db.transaction(stores, mode);
+      let value;
+      tx.oncomplete = () => resolve(value);
+      tx.onerror = () => reject(tx.error || new Error('Falló el almacenamiento local.'));
+      tx.onabort = () => reject(tx.error || new Error('Se canceló el guardado local.'));
       try {
-        const request = run(tx.objectStore(STORE));
-        if (request) request.onsuccess = () => { result = request.result; };
+        submit(tx, (next) => { value = next; });
       } catch (error) {
         tx.abort();
         reject(error);
@@ -44,14 +54,111 @@ async function runTransaction(mode, run) {
   }
 }
 
+function requestValue(store, action) {
+  return transact([store], 'readonly', (tx, setValue) => {
+    const req = action(tx.objectStore(store));
+    req.onsuccess = () => setValue(req.result);
+  });
+}
+
+async function readRaw(id) {
+  return requestValue(STORE, (store) => store.get(id));
+}
+
+async function readScope(scope) {
+  return requestValue(STORE, (store) =>
+    store.index('scope').getAll(IDBKeyRange.only(scope)));
+}
+
+async function getScopeKey(scope) {
+  const saved = await requestValue(KEY_STORE, (store) => store.get(scope));
+  if (saved?.key) return saved.key;
+
+  // If the browser erased the key store but kept encrypted records, fail
+  // closed rather than silently replacing a key and losing existing drafts.
+  const rows = await readScope(scope);
+  if (rows.some(isSealedRecord)) {
+    throw new Error('Se perdió la clave local de cifrado. Los borradores no se eliminarán automáticamente.');
+  }
+
+  const key = await generateLocalKey();
+  try {
+    await transact([KEY_STORE], 'readwrite', (tx) => {
+      tx.objectStore(KEY_STORE).add({ scope, key });
+    });
+    return key;
+  } catch (error) {
+    // Concurrent tabs can race to create a key. Never overwrite the winner.
+    const winner = await requestValue(KEY_STORE, (store) => store.get(scope));
+    if (winner?.key) return winner.key;
+    throw error;
+  }
+}
+
+async function migrateLegacy(row) {
+  const key = await getScopeKey(row.scope);
+  const sealed = await sealOfflineDraft(row, key);
+  // Compare-and-swap: an old open tab may have updated/deleted the row while
+  // encryption was running. Do not recreate discarded rows or overwrite edits.
+  return transact([STORE], 'readwrite', (tx, setValue) => {
+    const store = tx.objectStore(STORE);
+    const req = store.get(row.id);
+    req.onsuccess = () => {
+      const current = req.result;
+      if (!current) { setValue(null); return; }
+      if (!isSealedRecord(current) && JSON.stringify(current) === JSON.stringify(row)) {
+        store.put(sealed);
+        setValue(sealed);
+      } else {
+        setValue(current);
+      }
+    };
+  });
+}
+
+async function decryptRow(row, depth = 0) {
+  if (!row) return undefined;
+  if (depth > 2) throw new Error('El borrador fue modificado por otra pestaña. Volvé a intentar.');
+  if (!isSealedRecord(row)) {
+    // Every pre-0J plaintext draft is migrated before use. If migration fails,
+    // report an error; NEVER delete, skip, or silently send the legacy record.
+    const next = await migrateLegacy(row);
+    if (!next) return undefined;
+    return decryptRow(next, depth + 1);
+  }
+  const key = await getScopeKey(row.scope);
+  return openOfflineDraft(row, key);
+}
+
+function describeWriteFailure(error) {
+  if (error?.name === 'QuotaExceededError' ||
+      error?.name === 'UnknownError' && /quota/i.test(error.message)) {
+    throw new Error('No queda espacio local para guardar la observación. Liberá espacio sin borrar borradores pendientes.');
+  }
+  throw error;
+}
+
 export const indexedDbQueueStore = Object.freeze({
-  get: (id) => runTransaction('readonly', (store) => store.get(id)),
-  put: (item) => runTransaction('readwrite', (store) => store.put(item)),
-  delete: (id) => runTransaction('readwrite', (store) => store.delete(id)),
-  list: async (scope) => {
+  async get(id) {
+    return decryptRow(await readRaw(id));
+  },
+  async put(item) {
+    try {
+      const key = await getScopeKey(item.scope);
+      const encrypted = await sealOfflineDraft(item, key);
+      await transact([STORE], 'readwrite', (tx) => { tx.objectStore(STORE).put(encrypted); });
+      return item.id;
+    } catch (error) {
+      describeWriteFailure(error);
+    }
+  },
+  async delete(id) {
+    return transact([STORE], 'readwrite', (tx) => { tx.objectStore(STORE).delete(id); });
+  },
+  async list(scope) {
     if (!scope) return [];
-    const rows = await runTransaction('readonly',
-      (store) => store.index('scope').getAll(IDBKeyRange.only(scope)));
-    return rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const rows = await readScope(scope);
+    const items = await Promise.all(rows.map((row) => decryptRow(row)));
+    return items.filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 });

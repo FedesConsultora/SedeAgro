@@ -158,7 +158,7 @@ x-tenant-id: <tenant.id>
 
 Las observaciones se guardan primero en una cola IndexedDB por usuario/tenant y se envían con **reintentos idempotentes** al reconectar. La pantalla Sincronizaciones distingue los borradores locales de recibos efectivamente confirmados por el backend, permite revisar conflictos, reintentar y descartar. El shell estático puede abrirse offline tras una instalación inicial del service worker en HTTPS, sin almacenar respuestas privadas.
 
-**Importante:** los borradores guardados en IndexedDB no están cifrados. No usar equipos compartidos; las operaciones pendientes permanecen localmente tras cerrar sesión y solo se muestran de nuevo a la misma cuenta/tenant. Esto es una cola web, **no** una aplicación móvil nativa. [Alcance, privacidad y validación](docs/offline-browser-queue.md).
+**Seguridad local (0J):** los nuevos borradores se cifran con AES-256-GCM y claves no exportables guardadas en IndexedDB por usuario/tenant; los borradores antiguos se migran al accederlos. Sigue siendo necesario usar un dispositivo confiable: los scripts del mismo origen pueden descifrarlos y las claves pueden perderse si se limpia el navegador. La pantalla Sincronizaciones permite consultar capacidad y solicitar almacenamiento persistente. Esto sigue siendo una cola web, **no** una aplicación móvil nativa. Ver [límites, migración y validación](docs/offline-browser-queue.md). [Alcance, privacidad y validación](docs/offline-browser-queue.md).
 
 ## Sincronización atómica y bitácora de recorridas
 
