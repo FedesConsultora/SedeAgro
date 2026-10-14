@@ -3,6 +3,7 @@ import { RefreshCw, Clock, AlertTriangle, CheckCircle, Trash2, Send } from 'luci
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { offlineQueue } from '../services/offlineQueue.js';
+import { guidanceForDraft, queueSummary } from '../services/offlineConflictGuidance.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 
@@ -130,7 +131,7 @@ export function SyncPage() {
 
   const retry = async (item) => {
     try {
-      await offlineQueue.allowRetry(session, item.id);
+      await offlineQueue.allowRetry(session, item.id, { notifyChange: false });
       await loadLocal();
       if (online) await sendPending();
     } catch (err) {
@@ -157,7 +158,9 @@ export function SyncPage() {
   };
 
   const discard = async (item) => {
-    if (!window.confirm('¿Eliminar esta observación pendiente del dispositivo? No se podrá recuperar si nunca llegó al servidor.')) return;
+    if (!window.confirm(item.syncedObservationId
+      ? 'La observación ya fue confirmada en el servidor. ¿Eliminar la fotografía pendiente de este dispositivo? No podrás recuperarla.'
+      : '¿Eliminar esta observación pendiente del dispositivo? No se podrá recuperar si nunca llegó al servidor.')) return;
     try {
       await offlineQueue.discard(session, item.id);
       await loadLocal();
@@ -166,8 +169,7 @@ export function SyncPage() {
     }
   };
 
-  const pendingCount = pending.filter((item) => item.state === 'pending').length;
-  const conflictCount = pending.filter((item) => item.state !== 'pending').length;
+  const { pending: pendingCount, review: conflictCount, photoOnly } = queueSummary(pending);
 
   return (
     <div className="page-grid">
@@ -194,7 +196,7 @@ export function SyncPage() {
           <div className="toast-item__icon"><Clock size={16}/></div>
           <div className="toast-item__body">
             <strong className="toast-item__title">
-              {online ? 'Conectado' : 'Sin conexión'} · {pendingCount} pendientes · {conflictCount} para revisar
+              {online ? 'Conectado' : 'Sin conexión'} · {pendingCount} pendientes · {conflictCount} para revisar · {photoOnly} fotos por confirmar
             </strong>
             <p className="toast-item__message" style={{ fontSize: 12 }}>
               Las observaciones se guardan primero en este navegador y se envían al iniciar sesión,
@@ -245,18 +247,22 @@ export function SyncPage() {
                   {QUEUE_STATUS[item.state] || item.state} · {new Date(item.createdAt).toLocaleString('es-AR')}
                   {' · '}Recorrida {item.runId.slice(0, 8)}…
                 </div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginTop: 5, color: '#334155' }}>
+                  {guidanceForDraft(item).heading}
+                </div>
                 {item.evidence && <div style={{ fontSize: 12, color: '#475569' }}>
-                  Foto: {item.evidence.original_name} · {item.syncedObservationId
-                    ? 'Observación confirmada; foto pendiente de confirmación'
-                    : 'Observación y foto pendientes'}
+                  Foto local: {item.evidence.original_name}
                 </div>}
-                {item.lastError && <p role="alert" style={{ margin: '4px 0 0', fontSize: 12, color: '#b45309' }}>
-                  {item.lastError}
-                </p>}
+                <p role={item.state === 'conflict' || item.state === 'auth' ? 'alert' : 'status'}
+                  style={{ margin: '4px 0 0', fontSize: 12, color:
+                    item.state === 'pending' ? '#475569' : '#b45309' }}>
+                  {guidanceForDraft(item).description}
+                </p>
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 {item.state !== 'pending' &&
-                  <button type="button" className="ghost-action" onClick={() => void retry(item)}>Reintentar</button>}
+                  <button type="button" className="ghost-action" disabled={sending}
+                    onClick={() => void retry(item)}>Reintentar</button>}
                 <button type="button" className="ghost-action"
                   onClick={() => void discard(item)} aria-label="Eliminar observación pendiente">
                   <Trash2 size={14}/> Eliminar
