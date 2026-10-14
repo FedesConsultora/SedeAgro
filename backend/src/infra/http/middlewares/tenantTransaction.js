@@ -1,4 +1,5 @@
 import { sequelize, setLocalTenant } from '../../../core/db.js';
+import { logger } from '../../../core/logger.js';
 
 export async function tenantTransaction(req, res, next) {
   if (!req.tenantId) return next();
@@ -29,7 +30,7 @@ export async function tenantTransaction(req, res, next) {
       }
     } catch (error) {
       // The response has already been sent or aborted, so log the error for investigation.
-      console.error('tenant_transaction_finalize_failed', {
+      logger.error('db.tenant_transaction_finalize_failed', {
         request_id: req.requestId,
         event,
         message: error.message
