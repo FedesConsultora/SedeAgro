@@ -157,21 +157,65 @@ export function createOfflineQueue({
     }
   }
 
-  async function flush(session, send, { force = false, sendEvidence = null } = {}) {
+  async function flush(session, send, {
+    force = false, sendEvidence = null, onlyId = null, manualReview = false
+  } = {}) {
     const scope = sessionScope(session);
+    const single = onlyId !== null;
+    // Never use a display filter as permission to send an arbitrary ID.
+    if (single && (!scope || typeof onlyId !== 'string' ||
+      !onlyId.startsWith(`${scope}:`) ||
+      !/^[a-f\d]{8}-[a-f\d]{4}-[1-8][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(
+        onlyId.slice(scope.length + 1)))) {
+      throw new Error('Esta captura pertenece a otra cuenta o no tiene un ID válido.');
+    }
     if (!scope || !isOnline()) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
     if (inFlightScopes.has(scope)) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
     inFlightScopes.add(scope);
     try {
       return await withLock(scope, async () => {
-        const items = await store.list(scope);
+        // A selected retry reads ONLY that encrypted draft. The global path
+        // keeps its existing FIFO scan, eligibility and retry behavior.
+        const items = single
+          ? [await store.get(onlyId)].filter(Boolean) : await store.list(scope);
         const summary = { attempted: 0, sent: 0, conflicts: 0, skipped: false };
+        if (single && !items.length) return { ...summary, missing: true };
         for (const saved of items) {
-          if (saved.state !== 'pending') continue;
-          if (!force && !isEligibleForAutoRetry(saved, now().getTime())) continue;
+          if (single && (saved.id !== onlyId || saved.scope !== scope ||
+            saved.id !== `${scope}:${saved.idempotencyKey}` ||
+            saved.body?.idempotency_key !== saved.idempotencyKey ||
+            !Array.isArray(saved.body?.operations) ||
+            saved.body.operations.length !== 1 ||
+            saved.body.operations[0]?.entity_type !== 'scouting_observation' ||
+            saved.body.operations[0]?.operation !== 'create' ||
+            saved.body.operations[0]?.payload?.scouting_run_id !== saved.runId)) {
+            return { ...summary, invalidDraft: true };
+          }
+          if (single && saved.evidence && saved.syncedObservationId) {
+            // 0S.6: observation already succeeded. Require a fresh personal
+            // receipt and an independent photo-only ACK, not another batch.
+            return { ...summary, photoRecoveryRequired: true };
+          }
+          if (saved.state !== 'pending' && !(
+            single && manualReview && ['auth', 'conflict'].includes(saved.state))) continue;
+          if (!single && !force && !isEligibleForAutoRetry(saved, now().getTime())) continue;
           if (!isOnline()) break;
           const item = await store.get(saved.id);
-          if (!item || item.scope !== scope || item.state !== 'pending') continue;
+          if (!item || item.scope !== scope) continue;
+          if (single && (item.id !== onlyId ||
+            item.id !== `${scope}:${item.idempotencyKey}` ||
+            item.body?.idempotency_key !== item.idempotencyKey ||
+            !Array.isArray(item.body?.operations) || item.body.operations.length !== 1 ||
+            item.body.operations[0]?.entity_type !== 'scouting_observation' ||
+            item.body.operations[0]?.operation !== 'create' ||
+            item.body.operations[0]?.payload?.scouting_run_id !== item.runId)) {
+            return { ...summary, invalidDraft: true };
+          }
+          if (single && item.evidence && item.syncedObservationId) {
+            return { ...summary, photoRecoveryRequired: true };
+          }
+          if (item.state !== 'pending' && !(
+            single && manualReview && ['auth', 'conflict'].includes(item.state))) continue;
           summary.attempted += 1;
           try {
             const receipt = await send(item.body);
@@ -237,7 +281,18 @@ export function createOfflineQueue({
     }
   }
 
-  return { list, queueObservation, discard, allowRetry, confirmApplied, recoverPhoto, flush };
+  // Exposes one-shot manual delivery without changing auto-flush semantics
+  // or preemptively rewriting conflict/auth records before the network call.
+  async function flushOne(session, id, send, { sendEvidence = null } = {}) {
+    return flush(session, send, {
+      onlyId: id, force: true, manualReview: true, sendEvidence
+    });
+  }
+
+  return {
+    list, queueObservation, discard, allowRetry, confirmApplied, recoverPhoto,
+    flush, flushOne
+  };
 }
 
 async function lockAcrossTabs(scope, handler) {
