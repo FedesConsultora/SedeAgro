@@ -6,6 +6,7 @@ import {
   CampaignField,
   Field,
   Machinery,
+  Membership,
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderInput,
@@ -127,6 +128,15 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
       'Transición de orden no permitida para este usuario o estado.',
       undefined, 'WORK_ORDER_TRANSITION_DENIED');
   }
+  if (nextStatus === 'assigned') {
+    const assignees = await WorkOrderAssignee.count({
+      where: { tenant_id: req.tenantId, work_order_id: order.id },
+      transaction: req.dbTransaction
+    });
+    if (assignees === 0) {
+      throw new HttpError(409, 'La orden necesita al menos un responsable para pasar a asignada.');
+    }
+  }
   await order.update({
     status: nextStatus,
     approved_at: nextStatus === 'approved' ? new Date() : order.approved_at,
@@ -137,6 +147,11 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
 }));
 
 workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), validate(assigneeSchema), asyncHandler(async (req, res) => {
+  const membership = await Membership.findOne({
+    where: { tenant_id: req.tenantId, user_id: req.body.user_id, status: 'active' },
+    transaction: req.dbTransaction
+  });
+  if (!membership) throw new HttpError(422, 'El responsable debe ser un miembro activo de esta organización.');
   const assignee = await WorkOrderAssignee.create({
     ...req.body,
     work_order_id: req.params.id
