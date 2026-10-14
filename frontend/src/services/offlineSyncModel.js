@@ -1,6 +1,7 @@
 // Pure, browser-independent offline queue contract. No auth tokens or tenant-wide
 // data are copied into queued records; the caller must supply a live session scope.
 import { validateOfflinePhoto } from './offlinePhoto.js';
+import { validateObservationPoint } from './observationLocation.js';
 
 export const QUEUE_CLIENT_ID = 'sedeagro-web-offline-v1';
 export const MAX_PENDING_BATCHES = 100;
@@ -39,6 +40,7 @@ export function createPendingObservation({ session, runId, values, uuid, now = n
         scouting_run_id: runId,
         observation_type: values.observation_type,
         severity: values.severity,
+        ...(values.point === undefined ? {} : { point: validateObservationPoint(values.point) }),
         notes,
         observed_at: observedAt.toISOString()
       }
