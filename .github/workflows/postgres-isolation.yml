@@ -101,3 +101,17 @@ jobs:
             nginx:1.27-alpine
           trap 'docker stop sedeagro-nginx-pilot >/dev/null 2>&1 || true' EXIT
           node scripts/verify-frontend-headers.mjs http://127.0.0.1:4182
+      - name: Verify reproducible staging release hashes
+        run: |
+          node scripts/staging-release-manifest.mjs create
+          node scripts/staging-release-manifest.mjs verify
+      - name: Preserve staging artifact for integrated main only
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sedeagro-staging-${{ github.sha }}
+          path: |
+            frontend/dist/
+            staging-release-manifest.json
+          if-no-files-found: error
+          retention-days: 14
