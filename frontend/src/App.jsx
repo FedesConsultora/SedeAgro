@@ -124,7 +124,8 @@ function Shell() {
         {currentView === 'platform'   && <PlatformAdminPage />}
         {currentView === 'assets'     && <AssetsPage />}
         {currentView === 'imagery'    && <SatellitePage />}
-        {currentView === 'sync'       && <SyncPage />}
+        {currentView === 'sync'       && <SyncPage focusRunId={focused?.view === 'sync' ? focused.id : null}
+          onClearFocus={() => handleViewChange('sync')} />}
         {currentView === 'sessions'   && <SessionsPage />}
       </main>
     </div>
