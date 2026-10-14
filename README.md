@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Privacidad de evidencia y preparación de staging (Bloque 0M)
+
+Todas las fotos offline **nuevas**, grandes o pequeñas, se convierten a JPEG mediante Canvas antes de guardarse cifradas, para no copiar EXIF/GPS del archivo original. La interfaz ya no depende de fuentes externas y el servidor Nginx de producción impone CSP de scripts del mismo origen, aislamiento de páginas y políticas de caché verificadas en CI. El plan de [seguridad, staging, backup, restauración y go/no-go](docs/pilot-staging-readiness-0m.md) es **manual**: no acredita dispositivos físicos ni un VPS ya desplegado.
+
 ## Captura de campo y aceptación móvil (Bloque 0L)
 
 El formulario de monitoreo ofrece captura con cámara o galería y puede reducir JPEG/PNG/WebP de hasta **12 MiB** a una fotografía offline de **512 KiB** manteniendo las proporciones. El borrador y su foto siguen cifrados y los reintentos conservan identificadores únicos; los conflictos distinguen una observación ya confirmada de su foto aún pendiente. El CI comprueba esta conversión en **Chromium real** y se mantiene una [matriz de aceptación Android/iOS y staging](docs/pilot-field-acceptance-0l.md). **Los dispositivos físicos y el despliegue productivo continúan sin certificar.**
