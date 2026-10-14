@@ -8,7 +8,7 @@ const CAPABILITIES = Object.freeze({
   agronomic_coordinator: [
     'members.read', 'gis.read', 'gis.write', 'water.write',
     'campaigns.read', 'campaigns.write',
-    'scouting.read', 'scouting.plan', 'scouting.observe', 'scouting.evidence',
+    'scouting.read', 'scouting.plan', 'scouting.observe', 'scouting.evidence', 'scouting.audit.read',
     'orders.read', 'orders.write', 'orders.execute',
     'teams.read', 'teams.write', 'assets.read', 'assets.write',
     'imagery.read', 'imagery.write', 'reports.read', 'reports.write',
