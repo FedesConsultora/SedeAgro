@@ -15,7 +15,10 @@ notificationsRouter.get('/', asyncHandler(async (req, res) => {
 }));
 
 notificationsRouter.patch('/:id/read', asyncHandler(async (req, res) => {
-  const notification = await Notification.findByPk(req.params.id, { transaction: req.dbTransaction });
+  const notification = await Notification.findOne({
+    where: { id: req.params.id, tenant_id: req.tenantId, user_id: req.auth.user.id },
+    transaction: req.dbTransaction
+  });
   if (!notification) return res.status(404).json({ error: { message: 'Notificación no encontrada.' } });
   await notification.update({ read_at: new Date() }, { transaction: req.dbTransaction });
   res.json({ data: notification });
