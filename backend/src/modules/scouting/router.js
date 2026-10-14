@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import {
@@ -49,6 +49,7 @@ const evidenceSchema = z.object({
   kind: z.enum(['photo', 'document']),
   mime_type: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
   original_name: z.string().min(1).max(180),
+  client_upload_id: z.string().uuid().optional(),
   content_base64: z.string().min(1).max(2796204),
   captured_at: z.coerce.date().optional()
 }).strict();
@@ -185,21 +186,81 @@ scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.obs
 scoutingRouter.post('/observations/:observationId/evidence', requireCapability('scouting.evidence'), validate(evidenceSchema), asyncHandler(async (req, res) => {
   const observation = await ScoutingObservation.findByPk(req.params.observationId, { transaction: req.dbTransaction });
   if (!observation) throw new HttpError(404, 'Observación no encontrada.');
+  // Lock the run before checking upload state. Close/reassign and both uploads
+  // acquire this lock, avoiding a stale permission or status decision.
   const run = await findRun(req, observation.scouting_run_id, true);
-  assertScoutingWritable(req.auth, run);
   const bytes = decodeEvidenceContent(req.body);
+  const originalName = safeEvidenceFileName(req.body.original_name);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const uploadId = req.body.client_upload_id || null;
+  const where = {
+    tenant_id: req.tenantId,
+    uploaded_by: req.auth.user.id,
+    client_upload_id: uploadId
+  };
+
+  // Replay of an already committed upload succeeds even if the run closed
+  // subsequently, but only while the actor can still read the run.
+  if (uploadId) {
+    const previous = await EvidenceAsset.findOne({
+      where,
+      transaction: req.dbTransaction
+    });
+    if (previous) {
+      if (previous.scouting_observation_id !== observation.id ||
+          previous.content_sha256 !== digest ||
+          previous.kind !== req.body.kind ||
+          previous.mime_type !== req.body.mime_type ||
+          previous.original_name !== originalName) {
+        throw new HttpError(409, 'Esta clave de carga ya fue usada con otro archivo.',
+          undefined, 'EVIDENCE_UPLOAD_CONFLICT');
+      }
+      res.json({ data: previous, replayed: true });
+      return;
+    }
+  }
+
+  assertScoutingWritable(req.auth, run);
   const id = randomUUID();
-  const evidence = await EvidenceAsset.create({
+  const attrs = {
     id,
     scouting_observation_id: observation.id,
     uploaded_by: req.auth.user.id,
     kind: req.body.kind,
+    client_upload_id: uploadId,
+    content_sha256: digest,
     storage_key: `db:${id}`,
-    original_name: safeEvidenceFileName(req.body.original_name),
+    original_name: originalName,
     mime_type: req.body.mime_type,
     size_bytes: bytes.length,
     captured_at: req.body.captured_at || new Date()
-  }, { transaction: req.dbTransaction });
+  };
+  let evidence;
+  let created = true;
+  if (uploadId) {
+    // Sequelize findOrCreate uses a savepoint when a transaction is supplied.
+    // A racing second tab cannot duplicate the asset after the unique index
+    // rejects its insert, and can safely inspect the winning row.
+    [evidence, created] = await EvidenceAsset.findOrCreate({
+      where,
+      defaults: attrs,
+      transaction: req.dbTransaction
+    });
+  } else {
+    evidence = await EvidenceAsset.create(attrs, { transaction: req.dbTransaction });
+  }
+  if (!created) {
+    if (evidence.scouting_observation_id !== observation.id ||
+        evidence.content_sha256 !== digest ||
+        evidence.kind !== req.body.kind ||
+        evidence.mime_type !== req.body.mime_type ||
+        evidence.original_name !== originalName) {
+      throw new HttpError(409, 'Esta clave de carga ya fue usada con otro archivo.',
+        undefined, 'EVIDENCE_UPLOAD_CONFLICT');
+    }
+    res.json({ data: evidence, replayed: true });
+    return;
+  }
   await putPrivateEvidence({
     tenantId: req.tenantId,
     evidenceId: evidence.id,
@@ -217,7 +278,7 @@ scoutingRouter.post('/observations/:observationId/evidence', requireCapability('
       size_bytes: evidence.size_bytes
     }
   });
-  res.status(201).json({ data: evidence });
+  res.status(201).json({ data: evidence, replayed: false });
 }));
 
 scoutingRouter.get('/evidence/:id/content', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
