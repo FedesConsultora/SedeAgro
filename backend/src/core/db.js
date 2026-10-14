@@ -2,6 +2,7 @@ import { Sequelize, Op } from 'sequelize';
 import { env } from '../config/env.js';
 import { getTenantId } from './tenantContext.js';
 import { logger } from './logger.js';
+import { assertTenantTransaction, isSafeRuntimeDbRole, SET_TENANT_SQL } from './tenantDbSafety.js';
 
 export const sequelize = new Sequelize(env.databaseUrl, {
   dialect: 'postgres',
@@ -69,11 +70,23 @@ export function installTenantHooks() {
 
 export async function connectDb() {
   await sequelize.authenticate();
+  // Superusers and BYPASSRLS roles silently ignore tenant policies, even with FORCE RLS.
+  if (env.isProd) {
+    const [[role]] = await sequelize.query(`
+      SELECT r.rolname, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb,
+             pg_get_userbyid(d.datdba) AS db_owner
+      FROM pg_roles r JOIN pg_database d ON d.datname = current_database()
+      WHERE r.rolname = current_user
+    `);
+    if (!isSafeRuntimeDbRole(role)) {
+      throw new Error('Unsafe PostgreSQL runtime role: require a non-owner without SUPERUSER, BYPASSRLS, CREATEDB or CREATEROLE.');
+    }
+  }
 }
 
 export async function setLocalTenant(transaction, tenantId = getTenantId()) {
-  if (!tenantId) return;
-  await sequelize.query('SET LOCAL app.current_tenant = :tenantId', {
+  assertTenantTransaction(transaction, tenantId);
+  await sequelize.query(SET_TENANT_SQL, {
     transaction,
     replacements: { tenantId }
   });

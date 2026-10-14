@@ -39,7 +39,7 @@ services:
       - ./backend/.env
     environment:
       PORT: 3001
-      DATABASE_URL: postgres://${POSTGRES_USER:-sedeagro}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-sedeagro}
+      DATABASE_URL: postgres://${APP_DB_USER:-sedeagro_app}:${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}@db:5432/${POSTGRES_DB:-sedeagro}
       REDIS_URL: redis://redis:6379
     depends_on:
       db:
