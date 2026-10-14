@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { CampaignField, ScoutingRun } from '../../models/index.js';
+import { CampaignField, Field, ScoutingRun } from '../../models/index.js';
 
 // A scout's GIS/campaign read scope is derived exclusively from explicit run
 // assignments. Empty scope is deny-by-default, never "all tenant fields".
@@ -22,4 +22,16 @@ export async function assignedFieldIds(req) {
     transaction: req.dbTransaction
   });
   return [...new Set(fields.map((field) => field.field_id))];
+}
+
+export async function assignedFarmIds(req) {
+  const ids = await assignedFieldIds(req);
+  if (ids === null) return null;
+  if (!ids.length) return [];
+  const fields = await Field.findAll({
+    where: { id: { [Op.in]: ids } },
+    attributes: ['farm_id'],
+    transaction: req.dbTransaction
+  });
+  return [...new Set(fields.map((field) => field.farm_id))];
 }
