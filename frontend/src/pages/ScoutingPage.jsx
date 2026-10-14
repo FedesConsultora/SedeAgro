@@ -280,8 +280,14 @@ function RunDetail({ run, onChanged }) {
 }
 
 export function ScoutingPage({ focusRunId = null }) {
-  const { api, dataMode, session } = useSession();
+  const { api, dataMode, session, entitlements } = useSession();
+  // Do not display a previous actor's coordinates while a new membership
+  // or tenant is loading. A changed scope also remounts the detail.
+  const scope = [dataMode, session?.authenticated ? 'auth' : 'anonymous',
+    session?.tenant?.id || '', session?.user?.id || '',
+    session?.membership?.roleCode || '', [...(entitlements || [])].sort().join(',')].join(':');
   const [runs, setRuns] = useState([]);
+  const [loadedScope, setLoadedScope] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('Todos');
@@ -294,6 +300,7 @@ export function ScoutingPage({ focusRunId = null }) {
   const load = useCallback(async () => {
     const sequence = ++listRequestSequence.current;
     setLoading(true);
+    setLoadedScope(scope);
     setError('');
     setRuns([]);
     if (dataMode === 'mock') {
@@ -313,7 +320,7 @@ export function ScoutingPage({ focusRunId = null }) {
     } finally {
       if (listRequestSequence.current === sequence) setLoading(false);
     }
-  }, [api, dataMode]);
+  }, [api, dataMode, scope]);
 
   useEffect(() => {
     void load();
@@ -324,7 +331,10 @@ export function ScoutingPage({ focusRunId = null }) {
     setFilter('Todos');
     setExpanded(current => ({ ...current, [focusRunId]: true }));
   }, [focusRunId]);
-  const visible = filter === 'Todos' ? runs : runs.filter((r) => r.status === filter);
+  const visibleRuns = loadedScope === scope ? runs : [];
+  const visibleLoading = loading || loadedScope !== scope;
+  const visibleError = loadedScope === scope ? error : '';
+  const visible = filter === 'Todos' ? visibleRuns : visibleRuns.filter((r) => r.status === filter);
 
   return (
     <div className="page-grid">
@@ -342,14 +352,14 @@ export function ScoutingPage({ focusRunId = null }) {
           ))}
         </div>
         <span style={{ fontSize: 13, color: '#64748b' }}>
-          {loading ? 'Consultando recorridas…' : error ? 'Recorridas no disponibles'
+          {visibleLoading ? 'Consultando recorridas…' : visibleError ? 'Recorridas no disponibles'
             : `${visible.length} recorridas · ${dataMode === 'live' ? 'Backend' : 'Demo'}`}
         </span>
       </div>
-      {error && <div className="auth-error" role="alert">
-        {error} <button type="button" onClick={() => void load()}>Reintentar</button>
+      {visibleError && <div className="auth-error" role="alert">
+        {visibleError} <button type="button" onClick={() => void load()}>Reintentar</button>
       </div>}
-      {isFocusedScoutingRunUnavailable(focusRunId, runs, loading, error) && (
+      {isFocusedScoutingRunUnavailable(focusRunId, visibleRuns, visibleLoading, visibleError) && (
         <p className="auth-error" role="status">
           La recorrida solicitada no está disponible para esta cuenta o empresa.
         </p>
@@ -359,8 +369,8 @@ export function ScoutingPage({ focusRunId = null }) {
           <div className="data-table__row data-table__row--head" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px' }}>
             <span>Lote / Campaña</span><span>Fecha planificada</span><span>Estado</span><span>Asignado a</span><span />
           </div>
-          {loading ? <div style={{ padding: 24, fontSize: 13, color: '#64748b' }}>Cargando recorridas…</div>
-            : error ? null : visible.length === 0 ? (
+          {visibleLoading ? <div style={{ padding: 24, fontSize: 13, color: '#64748b' }}>Cargando recorridas…</div>
+            : visibleError ? null : visible.length === 0 ? (
               <div className="empty-state">
                 <Activity size={36} />
                 <h3>Sin recorridas</h3>
@@ -377,7 +387,7 @@ export function ScoutingPage({ focusRunId = null }) {
                   <span>{run.assignee?.full_name || (run.assigned_to ? 'Responsable asignado' : 'Sin asignar')}</span>
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
-                {expanded[run.id] && <RunDetail run={run} onChanged={load} />}
+                {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load} />}
               </div>
             ))}
         </div>
