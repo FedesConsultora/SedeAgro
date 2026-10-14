@@ -6,6 +6,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { grantedProducerIds } from '../farms/producerAccess.js';
+import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
 
 export const fieldsRouter = Router();
 
@@ -37,7 +38,9 @@ const irrigationSchema = z.object({
 
 fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFields = await assignedFieldIds(req);
   const fields = await Field.findAll({
+    ...(scoutFields === null ? {} : { where: { id: { [Op.in]: scoutFields } } }),
     include: [{
       model: Farm,
       attributes: ['id', 'name', 'province', 'locality'],
@@ -59,8 +62,12 @@ fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), as
 
 fieldsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
+  const scoutFields = await assignedFieldIds(req);
   const field = await Field.findOne({
-    where: { id: req.params.id },
+    where: {
+      id: req.params.id,
+      ...(scoutFields === null ? {} : { id: { [Op.in]: scoutFields, [Op.eq]: req.params.id } })
+    },
     include: [
       {
         model: Farm,
