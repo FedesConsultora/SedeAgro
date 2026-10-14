@@ -139,6 +139,10 @@ try {
   await prodPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   await prod.setOffline(true);
   await prodPage.reload({ waitUntil: 'domcontentloaded' });
+  // DOMContentLoaded precedes React mounting and cached module evaluation.
+  // Wait for meaningful UI, not just the empty root element in index.html.
+  await prodPage.waitForFunction(() => document.body.innerText.trim().length > 10,
+    null, { timeout: 10000 });
   assert.ok((await prodPage.locator('body').innerText()).length > 10);
   console.log('PASS: Chromium reopens production SPA offline using static-only SW');
   await prod.close();
