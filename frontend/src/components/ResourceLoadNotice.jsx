@@ -1,3 +1,4 @@
+import './resource-load-notice.css';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 
 export function ResourceLoadNotice({ title, error, onRetry }) {
