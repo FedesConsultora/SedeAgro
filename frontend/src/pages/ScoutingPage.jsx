@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Activity, ChevronRight, Plus } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Activity, ChevronRight, Download, Plus, RefreshCw } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { ScoutingRunFormModal } from '../components/ScoutingRunFormModal.jsx';
@@ -9,158 +9,237 @@ import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 const RUN_STATUS_ES = { planned: 'Planificado', in_progress: 'En curso', completed: 'Completado', cancelled: 'Cancelado' };
 const SEV_ES = { low: 'Leve', medium: 'Moderado', high: 'Alto', critical: 'Crítico' };
 const OBS_TYPE_ES = { weed: 'Maleza', pest: 'Plaga', disease: 'Enfermedad', phenology: 'Fenología', nutrition: 'Nutrición', water: 'Agua', general: 'General' };
-const STATUS_FILTER = ['Todos', 'planned', 'in_progress', 'completed'];
+const STATUS_FILTER = ['Todos', 'planned', 'in_progress', 'completed', 'cancelled'];
 
 function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_ES[status] || status}</span>;
 }
 
-function RunDetail({ run, onObsCreated }) {
+function RunDetail({ run, onChanged }) {
+  const { api, dataMode, session } = useSession();
+  const [details, setDetails] = useState(dataMode === 'mock' ? run : null);
+  const [loading, setLoading] = useState(dataMode === 'live');
+  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [working, setWorking] = useState(false);
   const [showObsModal, setShowObsModal] = useState(false);
-  const [showEvidModal, setShowEvidModal] = useState(null); // observationId
+  const [showEvidModal, setShowEvidModal] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
 
-  const observations = run.ScoutingObservations || [];
+  const refresh = useCallback(async () => {
+    if (dataMode !== 'live') {
+      setDetails(run);
+      setError('');
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const response = await api.getScoutingRun(run.id);
+      setDetails(response.data);
+    } catch (err) {
+      setDetails(null);
+      setError(err?.message || 'No se pudo cargar la recorrida.');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, dataMode, run]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const role = session?.membership?.roleCode;
+  const canManage = dataMode === 'live' && ['tenant_admin', 'agronomic_coordinator'].includes(role);
+  const canOperate = dataMode === 'live' && (
+    canManage || (role === 'scout' && details?.assigned_to === session?.user?.id)
+  );
+  const canObserve = canOperate && ['planned', 'in_progress'].includes(details?.status);
+
+  const changeStatus = async (status) => {
+    setWorking(true);
+    setActionError('');
+    try {
+      await api.updateScoutingRun(run.id, { status });
+      await refresh();
+      onChanged?.();
+    } catch (err) {
+      setActionError(err?.message || 'No se pudo actualizar el estado.');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const download = async (evidence) => {
+    setDownloadingId(evidence.id);
+    setActionError('');
+    try {
+      const result = await api.getEvidenceContent(evidence.id);
+      const encoded = result.data.content_base64;
+      const binary = atob(encoded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: result.data.mime_type });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = result.data.original_name || 'evidencia';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setActionError(err?.message || 'No se pudo descargar el archivo.');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const observations = details?.ScoutingObservations || [];
 
   return (
-    <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(0,0,0,0.04)', animation: 'slideDown 0.2s ease-out' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Observaciones ({observations.length})
-        </span>
-        <button type="button" className="ghost-action" style={{ minHeight: 30, padding: '0 10px', fontSize: 12 }}
-          onClick={() => setShowObsModal(true)}>
-          <Plus size={13} /> Agregar observación
-        </button>
-      </div>
-      {observations.length === 0 ? (
-        <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>Sin observaciones registradas</p>
-      ) : (
-        <div style={{ display: 'grid', gap: 8 }}>
-          {observations.map((obs) => (
-            <div key={obs.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-              <span className={`status-badge status-badge--${obs.severity === 'critical' ? 'rose' : obs.severity === 'high' ? 'amber' : 'green'}`}>
-                {SEV_ES[obs.severity] || obs.severity}
-              </span>
-              <span style={{ flex: 1, fontSize: 13, color: '#334155' }}>
-                <strong style={{ marginRight: 4 }}>{OBS_TYPE_ES[obs.observation_type] || obs.observation_type}</strong>
-                {obs.notes}
-              </span>
-              <button type="button" className="ghost-action" style={{ minHeight: 28, padding: '0 8px', fontSize: 11 }}
-                onClick={() => setShowEvidModal(obs.id)}>
-                + Evidencia
-              </button>
-            </div>
-          ))}
+    <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(0,0,0,0.06)', display: 'grid', gap: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <strong style={{ fontSize: 13, color: '#334155' }}>Observaciones ({observations.length})</strong>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {canManage && details?.status === 'planned' &&
+            <button type="button" className="ghost-action" disabled={working} onClick={() => changeStatus('in_progress')}>Iniciar recorrida</button>}
+          {canManage && details?.status === 'in_progress' &&
+            <button type="button" className="ghost-action" disabled={working} onClick={() => changeStatus('completed')}>Completar recorrida</button>}
+          <button type="button" className="ghost-action" onClick={() => refresh()} disabled={loading}>
+            <RefreshCw size={14} /> Actualizar
+          </button>
+          {canObserve && <button type="button" className="ghost-action" onClick={() => setShowObsModal(true)}>
+            <Plus size={14} /> Agregar observación
+          </button>}
         </div>
-      )}
-      {showObsModal && (
-        <ObservationFormModal isOpen runId={run.id} onClose={() => setShowObsModal(false)} onCreated={() => { setShowObsModal(false); onObsCreated?.(); }} />
-      )}
-      {showEvidModal && (
-        <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)} onCreated={() => setShowEvidModal(null)} />
-      )}
+      </div>
+      {error && <div className="auth-error" role="alert">{error} <button type="button" onClick={() => refresh()}>Reintentar</button></div>}
+      {actionError && <div className="auth-error" role="alert">{actionError}</div>}
+      {loading ? <p style={{ color: '#64748b', fontSize: 13 }}>Cargando datos de la recorrida…</p>
+        : !details ? null
+          : observations.length === 0 ? (
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>No hay observaciones guardadas en esta recorrida.</p>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {observations.map((obs) => (
+                <div key={obs.id} style={{ padding: '12px 14px', borderRadius: 10, border: '1px solid rgba(15,23,42,0.09)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span className={`status-badge status-badge--${obs.severity === 'critical' ? 'rose' : obs.severity === 'high' ? 'amber' : 'green'}`}>
+                      {SEV_ES[obs.severity] || obs.severity}
+                    </span>
+                    <strong style={{ color: '#334155', fontSize: 13 }}>{OBS_TYPE_ES[obs.observation_type] || obs.observation_type}</strong>
+                    <span style={{ color: '#64748b', fontSize: 12 }}>{obs.observed_at ? new Date(obs.observed_at).toLocaleString('es-AR') : ''}</span>
+                  </div>
+                  <p style={{ margin: '8px 0', fontSize: 13, color: '#475569', whiteSpace: 'pre-wrap' }}>{obs.notes}</p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {(obs.EvidenceAssets || []).map((ev) => (
+                      <div key={ev.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                        <span style={{ flex: 1, color: '#64748b' }}>{ev.original_name || 'Archivo'} · {ev.size_bytes ? `${Math.ceil(ev.size_bytes / 1024)} KiB` : 'Archivo legado'}</span>
+                        {dataMode === 'live' && <button className="ghost-action" type="button" disabled={downloadingId === ev.id} onClick={() => download(ev)}>
+                          <Download size={13} /> {downloadingId === ev.id ? 'Descargando…' : 'Descargar'}
+                        </button>}
+                      </div>
+                    ))}
+                  </div>
+                  {canObserve && <button className="ghost-action" type="button"
+                    style={{ marginTop: 8 }} onClick={() => setShowEvidModal(obs.id)}>+ Adjuntar archivo</button>}
+                </div>
+              ))}
+            </div>
+          )}
+      {dataMode !== 'live' && <p style={{ fontSize: 12, color: '#a16207', margin: 0 }}>Modo demo: estos datos no provienen del backend; no se guardan modificaciones.</p>}
+      {showObsModal && <ObservationFormModal isOpen runId={run.id} onClose={() => setShowObsModal(false)}
+        onCreated={() => { setShowObsModal(false); void refresh(); onChanged?.(); }} />}
+      {showEvidModal && <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)}
+        onCreated={() => { setShowEvidModal(null); void refresh(); }} />}
     </div>
   );
 }
 
 export function ScoutingPage() {
-  const { api, dataMode } = useSession();
+  const { api, dataMode, session } = useSession();
   const [runs, setRuns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [filter, setFilter] = useState('Todos');
   const [expanded, setExpanded] = useState({});
   const [showModal, setShowModal] = useState(false);
+  const canPlan = dataMode === 'live' && ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
-    if (dataMode === 'mock') { setRuns(mockData.scoutingRuns); setLoading(false); return; }
-    try {
-      const res = await api.scoutingRuns();
-      setRuns(res.data || []);
-    } catch {
+    setError('');
+    if (dataMode === 'mock') {
       setRuns(mockData.scoutingRuns);
+      setLoading(false);
+      return;
+    }
+    try {
+      const response = await api.scoutingRuns();
+      setRuns(response.data || []);
+    } catch (err) {
+      setRuns([]);
+      setError(err?.message || 'No se pudo consultar el servidor de monitoreos.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, dataMode]);
 
-  useEffect(() => { load(); }, [api, dataMode]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  useEffect(() => { void load(); }, [load]);
   const visible = filter === 'Todos' ? runs : runs.filter((r) => r.status === filter);
-  const toggleExpand = (id) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
 
   return (
     <div className="page-grid">
       <section className="page-heading">
-        <div>
-          <span className="eyebrow">Control de cultivos</span>
-          <h1>Monitoreo</h1>
-        </div>
-        <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
+        <div><span className="eyebrow">Control de cultivos</span><h1>Monitoreo</h1></div>
+        {canPlan && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
           <Plus size={16} /> Nueva recorrida
-        </button>
+        </button>}
       </section>
-
       <div className="page-toolbar">
         <div className="filter-bar">
           {STATUS_FILTER.map((s) => (
-            <button key={s} type="button"
-              className={`filter-chip ${filter === s ? 'filter-chip--active' : ''}`}
-              onClick={() => setFilter(s)}>
-              {s === 'Todos' ? 'Todos' : RUN_STATUS_ES[s] || s}
-            </button>
+            <button key={s} type="button" className={`filter-chip ${filter === s ? 'filter-chip--active' : ''}`}
+              onClick={() => setFilter(s)}>{s === 'Todos' ? 'Todos' : RUN_STATUS_ES[s] || s}</button>
           ))}
         </div>
-        <span style={{ fontSize: 13, color: '#64748b' }}>{visible.length} recorridas</span>
+        <span style={{ fontSize: 13, color: '#64748b' }}>
+          {visible.length} recorridas · {dataMode === 'live' ? 'Backend' : 'Demo'}
+        </span>
       </div>
-
-      {/* Table */}
+      {error && <div className="auth-error" role="alert">
+        {error} <button type="button" onClick={() => load()}>Reintentar</button>
+      </div>}
       <div className="data-table-wrapper">
         <div className="data-table">
-          {/* Header */}
           <div className="data-table__row data-table__row--head" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px' }}>
-            <span>Lote / Campaña</span>
-            <span>Fecha planificada</span>
-            <span>Estado</span>
-            <span>Asignado a</span>
-            <span />
+            <span>Lote / Campaña</span><span>Fecha planificada</span><span>Estado</span><span>Asignado a</span><span />
           </div>
-
-          {loading ? (
-            <div style={{ padding: '24px', color: '#94a3b8', fontSize: 13 }}>Cargando…</div>
-          ) : visible.length === 0 ? (
-            <div className="empty-state">
-              <Activity size={36} />
-              <h3>Sin recorridas</h3>
-              <p>Creá tu primera recorrida de monitoreo.</p>
-            </div>
-          ) : (
-            visible.map((run) => (
+          {loading ? <div style={{ padding: 24, fontSize: 13, color: '#64748b' }}>Cargando recorridas…</div>
+            : error ? null : visible.length === 0 ? (
+              <div className="empty-state">
+                <Activity size={36} />
+                <h3>Sin recorridas</h3>
+                <p>{dataMode === 'live' ? 'Todavía no hay recorridas registradas.' : 'Vista de demostración.'}</p>
+              </div>
+            ) : visible.map((run) => (
               <div key={run.id}>
-                <div
-                  className="data-table__row"
-                  style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px', cursor: 'pointer' }}
-                  onClick={() => toggleExpand(run.id)}
-                >
-                  <span>
-                    <strong>{run.CampaignField?.Field?.name || 'Lote'}</strong>
-                    {run.CampaignField?.CropType?.name && <> · {run.CampaignField.CropType.name}</>}
-                  </span>
+                <button type="button" className="data-table__row" aria-expanded={Boolean(expanded[run.id])}
+                  style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px', cursor: 'pointer', width: '100%', textAlign: 'left', border: 0, background: 'transparent' }}
+                  onClick={() => setExpanded((current) => ({ ...current, [run.id]: !current[run.id] }))}>
+                  <span><strong>{run.CampaignField?.Field?.name || 'Lote'}</strong></span>
                   <span>{run.scheduled_at ? new Date(run.scheduled_at).toLocaleDateString('es-AR') : '–'}</span>
                   <span><StatusBadge status={run.status} /></span>
                   <span>{run.assigned_to || 'Sin asignar'}</span>
-                  <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
-                </div>
-                {expanded[run.id] && <RunDetail run={run} onObsCreated={load} />}
+                  <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
+                </button>
+                {expanded[run.id] && <RunDetail run={run} onChanged={load} />}
               </div>
-            ))
-          )}
+            ))}
         </div>
       </div>
-
-      {showModal && (
-        <ScoutingRunFormModal isOpen onClose={() => setShowModal(false)} onCreated={() => { setShowModal(false); load(); }} />
-      )}
+      {showModal && <ScoutingRunFormModal isOpen onClose={() => setShowModal(false)}
+        onCreated={() => { setShowModal(false); void load(); }} />}
     </div>
   );
 }

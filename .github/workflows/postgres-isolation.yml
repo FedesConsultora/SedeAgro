@@ -36,6 +36,8 @@ jobs:
           npm run audit
           npm run check:syntax
           npm --workspace backend run test
+      - name: Build React frontend
+        run: npm --workspace frontend run build
       - name: Migrate disposable PostGIS database
         env:
           DATABASE_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test

@@ -9,6 +9,7 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
   const [form, setForm] = useState({ campaign_field_id: '', scheduled_at: '', status: 'planned', summary: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [optionsError, setOptionsError] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -17,8 +18,10 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
       try {
         const res = await api.campaignFields();
         setCampaignFields(res.data || []);
-      } catch {
-        setCampaignFields(mockData.campaignFields);
+        setOptionsError('');
+      } catch (err) {
+        setCampaignFields([]);
+        setOptionsError(err?.message || 'No se pudieron cargar los lotes de campaña.');
       }
     };
     load();
@@ -31,7 +34,7 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
     setSaving(true);
     setError('');
     try {
-      if (dataMode === 'mock') { onCreated(); return; }
+      if (dataMode === 'mock') { setError('El modo demo no guarda recorridas. Conectá el backend para continuar.'); return; }
       await api.createScoutingRun({
         campaign_field_id: form.campaign_field_id,
         scheduled_at: form.scheduled_at || undefined,
@@ -56,7 +59,7 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
       </>}
     >
       <form id="scouting-run-form" onSubmit={handleSubmit} style={{ display: 'contents' }}>
-        {error && <div className="auth-error" style={{ marginBottom: 0 }}><span>{error}</span></div>}
+        {(error || optionsError) && <div className="auth-error" style={{ marginBottom: 0 }} role="alert"><span>{error || optionsError}</span></div>}
 
         <label className="form-field">
           <span>Lote / Campaña *</span>

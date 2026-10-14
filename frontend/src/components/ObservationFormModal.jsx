@@ -20,7 +20,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, runId }) {
     setSaving(true);
     setError('');
     try {
-      if (dataMode === 'mock') { onCreated(); return; }
+      if (dataMode === 'mock') { setError('El modo demo no guarda observaciones. Conectá el backend para continuar.'); return; }
       await api.createObservation(runId, {
         observation_type: form.observation_type,
         severity: form.severity,

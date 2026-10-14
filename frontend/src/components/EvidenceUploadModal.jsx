@@ -2,44 +2,56 @@ import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 
-const MIME_OPTIONS = [
-  { value: 'image/jpeg', label: 'Foto (JPEG)' },
-  { value: 'image/png', label: 'Foto (PNG)' },
-  { value: 'audio/mpeg', label: 'Audio (MP3)' },
-  { value: 'application/pdf', label: 'Documento (PDF)' },
-  { value: 'video/mp4', label: 'Video (MP4)' }
-];
+const ACCEPTED = {
+  'image/jpeg': 'photo',
+  'image/png': 'photo',
+  'image/webp': 'photo',
+  'application/pdf': 'document'
+};
+const MAX_BYTES = 2 * 1024 * 1024;
+
+async function readBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.readAsDataURL(file);
+  });
+}
 
 export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId }) {
   const { api, dataMode } = useSession();
-  const [form, setForm] = useState({
-    evidence_type: 'photo',
-    original_filename: '',
-    mime_type: 'image/jpeg',
-    storage_key: '',
-    notes: ''
-  });
+  const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setSaving(true);
+  const handleSubmit = async (event) => {
+    event.preventDefault();
     setError('');
+    if (dataMode !== 'live') {
+      setError('La carga de evidencias requiere conectar el backend; el modo demo no guarda archivos.');
+      return;
+    }
+    if (!file || !Object.hasOwn(ACCEPTED, file.type)) {
+      setError('Seleccioná una foto JPEG/PNG/WebP o un documento PDF.');
+      return;
+    }
+    if (!file.size || file.size > MAX_BYTES) {
+      setError('El archivo debe tener contenido y pesar como máximo 2 MiB.');
+      return;
+    }
+    setSaving(true);
     try {
-      if (dataMode === 'mock') { onCreated(); return; }
+      const content_base64 = await readBase64(file);
       await api.createEvidence(observationId, {
-        evidence_type: form.evidence_type,
-        original_filename: form.original_filename,
-        mime_type: form.mime_type,
-        storage_key: form.storage_key,
-        notes: form.notes || undefined
+        kind: ACCEPTED[file.type],
+        mime_type: file.type,
+        original_name: file.name,
+        content_base64
       });
-      onCreated();
+      onCreated?.();
     } catch (err) {
-      setError(err?.message || 'Error al registrar evidencia');
+      setError(err?.message || 'No se pudo adjuntar la evidencia.');
     } finally {
       setSaving(false);
     }
@@ -48,54 +60,30 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Adjuntar evidencia"
       footer={<>
-        <button type="button" className="ghost-action" onClick={onClose}>Cancelar</button>
-        <button type="submit" form="evidence-form" className="primary-action" disabled={saving}>
-          {saving ? 'Guardando…' : 'Registrar evidencia'}
+        <button type="button" className="ghost-action" onClick={onClose} disabled={saving}>Cancelar</button>
+        <button type="submit" form="evidence-form" className="primary-action" disabled={saving || dataMode !== 'live' || !file}>
+          {saving ? 'Subiendo…' : 'Adjuntar archivo'}
         </button>
       </>}
     >
-      <form id="evidence-form" onSubmit={handleSubmit} style={{ display: 'contents' }}>
-        {error && <div className="auth-error" style={{ marginBottom: 0 }}><span>{error}</span></div>}
-
-        <div className="form-row">
-          <label className="form-field">
-            <span>Tipo de evidencia *</span>
-            <select id="evid-type" value={form.evidence_type} onChange={set('evidence_type')}>
-              <option value="photo">Foto</option>
-              <option value="audio">Audio</option>
-              <option value="document">Documento</option>
-              <option value="video">Video</option>
-            </select>
-          </label>
-          <label className="form-field">
-            <span>Formato</span>
-            <select id="evid-mime" value={form.mime_type} onChange={set('mime_type')}>
-              {MIME_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-        </div>
-
+      <form id="evidence-form" onSubmit={handleSubmit} style={{ display: 'grid', gap: 16 }}>
+        {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
         <label className="form-field">
-          <span>Nombre de archivo *</span>
-          <input id="evid-filename" value={form.original_filename} onChange={set('original_filename')} required
-            placeholder="foto-lote-4-manchas.jpg" />
+          <span>Archivo real *</span>
+          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+            disabled={saving || dataMode !== 'live'}
+            onChange={(e) => { setFile(e.target.files?.[0] || null); setError(''); }} required />
         </label>
-
-        <label className="form-field">
-          <span>URL / clave de almacenamiento *</span>
-          <input id="evid-key" value={form.storage_key} onChange={set('storage_key')} required
-            placeholder="https://... o s3://bucket/key" />
-        </label>
-
-        <label className="form-field">
-          <span>Notas adicionales</span>
-          <textarea id="evid-notes" value={form.notes} onChange={set('notes')} rows={2}
-            placeholder="Sector norte, cabecera izquierda…" />
-        </label>
-
-        <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(14,165,233,0.06)', fontSize: 12, color: '#0c4a6e' }}>
-          ℹ️ En esta versión, el archivo no se sube automáticamente. Registrá la URL o clave del archivo ya alojado.
-        </div>
+        {file && <p style={{ margin: 0, fontSize: 13 }}>
+          {file.name} · {(file.size / 1024).toFixed(0)} KiB
+        </p>}
+        <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
+          Fotos JPEG, PNG o WebP y documentos PDF. Hasta 2 MiB por archivo.
+          El archivo se guarda en la base privada de la empresa; no se envía a servicios externos.
+        </p>
+        {dataMode !== 'live' && <p role="status" style={{ color: '#9a3412', margin: 0 }}>
+          Modo demo: conectá el backend para guardar archivos.
+        </p>}
       </form>
     </Modal>
   );

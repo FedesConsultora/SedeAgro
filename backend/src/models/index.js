@@ -25,6 +25,7 @@ import { defineCampaignField } from './definitions/campaignField.model.js';
 import { defineScoutingRun } from './definitions/scoutingRun.model.js';
 import { defineScoutingObservation } from './definitions/scoutingObservation.model.js';
 import { defineEvidenceAsset } from './definitions/evidenceAsset.model.js';
+import { defineEvidenceBlob } from './definitions/evidenceBlob.model.js';
 import { defineWorkOrder } from './definitions/workOrder.model.js';
 import { defineWorkOrderAssignee } from './definitions/workOrderAssignee.model.js';
 import { defineRainfallEvent } from './definitions/rainfallEvent.model.js';
@@ -67,6 +68,7 @@ export const CampaignField = defineCampaignField(sequelize, DataTypes);
 export const ScoutingRun = defineScoutingRun(sequelize, DataTypes);
 export const ScoutingObservation = defineScoutingObservation(sequelize, DataTypes);
 export const EvidenceAsset = defineEvidenceAsset(sequelize, DataTypes);
+export const EvidenceBlob = defineEvidenceBlob(sequelize, DataTypes);
 export const WorkOrder = defineWorkOrder(sequelize, DataTypes);
 export const WorkOrderAssignee = defineWorkOrderAssignee(sequelize, DataTypes);
 export const RainfallEvent = defineRainfallEvent(sequelize, DataTypes);
@@ -110,6 +112,7 @@ export const models = {
   ScoutingRun,
   ScoutingObservation,
   EvidenceAsset,
+  EvidenceBlob,
   WorkOrder,
   WorkOrderAssignee,
   RainfallEvent,
