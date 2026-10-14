@@ -117,6 +117,53 @@ export function OfflineReconciliationPanel({ drafts, localLoading, localError, o
     }
   };
 
+  const recover = async (draft) => {
+    if (working || !scope || navigator.onLine === false || !window.confirm(
+      'La observación está aplicada, pero su fotografía no tiene confirmación. ¿Reenviar solo el mismo archivo local, sin crear otra observación?'
+    )) return;
+    const expectedScope = scope;
+    setWorking(draft.id);
+    setActionError('');
+    setNotice('');
+    try {
+      // The previously rendered snapshot never authorizes an upload: require
+      // a second actor-scoped receipt fetch immediately before recovery.
+      const response = await api.mySyncBatches();
+      const currentReceipts = parseMySyncReceipts(response, session);
+      if (scopeRef.current !== expectedScope) return;
+      const matches = currentReceipts.filter(row =>
+        row.idempotency_key === draft.idempotencyKey);
+      if (matches.length !== 1 ||
+          reconcileOfflineDraft(draft, matches, session).status !== 'photo_pending') {
+        throw new Error('El recibo actual no confirma esta observación y su fotografía pendiente.');
+      }
+      const result = await offlineQueue.recoverPhoto(session, draft.id, matches[0],
+        (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence));
+      if (scopeRef.current !== expectedScope) return;
+      if (result.status === 'uploaded') {
+        setNotice(result.replayed
+          ? 'La fotografía ya estaba guardada en el servidor. Se retiró la copia local.'
+          : 'Fotografía confirmada por el servidor. Se retiró la copia local.');
+      } else if (result.status === 'pending') {
+        setNotice('No se recibió confirmación de la fotografía. La copia local permanece cifrada.');
+      } else if (result.status === 'auth') {
+        setActionError('Se perdió la autorización. Iniciá sesión nuevamente; la fotografía no se eliminó.');
+      } else if (result.status === 'conflict') {
+        setActionError('El servidor rechazó la fotografía. Conservamos la copia original para revisión.');
+      } else {
+        setNotice('El envío no se realizó o la copia cambió en otra pestaña. Actualizá y revisá la cola.');
+      }
+      await onLocalChange?.();
+      await refresh();
+    } catch (error) {
+      if (scopeRef.current === expectedScope) {
+        setActionError(error?.message || 'No se pudo recuperar la fotografía. El archivo local permanece.');
+      }
+    } finally {
+      if (scopeRef.current === expectedScope) setWorking(null);
+    }
+  };
+
   if (!scope || dataMode !== 'live') return null;
 
   return (
@@ -179,14 +226,20 @@ export function OfflineReconciliationPanel({ drafts, localLoading, localError, o
                   disabled={Boolean(working)} onClick={() => void complete(item.draft)}>
                   {working === item.draft.id ? 'Verificando…' : 'Retirar copia confirmada'}
                 </button>}
+              {item.status === 'photo_pending' &&
+                <button type="button" className="ghost-action"
+                  disabled={Boolean(working) || navigator.onLine === false}
+                  onClick={() => void recover(item.draft)}>
+                  {working === item.draft.id ? 'Verificando fotografía…' : 'Reintentar solo fotografía'}
+                </button>}
             </li>;
           })}
         </ul>}
       </>}
       <p className="offline-reconciliation__description">
-        Esta verificación no reenvía datos, modifica GPS ni adjunta archivos.
-        Las fotografías requieren confirmación independiente: un recibo de observación
-        nunca autoriza eliminarlas del dispositivo.
+        Verificar recibos no reenvía datos ni modifica GPS. La acción explícita
+        «Reintentar solo fotografía» envía únicamente el archivo original a su observación
+        confirmada. Nunca se retira una foto sin acuse independiente del servidor.
       </p>
     </section>
   );
