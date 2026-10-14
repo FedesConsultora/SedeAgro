@@ -143,6 +143,9 @@ export function createApiClient(session, feedback) {
     advanceScoutingRun: (id, status) => request(`/scouting/runs/${id}/status`, { method: 'PATCH', body: { status } }),
     createObservation: (runId, body) => request(`/scouting/runs/${runId}/observations`, { method: 'POST', body }),
     createEvidence: (observationId, body) => request(`/scouting/observations/${observationId}/evidence`, { method: 'POST', body }),
+    submitOfflineEvidence: (observationId, body, options = {}) => request(`/scouting/observations/${observationId}/evidence`, {
+      method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
+    }),
     getEvidenceContent: (evidenceId) => request(`/scouting/evidence/${evidenceId}/content`),
     workOrders: () => request('/work-orders'),
     createWorkOrder: (body) => request('/work-orders', { method: 'POST', body }),
