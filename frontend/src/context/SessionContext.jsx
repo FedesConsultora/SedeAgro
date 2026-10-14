@@ -127,7 +127,11 @@ export function SessionProvider({ children }) {
       void offlineQueue.flush(
         session,
         (body) => api.submitSyncBatch(body, { signal: controller.signal }),
-        { force }
+        {
+          force,
+          sendEvidence: (observationId, body) =>
+            api.submitOfflineEvidence(observationId, body, { signal: controller.signal })
+        }
       ).catch((error) => {
         // Do not discard pending records if storage or HTTP fails.
         if (!disposed) console.warn('offline_sync_flush_failed', error?.message);
