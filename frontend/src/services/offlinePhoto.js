@@ -1,7 +1,7 @@
 // Offline field photos are bounded before entering encrypted IndexedDB.
-// Canvas re-encoding strips embedded EXIF/GPS metadata on compressed files.
-// Small originals retain their bytes, so users must be explicitly warned that
-// their source metadata may remain in unmodified JPEG/WebP photographs.
+// All new photos are re-encoded through Canvas to avoid copying source
+// EXIF/GPS metadata into offline drafts, regardless of original file size.
+// This does not sanitize old drafts already stored on devices.
 export const MAX_OFFLINE_PHOTO_BYTES = 512 * 1024;
 export const MAX_CAMERA_SOURCE_BYTES = 12 * 1024 * 1024;
 export const MAX_CAMERA_PIXELS = 40_000_000;
@@ -56,7 +56,7 @@ export function cameraPhotoPlan(file) {
       file.name.length > 180 || /[\\/\x00-\x1f\x7f]/.test(file.name)) {
     throw new Error('El nombre de la fotografía contiene caracteres inválidos.');
   }
-  return { compress: file.size > MAX_OFFLINE_PHOTO_BYTES, sourceBytes: file.size };
+  return { compress: file.size > MAX_OFFLINE_PHOTO_BYTES, sanitize: true, sourceBytes: file.size };
 }
 
 export function photoOutputName(sourceName) {
@@ -99,10 +99,10 @@ async function encodeJpeg(canvas, quality) {
 export async function readOfflinePhoto(file) {
   if (!file) return null;
   const plan = cameraPhotoPlan(file);
-  let output = file;
-  let converted = false;
-
-  if (plan.compress) {
+  let output;
+  // Privacy is fail closed: even a small original must be decoded and
+  // re-encoded; copying it would retain embedded GPS/EXIF/IPTC metadata.
+  if (plan.sanitize) {
     if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') {
       throw new Error('Este navegador no admite reducir fotos grandes. Elegí una de hasta 512 KiB.');
     }
@@ -130,7 +130,6 @@ export async function readOfflinePhoto(file) {
           const candidate = await encodeJpeg(canvas, quality);
           if (candidate.size > 0 && candidate.size <= MAX_OFFLINE_PHOTO_BYTES) {
             output = candidate;
-            converted = true;
             found = true;
             break;
           }
@@ -154,8 +153,8 @@ export async function readOfflinePhoto(file) {
 
   const encoded = await toBase64(output);
   const validated = validateOfflinePhoto({
-    original_name: converted ? photoOutputName(file.name) : file.name,
-    mime_type: converted ? 'image/jpeg' : file.type,
+    original_name: photoOutputName(file.name),
+    mime_type: 'image/jpeg',
     content_base64: encoded
   });
   if (validated.size_bytes !== output.size) {
@@ -164,6 +163,7 @@ export async function readOfflinePhoto(file) {
   return {
     ...validated,
     source_bytes: file.size,
-    resized: converted
+    resized: plan.compress,
+    sanitized: true
   };
 }
