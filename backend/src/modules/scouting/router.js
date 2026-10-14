@@ -31,6 +31,10 @@ const updateRunSchema = z.object({
   status: z.enum(['planned', 'in_progress', 'completed', 'cancelled']).optional(),
   summary: z.string().max(5000).nullable().optional()
 }).strict();
+const advanceStatusSchema = z.object({
+  status: z.enum(['in_progress', 'completed'])
+}).strict();
+
 const observationSchema = z.object({
   field_id: z.string().uuid().optional(), // accepted for older clients, never trusted
   observation_type: z.enum(['weed', 'pest', 'disease', 'phenology', 'nutrition', 'water', 'general']),
@@ -194,6 +198,23 @@ scoutingRouter.get('/evidence/:id/content', requireCapability('scouting.read'), 
     content_base64: Buffer.from(blob.content).toString('base64')
   } });
 }));
+
+// Assigned field operators can advance only their own runs. Planning, cancellation
+// and assignment remain limited to administrative/coordinator capabilities.
+scoutingRouter.patch('/runs/:id/status', requireCapability('scouting.observe'), validate(advanceStatusSchema),
+  asyncHandler(async (req, res) => {
+    const run = await findRun(req, req.params.id, true);
+    assertRunTransition(run.status, req.body.status);
+    if (req.body.status === 'in_progress') {
+      assertRunReadyToStart(run, run.assigned_to);
+      await verifyAssignee(req, run.assigned_to);
+    }
+    await run.update({
+      status: req.body.status,
+      ...(req.body.status === 'completed' ? { completed_at: new Date() } : {})
+    }, { transaction: req.dbTransaction });
+    res.json({ data: run });
+  }));
 
 scoutingRouter.patch('/runs/:id', requireCapability('scouting.plan'), validate(updateRunSchema), asyncHandler(async (req, res) => {
   const run = await findRun(req, req.params.id, true);
