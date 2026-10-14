@@ -12,7 +12,10 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
   const [error, setError] = useState('');
   const requestId = useRef(0);
 
-  useEffect(() => () => { requestId.current += 1; }, []);
+  useEffect(() => () => {
+    requestId.current += 1;
+    onBusyChange?.(false);
+  }, [onBusyChange]);
 
   const requestLocation = () => {
     if (disabled || loading) return;
@@ -25,7 +28,8 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
     const current = ++requestId.current;
     setLoading(true);
     onBusyChange?.(true);
-    navigator.geolocation.getCurrentPosition(
+    try {
+      navigator.geolocation.getCurrentPosition(
       position => {
         if (requestId.current !== current) return;
         try {
@@ -45,7 +49,14 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
         onBusyChange?.(false);
       },
       FIELD_GPS_OPTIONS
-    );
+      );
+    } catch (err) {
+      if (requestId.current === current) {
+        setError(fieldGpsErrorMessage(err));
+        setLoading(false);
+        onBusyChange?.(false);
+      }
+    }
   };
 
   return (
