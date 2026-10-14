@@ -12,6 +12,8 @@ import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, ass
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
 import { getPrivateEvidence, putPrivateEvidence } from './evidenceStorage.js';
 import { recordScoutingAudit } from './audit.js';
+import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
+import { shouldNotifyRunAssignment } from '../notifications/assignmentNotificationPolicy.js';
 
 export const scoutingRouter = Router();
 scoutingRouter.use(requireEntitlement('scouting'));
@@ -121,6 +123,11 @@ scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSch
     assertRunReadyToStart(null, req.body.assigned_to);
   }
   const run = await ScoutingRun.create(req.body, { transaction: req.dbTransaction });
+  if (shouldNotifyRunAssignment(null, run.assigned_to)) {
+    await createAssignmentNotification(req, {
+      entityType: 'scouting_run', entityId: run.id, userId: run.assigned_to
+    });
+  }
   await recordScoutingAudit(req, {
     runId: run.id,
     action: 'scouting.run.created',
@@ -353,6 +360,11 @@ scoutingRouter.patch('/runs/:id', requireCapability('scouting.plan'), validate(u
   const update = { ...req.body };
   if (req.body.status === 'completed') update.completed_at = new Date();
   await run.update(update, { transaction: req.dbTransaction });
+  if (shouldNotifyRunAssignment(previous.assigned_to, run.assigned_to)) {
+    await createAssignmentNotification(req, {
+      entityType: 'scouting_run', entityId: run.id, userId: run.assigned_to
+    });
+  }
   await recordScoutingAudit(req, {
     runId: run.id,
     action: 'scouting.run.updated',

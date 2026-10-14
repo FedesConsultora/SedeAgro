@@ -7,6 +7,7 @@ import {
   Field,
   Machinery,
   Membership,
+  User,
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderInput,
@@ -16,6 +17,8 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
+import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
+import { ORDER_RECIPIENT_ROLES } from '../notifications/assignmentNotificationPolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -147,16 +150,52 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
 }));
 
 workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), validate(assigneeSchema), asyncHandler(async (req, res) => {
+  // Serialize concurrent assignments for one order before checking membership
+  // or writing the relationship. With the unique DB key, replays cannot
+  // produce a second assignee or a second notification.
+  const order = await WorkOrder.findByPk(req.params.id, {
+    transaction: req.dbTransaction,
+    lock: req.dbTransaction.LOCK.UPDATE
+  });
+  if (!order) throw new HttpError(404, 'Orden de trabajo no encontrada.');
+
   const membership = await Membership.findOne({
-    where: { tenant_id: req.tenantId, user_id: req.body.user_id, status: 'active' },
+    where: {
+      tenant_id: req.tenantId,
+      user_id: req.body.user_id,
+      status: 'active',
+      role_code: { [Op.in]: ORDER_RECIPIENT_ROLES }
+    },
+    include: [{
+      model: User,
+      attributes: ['id'],
+      where: { status: 'active' },
+      required: true
+    }],
     transaction: req.dbTransaction
   });
-  if (!membership) throw new HttpError(422, 'El responsable debe ser un miembro activo de esta organización.');
-  const assignee = await WorkOrderAssignee.create({
-    ...req.body,
-    work_order_id: req.params.id
-  }, { transaction: req.dbTransaction });
-  res.status(201).json({ data: assignee });
+  if (!membership) {
+    throw new HttpError(422, 'El responsable debe ser un usuario activo con acceso a órdenes de esta organización.');
+  }
+
+  const [assignee, created] = await WorkOrderAssignee.findOrCreate({
+    where: {
+      tenant_id: req.tenantId,
+      work_order_id: order.id,
+      user_id: req.body.user_id
+    },
+    defaults: { responsibility: req.body.responsibility },
+    transaction: req.dbTransaction
+  });
+  if (!created && assignee.responsibility !== req.body.responsibility) {
+    throw new HttpError(409, 'El responsable ya tiene otra función en esta orden.');
+  }
+  if (created) {
+    await createAssignmentNotification(req, {
+      entityType: 'work_order', entityId: order.id, userId: assignee.user_id
+    });
+  }
+  res.status(created ? 201 : 200).json({ data: assignee, replayed: !created });
 }));
 
 workOrdersRouter.post('/:id/inputs', requireCapability('orders.write'), validate(inputSchema), asyncHandler(async (req, res) => {
