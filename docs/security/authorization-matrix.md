@@ -1,0 +1,52 @@
+# Matriz de autorización de SedeAgro — Bloque 0B
+
+**Estado:** aplicada a los endpoints de negocio en backend. La autorización se comprueba en el servidor, independientemente de lo que muestre la UI.
+
+## Invariantes de acceso
+
+1. El usuario debe enviar un JWT válido; `requireAuth` comprueba su membresía activa en el tenant resuelto.
+2. `requireCapability` valida que el rol de la membresía coincida con el rol cargado y que el actor y el tenant coincidan con la sesión.
+3. El entitlement del módulo **no reemplaza** al permiso de acción. El acceso se evalúa como autenticación + tenant + entitlement (si corresponde) + capability.
+4. `tenant_admin` tiene todos los capabilities dentro de su propio tenant. Un `platform_admin` no obtiene capacidades de empresa por ser administrador global.
+5. Roles desconocidos, suspendidos, o no coincidentes se rechazan por defecto (HTTP 403).
+6. Los permisos se definen por ahora en `src/infra/http/middlewares/requireCapability.js`. Las tablas `permissions` y `role_permissions` existentes **no** alimentan aún este middleware; no cambiar permisos en base de datos esperando que autoricen una ruta.
+7. La protección RLS existente debe validarse con PostgreSQL y dos tenants reales antes de un piloto.
+
+## Matriz de acceso por rol
+
+| Área | Admin tenant | Coordinador agronómico | Monitoreador | Contratista | Productor |
+| --- | --- | --- | --- | --- | --- |
+| Miembros (directorio) | Leer | Leer | No | No | No |
+| GIS / lotes | Leer/escribir | Leer/escribir | Leer | No | No |
+| Lluvia y riego | Registrar | Registrar | Registrar | No | No |
+| Campañas | Leer/escribir | Leer/escribir | Leer | No | No |
+| Recorridas | Planificar/leer | Planificar/leer | Leer/cargar observaciones y evidencias | No | No |
+| Órdenes de trabajo | Crear/aprobar/ejecutar | Crear/aprobar/ejecutar | No | Ver y ejecutar **solo las asignadas** | No |
+| Equipos / activos | Leer/escribir | Leer/escribir | No | No | No |
+| Imagery | Leer/escribir (si habilitado) | Leer/escribir (si habilitado) | No | No | No |
+| Reportes | Leer/solicitar | Leer/solicitar | No | No | No |
+| Sync | Ver/enviar | Ver/enviar | Solo enviar | No | No |
+| Notificaciones personales | Propias | Propias | Propias | Propias | Propias |
+
+**Restricción deliberada:** el modelo actual no tiene permisos por establecimiento, cliente o lote asignado al productor. `producer_viewer` no puede leer datos agronómicos de toda la empresa hasta que exista esa asociación. `/auth/me` y sus notificaciones personales continúan disponibles. No confundir con una funcionalidad ya finalizada.
+
+## Flujo protegido de órdenes
+
+```text
+draft → pending_approval → approved → assigned → in_progress → completed
+          ↓               (si existe un responsable activo)
+         draft
+```
+
+Una orden no se puede crear en estado distinto de `draft`. El administrador de empresa o coordinador puede transicionar por las aristas permitidas y cancelar órdenes no terminales. El contratista solo puede pasar `assigned → in_progress → completed` si tiene una asignación vinculada al tenant activo. Una orden en `completed` o `cancelled` es terminal.
+
+Se utiliza un bloqueo de escritura de fila al cambiar estado para serializar las transiciones. No hay todavía firmas de aprobación ni bitácora de transiciones: el campo `approved_at` existente no sustituye una auditoría formal.
+
+## Pruebas y límites
+
+- Pruebas unitarias del mapeo rol/capability, rechazo de otros tenants, transiciones y contratistas.
+- Prueba estática de 48 rutas de negocio: toda ruta debe declarar un `requireCapability` explícito.
+- Regresión sobre consulta de notificaciones personales y directorio de miembros.
+- **Pendiente obligatorio:** ejecutar migraciones y pruebas de integración PostgreSQL/PostGIS/RLS con tenants A y B, incluidos cambios de membresía entre solicitudes, inserciones de referencias cruzadas y comprobación de visibilidad para cada actor.
+- **Pendiente de UX:** adaptar controles del frontend a los capabilities server-side y separar claramente el modo mock del modo real.
+- **Pendiente de negocio:** restringir recorridas a responsables por lote/campaña y definir grants para clientes/productores y asesores externos; hasta entonces la lectura del monitoreador se limita por tenant y rol, no por campo individual.
