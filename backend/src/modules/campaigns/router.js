@@ -55,6 +55,20 @@ campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write')
   res.status(201).json({ data: campaignField });
 }));
 
+// All campaign-fields (for scouting run selectors etc.)
+campaignsRouter.get('/fields', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
+  const cfs = await CampaignField.findAll({
+    include: [
+      { model: Field, attributes: ['id', 'name', 'area_hectares'] },
+      { model: CropType, attributes: ['id', 'name', 'code'] },
+      { model: Campaign, attributes: ['id', 'name', 'season_year', 'status'] }
+    ],
+    order: [['created_at', 'DESC']],
+    transaction: req.dbTransaction
+  });
+  res.json({ data: cfs });
+}));
+
 campaignsRouter.get('/:id', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
   const campaign = await Campaign.findByPk(req.params.id, {
     include: [{
@@ -76,20 +90,6 @@ campaignsRouter.patch('/:id', requireCapability('campaigns.write'), validate(cam
   if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
   await campaign.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: campaign });
-}));
-
-// All campaign-fields (for scouting run selectors etc.)
-campaignsRouter.get('/fields', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
-  const cfs = await CampaignField.findAll({
-    include: [
-      { model: Field, attributes: ['id', 'name', 'area_hectares'] },
-      { model: CropType, attributes: ['id', 'name', 'code'] },
-      { model: Campaign, attributes: ['id', 'name', 'season_year', 'status'] }
-    ],
-    order: [['created_at', 'DESC']],
-    transaction: req.dbTransaction
-  });
-  res.json({ data: cfs });
 }));
 
 campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.write'), validate(campaignFieldSchema.partial()), asyncHandler(async (req, res) => {
