@@ -58,3 +58,23 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: npm --workspace backend run test:db
+
+  browser-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install project and pinned browser-test runner
+        run: |
+          npm ci
+          npm install --no-save --package-lock=false playwright@1.58.2
+      - name: Install Chromium for offline browser gate
+        run: npx playwright install chromium --with-deps
+      - name: Build production SPA
+        run: npm --workspace frontend run build
+      - name: Real-browser IndexedDB migration, encryption and offline reload
+        run: node frontend/test/offlineBrowser.mjs
