@@ -73,18 +73,23 @@ export function createOfflineQueue({
       throw new Error('Esta operación pertenece a otra sesión.');
     }
     if (inFlightScopes.has(scope)) return false;
-    return withLock(scope, async () => {
-      if (inFlightScopes.has(scope)) return false;
-      const current = await store.get(id);
-      if (!current || current.scope !== scope) return false;
-      const verified = reconcileOfflineDraft(current, [receipt], session);
-      if (verified.status !== 'confirmed' || current.evidence) {
-        throw new Error('No hay un recibo completo y seguro para retirar este borrador.');
-      }
-      await store.delete(id);
-      notify();
-      return true;
-    });
+    inFlightScopes.add(scope);
+    try {
+      const result = await withLock(scope, async () => {
+        const current = await store.get(id);
+        if (!current || current.scope !== scope) return false;
+        const verified = reconcileOfflineDraft(current, [receipt], session);
+        if (verified.status !== 'confirmed' || current.evidence) {
+          throw new Error('No hay un recibo completo y seguro para retirar este borrador.');
+        }
+        await store.delete(id);
+        notify();
+        return true;
+      });
+      return result === true;
+    } finally {
+      inFlightScopes.delete(scope);
+    }
   }
 
   async function flush(session, send, { force = false, sendEvidence = null } = {}) {
