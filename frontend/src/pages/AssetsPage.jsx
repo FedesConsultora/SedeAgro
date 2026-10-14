@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Tractor, Box, ShieldAlert, CheckCircle2, AlertTriangle, Plus, Trash2, Edit3 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Tractor, Box, ShieldAlert, CheckCircle2, AlertTriangle, Plus } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { extractCollection } from '../services/useTenantCollection.js';
 
 const STATUS_ES = { active: 'Activo', maintenance: 'Mantenimiento', inactive: 'Inactivo', archived: 'Archivado' };
 const STATUS_COLORS = { active: 'green', maintenance: 'amber', inactive: 'slate', archived: 'gray' };
@@ -36,34 +38,44 @@ export function AssetsPage() {
   const [machinery, setMachinery] = useState([]);
   const [inputs, setInputs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState({ machinery: null, inputs: null });
+  const requestId = useRef(0);
   const [showMachineryModal, setShowMachineryModal] = useState(false);
   const [showInputModal, setShowInputModal] = useState(false);
 
   const loadData = async () => {
+    const currentId = ++requestId.current;
     setLoading(true);
+    setErrors({ machinery: null, inputs: null });
+    setMachinery([]);
+    setInputs([]);
     if (dataMode === 'mock') {
       setMachinery(mockData.machinery || []);
       setInputs(mockData.inputs || []);
       setLoading(false);
       return;
     }
-    try {
-      const [machineryRes, inputsRes] = await Promise.all([
-        api.machinery(),
-        api.inputs()
-      ]);
-      setMachinery(machineryRes.data || []);
-      setInputs(inputsRes.data || []);
-    } catch {
-      setMachinery(mockData.machinery || []);
-      setInputs(mockData.inputs || []);
-    } finally {
-      setLoading(false);
+    const results = await Promise.allSettled([api.machinery(), api.inputs()]);
+    if (currentId !== requestId.current) return;
+    const nextErrors = { machinery: null, inputs: null };
+    for (let index = 0; index < results.length; index += 1) {
+      const key = index === 0 ? 'machinery' : 'inputs';
+      try {
+        if (results[index].status === 'rejected') throw results[index].reason;
+        const rows = extractCollection(results[index].value, key === 'machinery' ? 'maquinaria' : 'insumos');
+        if (index === 0) setMachinery(rows);
+        else setInputs(rows);
+      } catch (error) {
+        nextErrors[key] = error?.message || 'Error de consulta del recurso.';
+      }
     }
+    setErrors(nextErrors);
+    setLoading(false);
   };
 
   useEffect(() => {
-    loadData();
+    void loadData();
+    return () => { requestId.current += 1; };
   }, [api, dataMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreateMachinery = async (body) => {
@@ -131,6 +143,7 @@ export function AssetsPage() {
         </div>
       </section>
 
+      {dataMode === 'mock' && <p className="resource-demo-note" role="status">Recursos de demostración.</p>}
       {/* Tabs Menu */}
       <nav className="admin-tabs" style={{ background: 'rgba(255, 255, 255, 0.4)' }}>
         <button
@@ -153,19 +166,21 @@ export function AssetsPage() {
 
       {/* Tab Panel */}
       <div className="admin-panel">
-        {loading ? (
+        {errors[activeTab] && <ResourceLoadNotice
+          title={activeTab === 'machinery' ? 'maquinaria' : 'insumos'}
+          error={errors[activeTab]} onRetry={() => void loadData()} />}
+        {errors[activeTab] ? null : loading ? (
           <div className="empty-state"><span>Cargando recursos…</span></div>
         ) : activeTab === 'machinery' ? (
           /* MACHINERY VIEW */
           <div className="admin-tab-content" style={{ padding: 0 }}>
             <div className="admin-table">
-              <div className="admin-table__head" style={{ gridTemplateColumns: '2fr 1fr 1.5fr 1fr 80px' }}>
+              <div className="admin-table__head" style={{ gridTemplateColumns: '2fr 1fr 1.5fr 1fr' }}>
                 <span>Maquinaria / Sensor</span>
                 <span>Tipo</span>
                 <span>Marca y modelo</span>
                 <span>Estado</span>
-                <span>Acciones</span>
-              </div>
+               </div>
               {machinery.length === 0 ? (
                 <div className="empty-state" style={{ padding: 48 }}>
                   <Tractor size={32} />
@@ -174,7 +189,7 @@ export function AssetsPage() {
                 </div>
               ) : (
                 machinery.map((m) => (
-                  <div key={m.id} className="admin-table__row" style={{ gridTemplateColumns: '2fr 1fr 1.5fr 1fr 80px' }}>
+                  <div key={m.id} className="admin-table__row" style={{ gridTemplateColumns: '2fr 1fr 1.5fr 1fr' }}>
                     <span>
                       <strong>{m.name}</strong>
                       {m.serial_number && <div className="admin-table__sub">S/N: {m.serial_number}</div>}
@@ -188,14 +203,7 @@ export function AssetsPage() {
                         {STATUS_ES[m.status] || m.status}
                       </span>
                     </span>
-                    <span className="admin-table__actions">
-                      <button type="button" className="ghost-action ghost-action--sm" title="Editar">
-                        <Edit3 size={12} />
-                      </button>
-                      <button type="button" className="ghost-action ghost-action--sm ghost-action--danger" title="Archivar">
-                        <Trash2 size={12} />
-                      </button>
-                    </span>
+
                   </div>
                 ))
               )}
@@ -205,13 +213,12 @@ export function AssetsPage() {
           /* INPUTS VIEW */
           <div className="admin-tab-content" style={{ padding: 0 }}>
             <div className="admin-table">
-              <div className="admin-table__head" style={{ gridTemplateColumns: '2.5fr 1.5fr 1.5fr 1fr 80px' }}>
+              <div className="admin-table__head" style={{ gridTemplateColumns: '2.5fr 1.5fr 1.5fr 1fr' }}>
                 <span>Insumo</span>
                 <span>Categoría</span>
                 <span>Ingrediente Activo</span>
                 <span>Unidad</span>
-                <span>Acciones</span>
-              </div>
+               </div>
               {inputs.length === 0 ? (
                 <div className="empty-state" style={{ padding: 48 }}>
                   <Box size={32} />
@@ -220,21 +227,14 @@ export function AssetsPage() {
                 </div>
               ) : (
                 inputs.map((inp) => (
-                  <div key={inp.id} className="admin-table__row" style={{ gridTemplateColumns: '2.5fr 1.5fr 1.5fr 1fr 80px' }}>
+                  <div key={inp.id} className="admin-table__row" style={{ gridTemplateColumns: '2.5fr 1.5fr 1.5fr 1fr' }}>
                     <strong>{inp.name}</strong>
                     <span>
                       <span className="status-badge status-badge--blue">{CATEGORIES_ES[inp.category] || inp.category}</span>
                     </span>
                     <span className="admin-table__muted">{inp.active_ingredient || '–'}</span>
                     <span style={{ fontFamily: 'monospace' }}>{inp.unit}</span>
-                    <span className="admin-table__actions">
-                      <button type="button" className="ghost-action ghost-action--sm" title="Editar">
-                        <Edit3 size={12} />
-                      </button>
-                      <button type="button" className="ghost-action ghost-action--sm ghost-action--danger" title="Eliminar">
-                        <Trash2 size={12} />
-                      </button>
-                    </span>
+
                   </div>
                 ))
               )}
