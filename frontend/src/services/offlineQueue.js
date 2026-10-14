@@ -63,7 +63,7 @@ export function createOfflineQueue({
     notify();
   }
 
-  async function flush(session, send, { force = false } = {}) {
+  async function flush(session, send, { force = false, sendEvidence = null } = {}) {
     const scope = sessionScope(session);
     if (!scope || !isOnline()) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
     if (inFlightScopes.has(scope)) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
@@ -91,6 +91,26 @@ export function createOfflineQueue({
                   op.entity_client_id === item.body.operations[index].entity_client_id &&
                   typeof op.result?.observation_id === 'string')) {
               throw new Error('La confirmación de sincronización no fue completa.');
+            }
+            if (item.evidence) {
+              const operation = receipt.data.operations[0];
+              const observationId = operation.result.observation_id;
+              // The observation may have reached PostgreSQL before a disconnect.
+              // Persist that partial success so the user can distinguish a
+              // photo conflict from an entirely unsent observation.
+              const current = await store.get(item.id);
+              if (!current) continue; // discarded during HTTP
+              await store.put({ ...current, syncedObservationId: observationId });
+              notify();
+              if (typeof sendEvidence !== 'function') {
+                throw new Error('El envío de fotografías no está disponible en este cliente.');
+              }
+              const uploaded = await sendEvidence(observationId, item.evidence);
+              if (uploaded?.data?.client_upload_id !== item.evidence.client_upload_id ||
+                  uploaded?.data?.scouting_observation_id !== observationId ||
+                  uploaded?.data?.size_bytes === undefined) {
+                throw new Error('No se recibió confirmación válida del archivo adjunto.');
+              }
             }
             await store.delete(item.id);
             summary.sent += 1;
