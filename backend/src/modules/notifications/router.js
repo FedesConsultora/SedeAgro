@@ -6,7 +6,7 @@ export const notificationsRouter = Router();
 
 notificationsRouter.get('/', asyncHandler(async (req, res) => {
   const notifications = await Notification.findAll({
-    where: { user_id: req.auth.user.id },
+    where: { tenant_id: req.tenantId, user_id: req.auth.user.id },
     order: [['created_at', 'DESC']],
     limit: 50,
     transaction: req.dbTransaction

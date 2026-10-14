@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, LogOut, Menu, Search, Settings, ShieldCheck, User as UserIcon, Users } from 'lucide-react';
+import { LogOut, Menu, Search, Settings, ShieldCheck, Users } from 'lucide-react';
 import { ConnectionPanel } from './ConnectionPanel.jsx';
+import { NotificationCenter } from './NotificationCenter.jsx';
+import { FieldSyncStatus } from './FieldSyncStatus.jsx';
 import { useSession } from '../context/SessionContext.jsx';
 
 function UserMenu({ activeView, onViewChange }) {
@@ -153,9 +155,8 @@ export function Topbar({ onMenuToggle, activeView, onViewChange }) {
         <input placeholder="Buscar lote, campaña u orden" />
       </div>
       <div className="topbar__actions">
-        <button className="icon-button" type="button" title="Notificaciones">
-          <Bell size={18} />
-        </button>
+        <FieldSyncStatus onViewChange={onViewChange} />
+        <NotificationCenter onViewChange={onViewChange} />
         <ConnectionPanel />
         <UserMenu activeView={activeView} onViewChange={onViewChange} />
       </div>
