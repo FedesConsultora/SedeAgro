@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { CampaignFormModal } from '../components/CampaignFormModal.jsx';
 import { AssignFieldModal } from '../components/AssignFieldModal.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { useTenantCollection } from '../services/useTenantCollection.js';
 
 const STATUS_ES = { planned: 'Planificado', active: 'Activo', closed: 'Cerrado', archived: 'Archivado' };
 const STATUS_FILTER = ['Todos', 'active', 'planned', 'closed'];
@@ -12,7 +14,7 @@ function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{STATUS_ES[status] || status}</span>;
 }
 
-function CampaignCard({ campaign, onUpdated }) {
+function CampaignCard({ campaign, onUpdated, canEdit }) {
   const [expanded, setExpanded] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const fields = campaign.CampaignFields || [];
@@ -44,14 +46,14 @@ function CampaignCard({ campaign, onUpdated }) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <StatusBadge status={campaign.status} />
-          <button
+          {canEdit && <button
             type="button"
             className="ghost-action"
             style={{ minHeight: 34, padding: '0 12px', fontSize: 12 }}
             onClick={(e) => { e.stopPropagation(); setShowAssignModal(true); }}
           >
             <Plus size={14} /> Asignar lote
-          </button>
+          </button>}
           {expanded ? <ChevronDown size={18} style={{ color: '#64748b' }} /> : <ChevronRight size={18} style={{ color: '#64748b' }} />}
         </div>
       </div>
@@ -81,7 +83,7 @@ function CampaignCard({ campaign, onUpdated }) {
         </div>
       )}
 
-      {showAssignModal && (
+      {canEdit && showAssignModal && (
         <AssignFieldModal
           isOpen
           campaignId={campaign.id}
@@ -95,26 +97,15 @@ function CampaignCard({ campaign, onUpdated }) {
 }
 
 export function CampaignsPage() {
-  const { api, dataMode } = useSession();
-  const [campaigns, setCampaigns] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { api, dataMode, session } = useSession();
+  const canEdit = dataMode === 'live' &&
+    ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const { records: campaigns, loading, error, reload } = useTenantCollection({
+    api, method: 'campaigns', dataMode, tenantId: session?.tenant?.id,
+    mockRecords: mockData.campaigns, title: 'campañas'
+  });
   const [filter, setFilter] = useState('Todos');
   const [showModal, setShowModal] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    if (dataMode === 'mock') { setCampaigns(mockData.campaigns); setLoading(false); return; }
-    try {
-      const res = await api.campaigns();
-      setCampaigns(res.data || []);
-    } catch {
-      setCampaigns(mockData.campaigns);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, [api, dataMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = filter === 'Todos' ? campaigns : campaigns.filter((c) => c.status === filter);
 
@@ -125,9 +116,9 @@ export function CampaignsPage() {
           <span className="eyebrow">Planificación temporal</span>
           <h1>Campañas</h1>
         </div>
-        <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
+        {canEdit && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
           <Plus size={16} /> Nueva campaña
-        </button>
+        </button>}
       </section>
 
       <div className="page-toolbar">
@@ -143,25 +134,27 @@ export function CampaignsPage() {
         <span style={{ fontSize: 13, color: '#64748b' }}>{visible.length} campañas</span>
       </div>
 
-      {loading ? (
+      {error && <ResourceLoadNotice title="campañas" error={error} onRetry={reload} />}
+      {dataMode === 'mock' && <p className="resource-demo-note" role="status">Campañas de demostración.</p>}
+      {error ? null : loading ? (
         <div className="empty-state"><span>Cargando…</span></div>
       ) : visible.length === 0 ? (
         <div className="empty-state">
           <Sprout size={40} />
           <h3>Sin campañas</h3>
           <p>Creá tu primera campaña para organizar los cultivos por temporada.</p>
-          <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
+          {canEdit && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
             <Plus size={16} /> Nueva campaña
-          </button>
+          </button>}
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
-          {visible.map((c) => <CampaignCard key={c.id} campaign={c} onUpdated={load} />)}
+          {visible.map((c) => <CampaignCard key={c.id} campaign={c} canEdit={canEdit} onUpdated={reload} />)}
         </div>
       )}
 
-      {showModal && (
-        <CampaignFormModal isOpen onClose={() => setShowModal(false)} onCreated={() => { setShowModal(false); load(); }} />
+      {canEdit && showModal && (
+        <CampaignFormModal isOpen onClose={() => setShowModal(false)} onCreated={() => { setShowModal(false); reload(); }} />
       )}
     </div>
   );
