@@ -37,6 +37,14 @@ function mergeTenantWhere(where, tenantId) {
 }
 
 export function installTenantHooks() {
+  // Sequelize validates required columns before beforeCreate. Without this hook,
+  // tenant-scoped POSTs fail "tenant_id cannot be null" before insertion.
+  sequelize.addHook('beforeValidate', (instance, options) => {
+    const tenantId = getTenantId();
+    if (!tenantId || options.skipTenantScope || !isTenantScoped(instance.constructor)) return;
+    instance.set('tenant_id', tenantId);
+  });
+
   sequelize.addHook('beforeFind', (options) => {
     const tenantId = getTenantId();
     if (!tenantId || options.skipTenantScope || !isTenantScoped(options.model)) return;
