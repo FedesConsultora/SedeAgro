@@ -35,6 +35,8 @@ jobs:
         run: |
           npm run audit
           npm run check:syntax
+          bash -n scripts/verify-pilot-staging.sh
+          node --check scripts/verify-frontend-headers.mjs
           npm --workspace backend run test
       - name: Test offline browser queue
         run: npm --workspace frontend run test
