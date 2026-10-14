@@ -58,7 +58,7 @@ export function createApiClient(session, feedback) {
     feedback?.startLoading();
 
     try {
-      const { body: requestBody, headers, silent, ...requestOptions } = options;
+      const { body: requestBody, headers, silent, preserveSessionOnAuthError = false, ...requestOptions } = options;
       const hasBody = requestBody !== undefined;
       const response = await fetch(`${API_URL}${path}`, {
         ...requestOptions,
@@ -78,7 +78,8 @@ export function createApiClient(session, feedback) {
         const normalized = normalizeApiError(response.status, responseBody, requestId);
 
         // Auto-logout on stale session or deleted tenant
-        if (response.status === 401 || (response.status === 404 && normalized.message.includes('Tenant no encontrado'))) {
+        if (!preserveSessionOnAuthError && (response.status === 401 ||
+            (response.status === 404 && normalized.message.includes('Tenant no encontrado')))) {
           localStorage.removeItem('sedeagro.session');
           localStorage.setItem('sedeagro.dataMode', 'mock');
           window.location.reload();
@@ -165,7 +166,9 @@ export function createApiClient(session, feedback) {
     createSatelliteLayer: (body) => request('/imagery/layers', { method: 'POST', body }),
     syncBatches: () => request('/sync/batches'),
     mySyncBatches: () => request('/sync/my-batches'),
-    submitSyncBatch: (body) => request('/sync/batches', { method: 'POST', body }),
+    submitSyncBatch: (body, options = {}) => request('/sync/batches', {
+      method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
+    }),
     notifications: () => request('/notifications'),
     markNotificationRead: (notificationId) => request(`/notifications/${notificationId}/read`, { method: 'PATCH' }),
     // Platform administration
