@@ -1,18 +1,20 @@
 import { Membership, Role, User } from '../../../models/index.js';
-import { env } from '../../../config/env.js';
+import { bearerToken } from '../../security/securityGuards.js';
 import { setActorId } from '../../../core/tenantContext.js';
 import { verifySession } from '../../../utils/jwt.js';
 import { HttpError } from '../../../utils/http.js';
 
 export async function requireAuth(req, _res, next) {
-  // Skip authentication checks in development environment for easier testing
-  if (!env.isProd) return next();
   try {
-    const header = req.headers.authorization || '';
-    const [, token] = header.match(/^Bearer\s+(.+)$/i) || [];
-    if (!token) throw new HttpError(401, 'Token requerido.');
+    const token = bearerToken(req.headers?.authorization);
+    if (!token) throw new HttpError(401, 'Token requerido o encabezado Bearer inválido.');
 
-    const payload = verifySession(token);
+    let payload;
+    try {
+      payload = verifySession(token);
+    } catch {
+      throw new HttpError(401, 'Token inválido o expirado.');
+    }
     if (payload.tenant_id !== req.tenantId) {
       throw new HttpError(403, 'El token no corresponde al tenant activo.');
     }

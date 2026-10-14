@@ -1,12 +1,14 @@
 import { Umzug, SequelizeStorage } from 'umzug';
 import { sequelize } from '../../core/db.js';
 import '../../models/index.js';
+import { demoSeedEnabled } from './seedPolicy.js';
 
 const command = process.argv[2] || 'up';
 
 const umzug = new Umzug({
   migrations: {
-    glob: 'db/seeders/*.js'
+    // Only global catalogs are seeded by default; demo data is explicit opt-in.
+    glob: demoSeedEnabled() ? 'db/seeders/*.js' : 'db/seeders/*_seed_global_*.js'
   },
   context: sequelize.getQueryInterface(),
   storage: new SequelizeStorage({ sequelize, tableName: 'sequelize_seeders' }),

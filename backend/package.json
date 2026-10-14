@@ -13,7 +13,8 @@
     "seed": "node src/infra/db/seed.js up",
     "seed:down": "node src/infra/db/seed.js down",
     "db:prepare": "npm run migrate && npm run seed",
-    "audit:raw-sql": "node scripts/audit-raw-sql.mjs"
+    "audit:raw-sql": "node scripts/audit-raw-sql.mjs",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
