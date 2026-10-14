@@ -9,10 +9,10 @@ import { guidanceForDraft, queueSummary } from '../src/services/offlineConflictG
 test('field camera accepts compatible 12MiB sources but preserves the 512KiB encrypted draft cap', () => {
   assert.deepEqual(cameraPhotoPlan({
     name: 'campo.jpg', type: 'image/jpeg', size: MAX_OFFLINE_PHOTO_BYTES
-  }), { compress: false, sourceBytes: MAX_OFFLINE_PHOTO_BYTES });
+  }), { compress: false, sanitize: true, sourceBytes: MAX_OFFLINE_PHOTO_BYTES });
   assert.deepEqual(cameraPhotoPlan({
     name: 'campo.png', type: 'image/png', size: MAX_CAMERA_SOURCE_BYTES
-  }), { compress: true, sourceBytes: MAX_CAMERA_SOURCE_BYTES });
+  }), { compress: true, sanitize: true, sourceBytes: MAX_CAMERA_SOURCE_BYTES });
   assert.throws(() => cameraPhotoPlan({
     name: 'huge.jpg', type: 'image/jpeg', size: MAX_CAMERA_SOURCE_BYTES + 1
   }), /12 MiB/i);
