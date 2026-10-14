@@ -124,7 +124,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   }, [loadLocal]);
 
   const sendPending = async () => {
-    if (dataMode !== 'live' || !online) return;
+    if (dataMode !== 'live' || !online || focus.mode === 'invalid') return;
     // Background queue flush has scope-level semantics. A screen filter never
     // silently narrows transmission and must not imply selective delivery.
     if (focus.mode === 'run' && !window.confirm(
@@ -208,7 +208,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {dataMode === 'live' && <button type="button" className="primary-action"
-            disabled={!online || sending || pendingCount === 0}
+            disabled={!online || sending || pendingCount === 0 || focus.mode === 'invalid'}
             onClick={() => void sendPending()}>
             <Send size={15}/> {sending ? 'Enviando…' : focus.mode === 'run' ? 'Enviar todos mis pendientes' : 'Enviar pendientes'}
           </button>}
