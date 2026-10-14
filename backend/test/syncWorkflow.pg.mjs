@@ -194,16 +194,33 @@ test('offline observation batches apply exactly once, deny revoked resources and
     assert.ok(!JSON.stringify(audits.json.data).includes('Sensitive raw scouting notes'));
     assert.equal((await request(`/scouting/runs/${run}/audit`)).status, 403);
 
+    // Two simultaneous mobile retries with the same key must produce one
+    // observation, even if requests reach separate transaction connections.
+    const concurrentBody = {
+      ...body,
+      idempotency_key: randomUUID(),
+      operations: [operation()]
+    };
+    const simultaneous = await Promise.all([
+      request('/sync/batches', 'scout', 'POST', concurrentBody),
+      request('/sync/batches', 'scout', 'POST', concurrentBody)
+    ]);
+    assert.deepEqual(simultaneous.map((item) => item.status).sort(), [200, 201],
+      JSON.stringify(simultaneous));
+    assert.equal(simultaneous[0].json.data.id, simultaneous[1].json.data.id);
+    assert.equal(simultaneous[0].json.data.operations[0].result.observation_id,
+      simultaneous[1].json.data.operations[0].result.observation_id);
+
     await owner.query("UPDATE scouting_runs SET status = 'completed' WHERE id = $1", [run]);
     assert.equal((await request('/sync/batches', 'scout', 'POST', {
       ...body, idempotency_key: randomUUID(), operations: [operation()]
     })).status, 409);
     assert.equal((await owner.query(
       'SELECT count(*)::int AS n FROM scouting_observations WHERE scouting_run_id = $1', [run]
-    )).rows[0].n, 1, 'no duplicate or forbidden observations may leak through');
+    )).rows[0].n, 2, 'two accepted unique batches create exactly two observations');
     assert.equal((await owner.query(
       'SELECT count(*)::int AS n FROM sync_batches WHERE tenant_id = $1', [a]
-    )).rows[0].n, 1, 'failed atomic batches must leave no received/queued records');
+    )).rows[0].n, 2, 'failed atomic batches must leave no received/queued records');
   } finally {
     if (connected) {
       try {
