@@ -7,6 +7,7 @@ import { guidanceForDraft, queueSummary } from '../services/offlineConflictGuida
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 import { OfflineReconciliationPanel } from '../components/OfflineReconciliationPanel.jsx';
+import { filterSyncRunDrafts, filterSyncRunReceipts, resolveSyncRunFocus } from '../services/syncRunFocus.js';
 
 const STATUS_ES = {
   received: 'Recibido, no aplicado',
@@ -30,9 +31,10 @@ const OBS_LABELS = {
   nutrition: 'Nutrición', water: 'Agua', general: 'General'
 };
 
-export function SyncPage() {
+export function SyncPage({ focusRunId = null, onClearFocus }) {
   const { api, dataMode, session } = useSession();
   const canListAll = ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const focus = resolveSyncRunFocus(focusRunId);
   const activeScope = dataMode === 'live' ? sessionScope(session) : null;
   const serverScope = [dataMode, activeScope || 'anonymous',
     session?.membership?.roleCode || ''].join(':');
@@ -122,7 +124,12 @@ export function SyncPage() {
   }, [loadLocal]);
 
   const sendPending = async () => {
-    if (dataMode !== 'live' || !online) return;
+    if (dataMode !== 'live' || !online || focus.mode === 'invalid') return;
+    // Background queue flush has scope-level semantics. A screen filter never
+    // silently narrows transmission and must not imply selective delivery.
+    if (focus.mode === 'run' && !window.confirm(
+      'Enviar pendientes procesa TODAS las recorridas de esta cuenta, no solo la seleccionada. ¿Continuar?'
+    )) return;
     setSending(true);
     setNotice('');
     setLocalError('');
@@ -186,6 +193,8 @@ export function SyncPage() {
   // draft metadata or server receipts, even before the effects refetch them.
   const scopedPending = activeScope ? pending.filter(row => row.scope === activeScope) : [];
   const scopedBatches = loadedServerScope === serverScope ? batches : [];
+  const visiblePending = filterSyncRunDrafts(scopedPending, activeScope, focus);
+  const visibleBatches = filterSyncRunReceipts(scopedBatches, focus);
   const serverLoading = loading || loadedServerScope !== serverScope;
   const serverError = loadedServerScope === serverScope ? error : '';
   const { pending: pendingCount, review: conflictCount, photoOnly } = queueSummary(scopedPending);
@@ -199,9 +208,9 @@ export function SyncPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {dataMode === 'live' && <button type="button" className="primary-action"
-            disabled={!online || sending || pendingCount === 0}
+            disabled={!online || sending || pendingCount === 0 || focus.mode === 'invalid'}
             onClick={() => void sendPending()}>
-            <Send size={15}/> {sending ? 'Enviando…' : 'Enviar pendientes'}
+            <Send size={15}/> {sending ? 'Enviando…' : focus.mode === 'run' ? 'Enviar todos mis pendientes' : 'Enviar pendientes'}
           </button>}
           <button type="button" className="ghost-action"
             onClick={() => { void loadData(); void loadLocal(); }} disabled={loading || loadingLocal}>
@@ -210,12 +219,32 @@ export function SyncPage() {
         </div>
       </section>
 
+      {focus.mode !== 'all' && <section className="admin-panel" aria-label="Filtro por recorrida"
+        style={{ padding: '12px 16px', display: 'grid', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: 13 }}>
+            {focus.mode === 'run'
+              ? `Recorrida seleccionada · ${focus.runId.slice(0, 8)}…`
+              : 'Referencia de recorrida no válida'}
+          </strong>
+          <button className="ghost-action" type="button" onClick={() => onClearFocus?.()}>
+            Ver todas las recorridas
+          </button>
+        </div>
+        <p style={{ fontSize: 12, color: '#64748b', margin: 0 }} role="status">
+          {focus.mode === 'run'
+            ? 'Se filtran las capturas locales, sus opciones de conciliación y los recibos con recorrido verificable. El botón «Enviar todos mis pendientes» sigue procesando toda la cola de la cuenta.'
+            : 'No se muestran capturas ni recibos por una referencia inválida. Podés quitar el filtro para consultar tus datos.'}
+        </p>
+      </section>}
+
       {dataMode === 'live' && <>
         <div className="toast-item toast-item--info" role="status" style={{ pointerEvents: 'auto', opacity: 1, transform: 'none', margin: '8px 0 16px' }}>
           <div className="toast-item__icon"><Clock size={16}/></div>
           <div className="toast-item__body">
             <strong className="toast-item__title">
-              {online ? 'Conectado' : 'Sin conexión'} · {pendingCount} pendientes · {conflictCount} para revisar · {photoOnly} fotos por confirmar
+              {online ? 'Conectado' : 'Sin conexión'} · En todas tus recorridas: {pendingCount} pendientes · {conflictCount} para revisar · {photoOnly} fotos por confirmar
             </strong>
             <p className="toast-item__message" style={{ fontSize: 12 }}>
               Las observaciones se guardan primero en este navegador y se envían al iniciar sesión,
@@ -226,7 +255,7 @@ export function SyncPage() {
         </div>
         <section className="admin-panel" style={{ padding: 16, display: 'grid', gap: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <strong>En este dispositivo ({scopedPending.length})</strong>
+            <strong>En este dispositivo ({visiblePending.length})</strong>
             <span style={{ fontSize: 12, color: '#64748b' }}>Datos locales de esta cuenta y empresa</span>
           </div>
           <p style={{ margin: 0, fontSize: 12, color: '#a16207' }}>
@@ -252,11 +281,13 @@ export function SyncPage() {
           )}
           {localError && <div role="alert" className="auth-error">{localError}</div>}
           {notice && <p role="status" style={{ margin: 0, color: '#166534', fontSize: 12 }}>{notice}</p>}
-          {!loadingLocal && !localError && scopedPending.length === 0 &&
+          {!loadingLocal && !localError && visiblePending.length === 0 &&
             <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-              No hay observaciones pendientes. Las confirmadas aparecen en los recibos del servidor.
+              {focus.mode === 'all'
+                ? 'No hay observaciones pendientes. Las confirmadas aparecen en los recibos del servidor.'
+                : 'No hay capturas locales que coincidan con esta recorrida. Esto no confirma que el servidor no tenga operaciones.'}
             </p>}
-          {scopedPending.map((item) => (
+          {visiblePending.map((item) => (
             <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between',
               alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 4px',
               borderBottom: '1px solid rgba(15,23,42,0.08)' }}>
@@ -293,7 +324,7 @@ export function SyncPage() {
       </>}
 
       {dataMode === 'live' && <OfflineReconciliationPanel
-        drafts={scopedPending}
+        drafts={visiblePending}
         localLoading={loadingLocal}
         localError={localError}
         onLocalChange={loadLocal}
@@ -307,6 +338,7 @@ export function SyncPage() {
         <p style={{ padding: '0 16px 12px', color: '#64748b', fontSize: 12 }}>
           Los lotes históricos «Recibido» no fueron aplicados automáticamente. Las operaciones nuevas
           figuran como «Aplicado» después de la confirmación PostgreSQL.
+          {focus.mode !== 'all' && ' En este filtro solo aparecen recibos entre los 100 recientes con una operación que identifica esta recorrida. Un recibo sin identificador de recorrida no se atribuye por suposición.'}
         </p>
         {serverError && <div className="auth-error" role="alert">
           <AlertTriangle size={16}/> {serverError}
@@ -318,9 +350,9 @@ export function SyncPage() {
               <span>Cliente</span><span>Dispositivo</span><span>Operaciones</span><span>Estado</span>
             </div>
             {serverLoading ? <div className="empty-state"><span>Consultando servidor…</span></div>
-              : serverError ? null : scopedBatches.length === 0 ? <div className="empty-state" style={{ padding: 40 }}>
-                <CheckCircle size={30}/><h3>Sin recibos</h3>
-              </div> : scopedBatches.map((batch) => (
+              : serverError ? null : visibleBatches.length === 0 ? <div className="empty-state" style={{ padding: 40 }}>
+                <CheckCircle size={30}/><h3>{focus.mode === 'all' ? 'Sin recibos' : 'Sin recibos identificables en esta recorrida'}</h3>
+              </div> : visibleBatches.map((batch) => (
                 <div key={batch.id} className="admin-table__row" style={{ gridTemplateColumns: '2fr 2fr 1fr 1fr' }}>
                   <strong>{batch.client_id}</strong>
                   <span className="admin-table__muted">{batch.device_id || 'Sin dispositivo'}</span>
