@@ -6,6 +6,8 @@ export function defineSyncBatch(sequelize, DataTypes) {
     tenant_id: { type: DataTypes.UUID, allowNull: false },
     submitted_by: DataTypes.UUID,
     client_id: { type: DataTypes.STRING(120), allowNull: false },
+    idempotency_key: DataTypes.UUID,
+    request_hash: DataTypes.STRING(64),
     device_id: DataTypes.STRING(120),
     status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'received' },
     received_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
