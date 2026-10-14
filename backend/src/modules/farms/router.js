@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { Farm, Field, Producer } from '../../models/index.js';
+import { Op } from 'sequelize';
+import { Farm, Field, Membership, Producer, ProducerAccessGrant } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { grantedProducerIds, isProducerViewer } from './producerAccess.js';
 
 export const farmsRouter = Router();
 
 farmsRouter.use(requireEntitlement('gis'));
+
+const producerAccessSchema = z.object({ user_id: z.string().uuid() });
+const producerAccessParams = z.object({ producerId: z.string().uuid() });
+const producerRevokeParams = producerAccessParams.extend({ userId: z.string().uuid() });
 
 const producerSchema = z.object({
   name: z.string().min(2).max(180),
@@ -28,7 +34,12 @@ const farmSchema = z.object({
 });
 
 farmsRouter.get('/producers', requireCapability('gis.read'), asyncHandler(async (req, res) => {
+  const grants = await grantedProducerIds(req);
   const producers = await Producer.findAll({
+    ...(grants === null ? {} : {
+      where: { id: { [Op.in]: grants } },
+      attributes: ['id', 'name']
+    }),
     order: [['name', 'ASC']],
     transaction: req.dbTransaction
   });
@@ -41,7 +52,9 @@ farmsRouter.post('/producers', requireCapability('gis.write'), validate(producer
 }));
 
 farmsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
+  const grants = await grantedProducerIds(req);
   const farms = await Farm.findAll({
+    ...(grants === null ? {} : { where: { producer_id: { [Op.in]: grants } } }),
     include: [
       { model: Producer, attributes: ['id', 'name'] },
       { model: Field, attributes: ['id', 'name', 'area_hectares', 'status'] }
@@ -58,9 +71,14 @@ farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyn
 }));
 
 farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
-  const farm = await Farm.findByPk(req.params.id, {
+  const grants = await grantedProducerIds(req);
+  const farm = await Farm.findOne({
+    where: {
+      id: req.params.id,
+      ...(grants === null ? {} : { producer_id: { [Op.in]: grants } })
+    },
     include: [
-      { model: Producer, attributes: ['id', 'name', 'contact_email'] },
+      { model: Producer, attributes: isProducerViewer(req) ? ['id', 'name'] : ['id', 'name', 'contact_email'] },
       { model: Field, order: [['name', 'ASC']] }
     ],
     transaction: req.dbTransaction
