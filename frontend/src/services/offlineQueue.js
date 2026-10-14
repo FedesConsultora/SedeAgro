@@ -53,14 +53,14 @@ export function createOfflineQueue({
     notify();
   }
 
-  async function allowRetry(session, id) {
+  async function allowRetry(session, id, { notifyChange = true } = {}) {
     const scope = sessionScope(session);
     const item = scope && await store.get(id);
     if (!item || item.scope !== scope) throw new Error('Operación local no encontrada.');
     await store.put({
       ...item, state: 'pending', nextRetryAt: null, lastError: null, errorCode: null
     });
-    notify();
+    if (notifyChange) notify();
   }
 
   async function flush(session, send, { force = false, sendEvidence = null } = {}) {
