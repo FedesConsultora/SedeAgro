@@ -133,6 +133,7 @@ export function createApiClient(session, feedback) {
     updateCampaign: (id, body) => request(`/campaigns/${id}`, { method: 'PATCH', body }),
     assignCampaignField: (campaignId, body) => request(`/campaigns/${campaignId}/fields`, { method: 'POST', body }),
     campaignFields: () => request('/campaigns/fields'),
+    scoutingAssignees: () => request('/scouting/assignees'),
     scoutingRuns: () => request('/scouting/runs'),
     getScoutingRun: (id) => request(`/scouting/runs/${id}`),
     createScoutingRun: (body) => request('/scouting/runs', { method: 'POST', body }),
