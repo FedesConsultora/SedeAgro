@@ -4,6 +4,7 @@ import {
 } from './offlineSyncModel.js';
 import { indexedDbQueueStore } from './offlineQueueStore.js';
 import { reconcileOfflineDraft } from './offlineReconciliation.js';
+import { planConfirmedPhotoRecovery, verifiedPhotoUpload } from './photoRecovery.js';
 import { assertStorageCapacity, browserStorageStatus } from './offlineStorageStatus.js';
 
 const changes = () => {
@@ -92,6 +93,70 @@ export function createOfflineQueue({
     }
   }
 
+  // Manual photo-only recovery after a FRESH personal sync receipt. Does not
+  // re-POST the observation batch, mutate its stable UUID, or send coordinates.
+  // Both this method and flush hold the same scope lock across all HTTP writes.
+  async function recoverPhoto(session, id, receipt, sendEvidence) {
+    const scope = sessionScope(session);
+    if (!scope || typeof id !== 'string' || !id.startsWith(`${scope}:`)) {
+      throw new Error('Esta fotografía pertenece a otra sesión.');
+    }
+    if (typeof sendEvidence !== 'function') {
+      throw new Error('La carga de fotografías no está disponible.');
+    }
+    if (!isOnline()) return { status: 'offline' };
+    if (inFlightScopes.has(scope)) return { status: 'busy' };
+    inFlightScopes.add(scope);
+    try {
+      const result = await withLock(scope, async () => {
+        const current = await store.get(id);
+        if (!current || current.scope !== scope) return { status: 'missing' };
+        // Fail closed BEFORE HTTP if the observation or photo identity differs.
+        const plan = planConfirmedPhotoRecovery(current, receipt, session);
+        try {
+          const uploaded = await sendEvidence(plan.observationId, current.evidence);
+          const confirmed = verifiedPhotoUpload(uploaded, plan);
+          const latest = await store.get(id);
+          if (!latest || latest.scope !== scope) return { status: 'missing' };
+          if (JSON.stringify(latest.body) !== JSON.stringify(current.body) ||
+              JSON.stringify(latest.evidence) !== JSON.stringify(current.evidence) ||
+              latest.idempotencyKey !== current.idempotencyKey) {
+            return { status: 'changed' };
+          }
+          await store.delete(id);
+          notify();
+          return { status: 'uploaded', evidenceId: confirmed.evidenceId,
+            replayed: confirmed.replayed };
+        } catch (error) {
+          // Incomplete/lost ACK is not proof of failure on PostgreSQL. Keep
+          // the original bytes and client_upload_id for idempotent replay.
+          const latest = await store.get(id);
+          if (!latest || latest.scope !== scope) return { status: 'missing' };
+          if (JSON.stringify(latest.body) !== JSON.stringify(current.body) ||
+              JSON.stringify(latest.evidence) !== JSON.stringify(current.evidence)) {
+            return { status: 'changed' };
+          }
+          const outcome = classifySyncError(error);
+          const attempts = latest.attempts + 1;
+          await store.put({
+            ...latest,
+            attempts,
+            state: outcome === 'retry' ? 'pending' : outcome,
+            errorCode: typeof error?.code === 'string' ? error.code.slice(0, 64) : null,
+            lastError: String(error?.message || 'No se confirmó la fotografía.').slice(0, 220),
+            nextRetryAt: outcome === 'retry'
+              ? new Date(now().getTime() + retryDelayMs(attempts)).toISOString() : null
+          });
+          notify();
+          return { status: outcome === 'retry' ? 'pending' : outcome };
+        }
+      });
+      return result?.status ? result : { status: 'busy' };
+    } finally {
+      inFlightScopes.delete(scope);
+    }
+  }
+
   async function flush(session, send, { force = false, sendEvidence = null } = {}) {
     const scope = sessionScope(session);
     if (!scope || !isOnline()) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
@@ -172,7 +237,7 @@ export function createOfflineQueue({
     }
   }
 
-  return { list, queueObservation, discard, allowRetry, confirmApplied, flush };
+  return { list, queueObservation, discard, allowRetry, confirmApplied, recoverPhoto, flush };
 }
 
 async function lockAcrossTabs(scope, handler) {
