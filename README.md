@@ -119,6 +119,14 @@ El botón de conexión del encabezado permite alternar entre `Mock` y `Backend`.
 - Cada módulo tiene tablas, estado de origen, botón de refresco y formulario de alta con el payload esperado por el endpoint.
 - Si el backend falla, la pantalla vuelve a datos mock y el toast muestra el error con `request_id` cuando existe.
 
+## Cuentas demo y seguridad
+
+Todas las rutas privadas requieren ahora un JWT válido y una membresía activa, también durante desarrollo. Las rutas globales de plataforma requieren privilegios explícitos de administración.
+
+Los seeders globales **no crean usuarios demo** por defecto. Para una instancia aislada de desarrollo, configurar `SEED_MODE=demo` y `DEMO_PASSWORD` con al menos 12 caracteres en `.env`, y ejecutar `npm run db:prepare` dentro del contenedor de desarrollo. Estas credenciales no deben usarse en servicios accesibles públicamente.
+
+Antes de desplegar el cambio en una base existente, seguir la [guía de auditoría de cuentas demo](docs/security/production-demo-audit.md). Evitar nuevos usuarios demo **no desactiva cuentas ya existentes**.
+
 ## Primer tenant
 
 Después de levantar el backend, crear una organización:
