@@ -15,6 +15,13 @@ const SEV_ES = { low: 'Leve', medium: 'Moderado', high: 'Alto', critical: 'Crít
 const OBS_TYPE_ES = { weed: 'Maleza', pest: 'Plaga', disease: 'Enfermedad', phenology: 'Fenología', nutrition: 'Nutrición', water: 'Agua', general: 'General' };
 const STATUS_FILTER = ['Todos', 'planned', 'in_progress', 'completed', 'cancelled'];
 
+function dateLabel(value) {
+  if (!value) return 'Sin fecha';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Fecha no disponible'
+    : date.toLocaleString('es-AR', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_ES[status] || status}</span>;
 }
@@ -148,9 +155,22 @@ function RunDetail({ run, onChanged }) {
   const observations = details?.ScoutingObservations || [];
 
   return (
-    <div style={{ padding: '16px 24px', borderTop: '1px solid rgba(0,0,0,0.06)', display: 'grid', gap: 14 }}>
+    <section className="scouting-run-detail" aria-label="Detalle de recorrida">
+      {!loading && !error && details && <section className="scouting-run-detail__summary" aria-label="Datos de la recorrida">
+        <div className="scouting-run-detail__summary-head">
+          <strong>{details.CampaignField?.Field?.name || 'Lote no informado'}</strong>
+          <StatusBadge status={details.status} />
+        </div>
+        <dl className="scouting-run-detail__facts">
+          <div><dt>Fecha planificada</dt><dd>{dateLabel(details.scheduled_at)}</dd></div>
+          <div><dt>Responsable</dt><dd>{details.assignee?.full_name ||
+            (details.assigned_to ? 'Responsable asignado' : 'Sin asignar')}</dd></div>
+          <div><dt>Observaciones</dt><dd>{observations.length}</dd></div>
+        </dl>
+        {details.summary && <p className="scouting-run-detail__notes">{details.summary}</p>}
+      </section>}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-        <strong style={{ fontSize: 13, color: '#334155' }}>Observaciones ({observations.length})</strong>
+        <strong style={{ fontSize: 13, color: '#334155' }}>Observaciones ({loading ? '…' : error ? 'No disponibles' : observations.length})</strong>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {canOperate && details?.status === 'planned' &&
             <button type="button" className="ghost-action" disabled={working || !details?.assigned_to}
@@ -167,7 +187,7 @@ function RunDetail({ run, onChanged }) {
             aria-expanded={showAudit} onClick={() => setShowAudit((value) => !value)}>
             {showAudit ? 'Ocultar historial' : 'Ver historial'}
           </button>}
-          <button type="button" className="ghost-action" onClick={() => refresh()} disabled={loading}>
+          <button type="button" className="ghost-action" onClick={() => void refresh()} disabled={loading || working}>
             <RefreshCw size={14} /> Actualizar
           </button>
           {canObserve && <button type="button" className="ghost-action" onClick={() => setShowObsModal(true)}>
@@ -201,7 +221,7 @@ function RunDetail({ run, onChanged }) {
           </span>}
         </div>
       )}
-      {loading ? <p style={{ color: '#64748b', fontSize: 13 }}>Cargando datos de la recorrida…</p>
+      {loading ? <p role="status" style={{ color: '#64748b', fontSize: 13 }}>Cargando datos de la recorrida…</p>
         : !details ? null
           : observations.length === 0 ? (
             <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>No hay observaciones guardadas en esta recorrida.</p>
@@ -246,7 +266,7 @@ function RunDetail({ run, onChanged }) {
       {showEvidModal && <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)}
         onCreated={() => { setShowEvidModal(null); void refresh(); }} />}
       {preview && <EvidencePreviewModal isOpen evidence={preview} api={api} onClose={() => setPreview(null)} />}
-    </div>
+    </section>
   );
 }
 
@@ -313,7 +333,8 @@ export function ScoutingPage({ focusRunId = null }) {
           ))}
         </div>
         <span style={{ fontSize: 13, color: '#64748b' }}>
-          {visible.length} recorridas · {dataMode === 'live' ? 'Backend' : 'Demo'}
+          {loading ? 'Consultando recorridas…' : error ? 'Recorridas no disponibles'
+            : `${visible.length} recorridas · ${dataMode === 'live' ? 'Backend' : 'Demo'}`}
         </span>
       </div>
       {error && <div className="auth-error" role="alert">
@@ -324,7 +345,7 @@ export function ScoutingPage({ focusRunId = null }) {
           La recorrida solicitada no está disponible para esta cuenta o empresa.
         </p>
       )}
-      <div className="data-table-wrapper">
+      <div className="data-table-wrapper scouting-workspace__table">
         <div className="data-table">
           <div className="data-table__row data-table__row--head" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr 40px' }}>
             <span>Lote / Campaña</span><span>Fecha planificada</span><span>Estado</span><span>Asignado a</span><span />
