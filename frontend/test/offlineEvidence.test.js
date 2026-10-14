@@ -19,7 +19,7 @@ const reply=(body)=>({data:{status:'processed',idempotency_key:body.idempotency_
   operations:body.operations.map(op=>({entity_client_id:op.entity_client_id,status:'applied',
     result:{observation_id:OBS}}))}});
 const uploaded=(id,payload)=>({data:{scouting_observation_id:id,
-  client_upload_id:payload.client_upload_id,size_bytes:13,id:'c1540167-5bcb-46f0-84ce-3e83245de72f'}});
+  client_upload_id:payload.client_upload_id,size_bytes:12,id:'c1540167-5bcb-46f0-84ce-3e83245de72f'}});
 
 function harness() {
   const rows=new Map();
@@ -31,7 +31,7 @@ function harness() {
 }
 
 test('offline photo types and 512KiB quota are validated before encrypting',()=>{
-  assert.equal(validateOfflinePhoto(photo).size_bytes,13);
+  assert.equal(validateOfflinePhoto(photo).size_bytes,12);
   assert.throws(()=>validateOfflinePhoto({...photo,mime_type:'image/svg+xml'}),/JPEG/i);
   assert.throws(()=>validateOfflinePhoto({...photo,original_name:'../a.png'}),/Nombre/i);
   assert.throws(()=>validateOfflinePhoto({...photo,content_base64:'bad$'}),/Contenido/i);
