@@ -132,8 +132,10 @@ function Shell() {
 }
 
 export function App() {
-  const { isAuthenticated } = useSession();
+  const { isAuthenticated, restoring } = useSession();
   const [authView, setAuthView] = useState('login');
+
+  if (restoring) return <div role="status" className="auth-shell">Restaurando sesión segura…</div>;
 
   if (!isAuthenticated) {
     return authView === 'login'
