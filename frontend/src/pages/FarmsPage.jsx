@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { ChevronDown, ChevronRight, MapPin, Plus, Landmark } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { FarmFormModal } from '../components/FarmFormModal.jsx';
 import { FieldFormModal } from '../components/FieldFormModal.jsx';
+import { FieldGeographyPanel } from '../components/FieldGeographyPanel.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
 
@@ -16,6 +17,7 @@ function StatusBadge({ status }) {
 function FarmCard({ farm, onFieldAdded, canEdit }) {
   const [expanded, setExpanded] = useState(false);
   const [showFieldModal, setShowFieldModal] = useState(false);
+  const [focusedFieldId, setFocusedFieldId] = useState(null);
   const fields = farm.Fields || [];
   const totalHa = fields.reduce((s, f) => s + Number(f.area_hectares || 0), 0);
 
@@ -23,7 +25,13 @@ function FarmCard({ farm, onFieldAdded, canEdit }) {
     <div className="farm-card">
       {/* Farm Header */}
       <div className="farm-card__header" onClick={() => setExpanded((v) => !v)} role="button" tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && setExpanded((v) => !v)}>
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget || !['Enter', ' '].includes(e.key)) return;
+          e.preventDefault();
+          setExpanded((value) => !value);
+        }}
+        aria-expanded={expanded}
+        aria-label={`Establecimiento ${farm.name}, ${expanded ? 'ocultar' : 'mostrar'} lotes`}>
         <div className="farm-card__meta">
           <div className="farm-card__icon"><Landmark size={22} /></div>
           <div className="farm-card__info">
@@ -38,7 +46,7 @@ function FarmCard({ farm, onFieldAdded, canEdit }) {
         <div className="farm-card__stats">
           <div className="stat">
             <strong>{totalHa.toLocaleString('es-AR')}</strong>
-            <span>hectáreas</span>
+            <span>ha declaradas</span>
           </div>
           <div className="stat">
             <strong>{fields.length}</strong>
@@ -68,12 +76,30 @@ function FarmCard({ farm, onFieldAdded, canEdit }) {
             </div>
           ) : (
             fields.map((field) => (
-              <div key={field.id} className="field-row">
-                <MapPin size={14} style={{ color: '#94a3b8', flexShrink: 0 }} />
-                <span className="field-row__name">{field.name}</span>
-                <StatusBadge status={field.status} />
-                <span className="field-row__ha">{Number(field.area_hectares || 0).toLocaleString('es-AR')} ha</span>
-              </div>
+              <Fragment key={field.id}>
+                <button type="button"
+                  className="field-row field-row--selectable"
+                  aria-expanded={focusedFieldId === field.id}
+                  aria-label={`Ver contexto geográfico del lote ${field.name}`}
+                  onClick={() => setFocusedFieldId(current => current === field.id ? null : field.id)}>
+                  <MapPin size={14} style={{ color: '#6b8e74', flexShrink: 0 }} />
+                  <span className="field-row__name">{field.name}</span>
+                  <StatusBadge status={field.status} />
+                  <span className="field-row__ha">
+                    {field.area_hectares == null ? 'Sin superficie declarada' :
+                      `${Number(field.area_hectares).toLocaleString('es-AR')} ha`}
+                  </span>
+                  <ChevronRight size={15} aria-hidden="true"
+                    style={{ transform: focusedFieldId === field.id ? 'rotate(90deg)' : undefined }} />
+                </button>
+                {focusedFieldId === field.id && (
+                  <FieldGeographyPanel
+                    field={field}
+                    farm={farm}
+                    onClose={() => setFocusedFieldId(null)}
+                  />
+                )}
+              </Fragment>
             ))
           )}
         </div>
@@ -133,7 +159,7 @@ export function FarmsPage() {
         </div>
         <div className="stat-tile stat-tile--amber">
           <div className="stat-tile__header">
-            <span className="stat-tile__label">Hectáreas</span>
+            <span className="stat-tile__label">Hectáreas declaradas</span>
           </div>
           <span className="stat-tile__value">
             {farms.reduce((s, f) => s + (f.Fields || []).reduce((fs, field) => fs + Number(field.area_hectares || 0), 0), 0).toLocaleString('es-AR')}
