@@ -53,3 +53,11 @@ export function fieldGpsErrorMessage(error) {
     default: return error?.message || 'No fue posible obtener una ubicación GPS verificable.';
   }
 }
+
+export function localObservationDateTime(date = new Date()) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    throw new Error('Fecha local inválida para observación.');
+  }
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
