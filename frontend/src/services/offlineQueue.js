@@ -79,7 +79,10 @@ export function createOfflineQueue({
             if (receipt?.data?.status !== 'processed' ||
                 receipt?.data?.idempotency_key !== item.idempotencyKey ||
                 receipt?.data?.operations?.length !== item.body.operations.length ||
-                !receipt.data.operations.every((op) => op.status === 'applied')) {
+                !receipt.data.operations.every((op, index) =>
+                  op.status === 'applied' &&
+                  op.entity_client_id === item.body.operations[index].entity_client_id &&
+                  typeof op.result?.observation_id === 'string')) {
               throw new Error('La confirmación de sincronización no fue completa.');
             }
             await store.delete(item.id);
@@ -88,8 +91,12 @@ export function createOfflineQueue({
           } catch (error) {
             const state = classifySyncError(error);
             const attempts = item.attempts + 1;
+            // The user may have discarded this draft while it was being sent.
+            // Never resurrect locally removed data after a failed request.
+            const current = await store.get(item.id);
+            if (!current || current.scope !== scope) continue;
             await store.put({
-              ...item, attempts, state: state === 'retry' ? 'pending' : state,
+              ...current, attempts, state: state === 'retry' ? 'pending' : state,
               errorCode: typeof error?.code === 'string' ? error.code.slice(0, 64) : null,
               lastError: String(error?.message || 'No se pudo enviar.').slice(0, 220),
               nextRetryAt: state === 'retry'
