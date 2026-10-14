@@ -88,6 +88,26 @@ try {
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: browser restores cookie session and renders current device');
 
+  // TOP-inspired operational landing must fail visibly when an API resource
+  // fails, never hydrate unrelated demo orders or a fabricated field score.
+  await page1.route('**/api/v1/work-orders', (route) => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Recurso temporalmente no disponible' } })
+  }));
+  await page1.getByRole('button', { name: 'Inicio' }).click();
+  await page1.getByText(/Parte de la información no se pudo consultar/).waitFor();
+  const homeText = await page1.locator('main').innerText();
+  assert.ok(homeText.includes('Órdenes'));
+  assert.ok(!homeText.includes('Aplicacion selectiva lote 4'),
+    'live API failure must never show mock orders');
+  assert.ok(!homeText.includes('Mock fallback'));
+  await page1.unroute('**/api/v1/work-orders');
+  await page1.getByRole('button', { name: 'Ver órdenes' }).click();
+  await page1.getByRole('heading', { name: 'Órdenes de trabajo' }).waitFor();
+  await page1.getByRole('button', { name: 'Sesiones' }).click();
+  await page1.getByText('Esta sesión').waitFor();
+  console.log('PASS: operational home surfaces partial failure and opens real orders without mock fallback');
+
   // Second independent browser context signs in to the same tenant.
   const context2 = await browser.newContext();
   const page2 = await context2.newPage();
