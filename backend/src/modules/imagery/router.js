@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Field, SatelliteLayer } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate } from '../../utils/http.js';
+import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const imageryRouter = Router();
 
@@ -17,7 +18,7 @@ const layerSchema = z.object({
   metadata: z.record(z.any()).default({})
 });
 
-imageryRouter.get('/layers', asyncHandler(async (req, res) => {
+imageryRouter.get('/layers', requireCapability('imagery.read'), asyncHandler(async (req, res) => {
   const layers = await SatelliteLayer.findAll({
     include: [{ model: Field, attributes: ['id', 'name', 'area_hectares'] }],
     order: [['captured_at', 'DESC']],
@@ -26,7 +27,7 @@ imageryRouter.get('/layers', asyncHandler(async (req, res) => {
   res.json({ data: layers });
 }));
 
-imageryRouter.post('/layers', validate(layerSchema), asyncHandler(async (req, res) => {
+imageryRouter.post('/layers', requireCapability('imagery.write'), validate(layerSchema), asyncHandler(async (req, res) => {
   const layer = await SatelliteLayer.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: layer });
 }));
