@@ -392,7 +392,7 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
                 {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load}
-                  onOpenSync={() => onNavigate?.('sync')} />}
+                  onOpenSync={() => onNavigate?.('sync', { id: details.id })} />}
               </div>
             ))}
         </div>
