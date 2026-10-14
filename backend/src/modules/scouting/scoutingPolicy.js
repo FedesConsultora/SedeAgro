@@ -28,3 +28,20 @@ export function assertRunTransition(current, next) {
     throw new HttpError(409, 'Transición de recorrida no permitida.', undefined, 'SCOUTING_STATUS_CONFLICT');
   }
 }
+
+export const ASSIGNABLE_ROLES = Object.freeze(['scout', 'agronomic_coordinator']);
+
+export function assertRunAssignmentChange(run, nextAssignee) {
+  if (run.assigned_to === nextAssignee) return;
+  if (run.status !== 'planned') {
+    throw new HttpError(409, 'Solo se puede cambiar el responsable de recorridas planificadas.',
+      undefined, 'SCOUTING_REASSIGN_CONFLICT');
+  }
+}
+
+export function assertRunReadyToStart(run, assignee) {
+  if (!assignee) {
+    throw new HttpError(409, 'Asigná un responsable activo antes de iniciar.',
+      undefined, 'SCOUTING_ASSIGNEE_REQUIRED');
+  }
+}
