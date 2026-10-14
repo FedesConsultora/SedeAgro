@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import {
-  CampaignField, EvidenceAsset, Field, Membership, User,
+  AuditEvent, CampaignField, EvidenceAsset, Field, Membership, User,
   ScoutingObservation, ScoutingRun
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
@@ -11,6 +11,7 @@ import { requireCapability } from '../../infra/http/middlewares/requireCapabilit
 import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
 import { getPrivateEvidence, putPrivateEvidence } from './evidenceStorage.js';
+import { recordScoutingAudit } from './audit.js';
 
 export const scoutingRouter = Router();
 scoutingRouter.use(requireEntitlement('scouting'));
@@ -119,7 +120,25 @@ scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSch
     assertRunReadyToStart(null, req.body.assigned_to);
   }
   const run = await ScoutingRun.create(req.body, { transaction: req.dbTransaction });
+  await recordScoutingAudit(req, {
+    runId: run.id,
+    action: 'scouting.run.created',
+    after: { status: run.status, assigned_to: run.assigned_to, campaign_field_id: run.campaign_field_id }
+  });
   res.status(201).json({ data: run });
+}));
+
+scoutingRouter.get('/runs/:id/audit', requireCapability('scouting.audit.read'), asyncHandler(async (req, res) => {
+  const run = await ScoutingRun.findByPk(req.params.id, { transaction: req.dbTransaction });
+  if (!run) throw new HttpError(404, 'Recorrida no encontrada.');
+  const events = await AuditEvent.findAll({
+    where: { entity_type: 'scouting_run', entity_id: run.id },
+    attributes: ['id', 'actor_id', 'action', 'before', 'after', 'request_id', 'created_at'],
+    order: [['created_at', 'DESC']],
+    limit: 100,
+    transaction: req.dbTransaction
+  });
+  res.json({ data: events });
 }));
 
 scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
@@ -150,6 +169,16 @@ scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.obs
     scouting_run_id: run.id,
     observed_by: req.auth.user.id
   }, { transaction: req.dbTransaction });
+  await recordScoutingAudit(req, {
+    runId: run.id,
+    action: 'scouting.observation.created',
+    after: {
+      observation_id: observation.id,
+      field_id: observation.field_id,
+      observation_type: observation.observation_type,
+      severity: observation.severity
+    }
+  });
   res.status(201).json({ data: observation });
 }));
 
@@ -176,6 +205,17 @@ scoutingRouter.post('/observations/:observationId/evidence', requireCapability('
     evidenceId: evidence.id,
     bytes,
     transaction: req.dbTransaction
+  });
+  await recordScoutingAudit(req, {
+    runId: run.id,
+    action: 'scouting.evidence.uploaded',
+    after: {
+      evidence_id: evidence.id,
+      observation_id: observation.id,
+      kind: evidence.kind,
+      mime_type: evidence.mime_type,
+      size_bytes: evidence.size_bytes
+    }
   });
   res.status(201).json({ data: evidence });
 }));
@@ -212,10 +252,19 @@ scoutingRouter.patch('/runs/:id/status', requireCapability('scouting.observe'), 
       assertRunReadyToStart(run, run.assigned_to);
       await verifyAssignee(req, run.assigned_to);
     }
+    const oldStatus = run.status;
     await run.update({
       status: req.body.status,
       ...(req.body.status === 'completed' ? { completed_at: new Date() } : {})
     }, { transaction: req.dbTransaction });
+    if (oldStatus !== run.status) {
+      await recordScoutingAudit(req, {
+        runId: run.id,
+        action: 'scouting.run.status_changed',
+        before: { status: oldStatus },
+        after: { status: run.status }
+      });
+    }
     res.json({ data: run });
   }));
 
@@ -235,8 +284,23 @@ scoutingRouter.patch('/runs/:id', requireCapability('scouting.plan'), validate(u
     assertRunReadyToStart(run, nextAssignee);
     await verifyAssignee(req, nextAssignee);
   }
+  const previous = {
+    status: run.status,
+    assigned_to: run.assigned_to,
+    scheduled_at: run.scheduled_at
+  };
   const update = { ...req.body };
   if (req.body.status === 'completed') update.completed_at = new Date();
   await run.update(update, { transaction: req.dbTransaction });
+  await recordScoutingAudit(req, {
+    runId: run.id,
+    action: 'scouting.run.updated',
+    before: previous,
+    after: {
+      status: run.status,
+      assigned_to: run.assigned_to,
+      scheduled_at: run.scheduled_at
+    }
+  });
   res.json({ data: run });
 }));
