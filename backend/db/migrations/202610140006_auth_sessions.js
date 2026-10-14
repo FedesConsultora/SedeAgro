@@ -16,8 +16,8 @@ export async function up({ context: queryInterface }) {
     ALTER TABLE auth_sessions ENABLE ROW LEVEL SECURITY;
     ALTER TABLE auth_sessions FORCE ROW LEVEL SECURITY;
     CREATE POLICY auth_sessions_tenant_policy ON auth_sessions
-      USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
-      WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+      USING (tenant_id = app.current_tenant_id())
+      WITH CHECK (tenant_id = app.current_tenant_id());
   `);
 }
 
