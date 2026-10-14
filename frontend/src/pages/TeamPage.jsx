@@ -3,6 +3,8 @@ import { Mail, Plus, Shield, ShieldCheck, UserPlus, Users as UsersIcon } from 'l
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { extractCollection } from '../services/useTenantCollection.js';
 
 const ROLE_LABELS = {
   platform_admin: 'Admin Plataforma',
@@ -142,12 +144,17 @@ export function TeamPage() {
   const [members, setMembers] = useState([]);
   const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState({ members: null, teams: null });
+  const [revision, setRevision] = useState(0);
   const [showInvite, setShowInvite] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     async function load() {
       setLoading(true);
+      setErrors({ members: null, teams: null });
+      setMembers([]);
+      setTeams([]);
       if (dataMode === 'mock') {
         setMembers([
           { id: '1', role_code: 'tenant_admin', status: 'active', User: { full_name: 'Ana López (Admin)', email: 'admin@agro-demo.test', status: 'active', is_platform_admin: true } },
@@ -160,26 +167,30 @@ export function TeamPage() {
         setLoading(false);
         return;
       }
-      try {
-        const [membersRes, teamsRes] = await Promise.all([api.members(), api.teams()]);
-        if (mounted) {
-          setMembers(Array.isArray(membersRes?.data) ? membersRes.data : []);
-          setTeams(Array.isArray(teamsRes?.data) ? teamsRes.data : []);
+      const results = await Promise.allSettled([api.members(), api.teams()]);
+      if (!mounted) return;
+      const nextErrors = { members: null, teams: null };
+      for (let index = 0; index < results.length; index += 1) {
+        const key = index === 0 ? 'members' : 'teams';
+        try {
+          if (results[index].status === 'rejected') throw results[index].reason;
+          const rows = extractCollection(results[index].value, key === 'members' ? 'miembros' : 'equipos');
+          if (index === 0) setMembers(rows);
+          else setTeams(rows);
+        } catch (err) {
+          nextErrors[key] = err?.message || 'Error de consulta.';
         }
-      } catch {
-        // fallback to mock
-        setMembers([]);
-        setTeams([]);
-      } finally {
-        if (mounted) setLoading(false);
       }
+      setErrors(nextErrors);
+      setLoading(false);
     }
     load();
     return () => { mounted = false; };
-  }, [api, dataMode]);
+  }, [api, dataMode, revision]);
 
   const handleInvited = (data) => {
-    // In MVP mock mode, add to local state
+    if (dataMode !== 'mock') return; // No invitation API implemented.
+    // In explicit demo mode, simulate the invitation in local state
     setMembers(prev => [...prev, {
       id: `mock-${Date.now()}`,
       role_code: data.role,
@@ -198,17 +209,26 @@ export function TeamPage() {
           <span className="eyebrow">Organización</span>
           <h1>Equipo</h1>
         </div>
-        <button type="button" className="primary-action" onClick={() => setShowInvite(true)}>
-          <UserPlus size={16} /> Invitar miembro
-        </button>
+        {dataMode === 'mock' && <button type="button" className="primary-action"
+          onClick={() => setShowInvite(true)}>
+          <UserPlus size={16} /> Simular invitación
+        </button>}
       </section>
 
+      {dataMode === 'mock' &&
+        <p className="resource-demo-note" role="status">Equipo de demostración. Las invitaciones son simuladas.</p>}
+      {dataMode === 'live' &&
+        <p className="resource-demo-note" role="status">Invitar miembros todavía no está disponible: no se enviarán invitaciones ficticias.</p>}
+      {errors.members && <ResourceLoadNotice title="miembros" error={errors.members}
+        onRetry={() => setRevision(value => value + 1)} />}
+      {errors.teams && <ResourceLoadNotice title="equipos" error={errors.teams}
+        onRetry={() => setRevision(value => value + 1)} />}
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
       ) : (
         <>
           {/* Platform admins section */}
-          {platformAdmins.length > 0 && (
+          {!errors.members && platformAdmins.length > 0 && (
             <section className="team-section">
               <div className="team-section__header">
                 <Shield size={16} style={{ color: '#f43f5e' }} />
@@ -222,7 +242,7 @@ export function TeamPage() {
           )}
 
           {/* Members section */}
-          <section className="team-section">
+          {!errors.members && <section className="team-section">
             <div className="team-section__header">
               <UsersIcon size={16} style={{ color: '#059669' }} />
               <h2>Miembros del tenant</h2>
@@ -239,10 +259,10 @@ export function TeamPage() {
                 {regularMembers.map(m => <MemberCard key={m.id} member={m} />)}
               </div>
             )}
-          </section>
+          </section>}
 
           {/* Teams section */}
-          <section className="team-section">
+          {!errors.teams && <section className="team-section">
             <div className="team-section__header">
               <UsersIcon size={16} style={{ color: '#0ea5e9' }} />
               <h2>Equipos de trabajo</h2>
@@ -259,11 +279,11 @@ export function TeamPage() {
                 {teams.map(t => <TeamCard key={t.id} team={t} />)}
               </div>
             )}
-          </section>
+          </section>}
         </>
       )}
 
-      <InviteMemberModal open={showInvite} onClose={() => setShowInvite(false)} onInvited={handleInvited} />
+      {dataMode === 'mock' && <InviteMemberModal open={showInvite} onClose={() => setShowInvite(false)} onInvited={handleInvited} />}
     </div>
   );
 }

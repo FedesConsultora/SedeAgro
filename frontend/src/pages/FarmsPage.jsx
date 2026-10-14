@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, MapPin, Plus, Landmark } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { FarmFormModal } from '../components/FarmFormModal.jsx';
 import { FieldFormModal } from '../components/FieldFormModal.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { useTenantCollection } from '../services/useTenantCollection.js';
 
 const STATUS_ES = { active: 'Activo', inactive: 'Inactivo', archived: 'Archivado' };
 
@@ -11,7 +13,7 @@ function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{STATUS_ES[status] || status}</span>;
 }
 
-function FarmCard({ farm, onFieldAdded }) {
+function FarmCard({ farm, onFieldAdded, canEdit }) {
   const [expanded, setExpanded] = useState(false);
   const [showFieldModal, setShowFieldModal] = useState(false);
   const fields = farm.Fields || [];
@@ -45,14 +47,14 @@ function FarmCard({ farm, onFieldAdded }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
+          {canEdit && <button
             type="button"
             className="ghost-action"
             style={{ minHeight: 34, padding: '0 12px', fontSize: 12 }}
             onClick={(e) => { e.stopPropagation(); setShowFieldModal(true); }}
           >
             <Plus size={14} /> Nuevo lote
-          </button>
+          </button>}
           {expanded ? <ChevronDown size={18} style={{ color: '#64748b', flexShrink: 0 }} /> : <ChevronRight size={18} style={{ color: '#64748b', flexShrink: 0 }} />}
         </div>
       </div>
@@ -77,7 +79,7 @@ function FarmCard({ farm, onFieldAdded }) {
         </div>
       )}
 
-      {showFieldModal && (
+      {canEdit && showFieldModal && (
         <FieldFormModal
           isOpen
           farmId={farm.id}
@@ -91,29 +93,14 @@ function FarmCard({ farm, onFieldAdded }) {
 }
 
 export function FarmsPage() {
-  const { api, dataMode } = useSession();
-  const [farms, setFarms] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { api, dataMode, session } = useSession();
+  const canEdit = dataMode === 'live' &&
+    ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const { records: farms, loading, error, reload } = useTenantCollection({
+    api, method: 'farms', dataMode, tenantId: session?.tenant?.id,
+    mockRecords: mockData.farms, title: 'establecimientos'
+  });
   const [showFarmModal, setShowFarmModal] = useState(false);
-
-  const load = async () => {
-    setLoading(true);
-    if (dataMode === 'mock') {
-      setFarms(mockData.farms);
-      setLoading(false);
-      return;
-    }
-    try {
-      const res = await api.farms();
-      setFarms(res.data || []);
-    } catch {
-      setFarms(mockData.farms);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, [api, dataMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="page-grid">
@@ -123,13 +110,15 @@ export function FarmsPage() {
           <span className="eyebrow">Gestión territorial</span>
           <h1>Establecimientos y lotes</h1>
         </div>
-        <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
+        {canEdit && <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
           <Plus size={16} /> Nuevo establecimiento
-        </button>
+        </button>}
       </section>
 
-      {/* Stats bar */}
-      <div className="stats-row">
+      {error && <ResourceLoadNotice title="establecimientos" error={error} onRetry={reload} />}
+      {dataMode === 'mock' && <p role="status" className="resource-demo-note">Vista de demostración: datos de ejemplo.</p>}
+      {/* Stats only represent successfully loaded records */}
+      {!loading && !error && <div className="stats-row">
         <div className="stat-tile stat-tile--green">
           <div className="stat-tile__header">
             <span className="stat-tile__label">Establecimientos</span>
@@ -150,33 +139,33 @@ export function FarmsPage() {
             {farms.reduce((s, f) => s + (f.Fields || []).reduce((fs, field) => fs + Number(field.area_hectares || 0), 0), 0).toLocaleString('es-AR')}
           </span>
         </div>
-      </div>
+      </div>}
 
       {/* Farm Cards */}
-      {loading ? (
+      {error ? null : loading ? (
         <div className="empty-state"><span>Cargando…</span></div>
       ) : farms.length === 0 ? (
         <div className="empty-state">
           <Landmark size={40} />
           <h3>Sin establecimientos</h3>
           <p>Creá tu primer establecimiento para empezar a organizar tus lotes.</p>
-          <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
+          {canEdit && <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
             <Plus size={16} /> Nuevo establecimiento
-          </button>
+          </button>}
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {farms.map((farm) => (
-            <FarmCard key={farm.id} farm={farm} onFieldAdded={load} />
+            <FarmCard key={farm.id} farm={farm} canEdit={canEdit} onFieldAdded={reload} />
           ))}
         </div>
       )}
 
-      {showFarmModal && (
+      {canEdit && showFarmModal && (
         <FarmFormModal
           isOpen
           onClose={() => setShowFarmModal(false)}
-          onCreated={() => { setShowFarmModal(false); load(); }}
+          onCreated={() => { setShowFarmModal(false); reload(); }}
         />
       )}
     </div>

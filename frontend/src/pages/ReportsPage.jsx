@@ -1,30 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { FileSpreadsheet } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { FieldReportCard } from '../components/FieldReportCard.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { useTenantCollection } from '../services/useTenantCollection.js';
 
 export function ReportsPage() {
-  const { api, dataMode } = useSession();
-  const [fields, setFields] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { api, dataMode, session } = useSession();
+  const { records: fields, loading, error, reload } = useTenantCollection({
+    api, method: 'fields', dataMode, tenantId: session?.tenant?.id,
+    mockRecords: mockData.fields, title: 'lotes para reportes'
+  });
   const [search, setSearch] = useState('');
-
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      if (dataMode === 'mock') { setFields(mockData.fields); setLoading(false); return; }
-      try {
-        const res = await api.fields();
-        setFields(res.data || []);
-      } catch {
-        setFields(mockData.fields);
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [api, dataMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = search
     ? fields.filter((f) => [f.name, f.Farm?.name].join(' ').toLowerCase().includes(search.toLowerCase()))
@@ -49,10 +37,12 @@ export function ReportsPage() {
             placeholder="Buscar lote o establecimiento…"
           />
         </div>
-        <span style={{ fontSize: 13, color: '#64748b' }}>{visible.length} lotes</span>
+        <span style={{ fontSize: 13, color: '#64748b' }}>{loading ? '…' : error ? '—' : visible.length} lotes</span>
       </div>
 
-      {loading ? (
+      {error && <ResourceLoadNotice title="lotes para reportes" error={error} onRetry={reload} />}
+      {dataMode === 'mock' && <p className="resource-demo-note" role="status">Reportes de ejemplo.</p>}
+      {error ? null : loading ? (
         <div className="empty-state"><span>Cargando lotes…</span></div>
       ) : visible.length === 0 ? (
         <div className="empty-state">

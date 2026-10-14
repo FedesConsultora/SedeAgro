@@ -108,6 +108,29 @@ try {
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: operational home surfaces partial failure and opens real orders without mock fallback');
 
+  // Other operational modules must also fail honestly: never replace a live
+  // transport failure with example farms or campaigns.
+  await page1.route('**/api/v1/farms', (route) => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Consulta de establecimientos interrumpida' } })
+  }));
+  await page1.getByRole('button', { name: 'Establecimientos' }).click();
+  await page1.getByText('No se pudieron cargar establecimientos.').waitFor();
+  assert.equal(await page1.getByText('La Esperanza', { exact: true }).count(), 0);
+  await page1.unroute('**/api/v1/farms');
+
+  await page1.route('**/api/v1/campaigns', (route) => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Consulta de campañas interrumpida' } })
+  }));
+  await page1.getByRole('button', { name: 'Campañas' }).click();
+  await page1.getByText('No se pudieron cargar campañas.').waitFor();
+  assert.equal(await page1.getByText('Campaña gruesa 2026/27').count(), 0);
+  await page1.unroute('**/api/v1/campaigns');
+  await page1.getByRole('button', { name: 'Sesiones' }).click();
+  await page1.getByText('Esta sesión').waitFor();
+  console.log('PASS: farms and campaigns reject live mock fallback after API 503');
+
   // Second independent browser context signs in to the same tenant.
   const context2 = await browser.newContext();
   const page2 = await context2.newPage();

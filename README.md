@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Estados verificables de recursos (Bloque 0Q)
+
+Establecimientos, Campañas, Reportes, Activos, Equipos y Satélite distinguen correctamente **carga, respuesta vacía, error y demostración**, sin inventar registros cuando falla el servidor. Se evitan invitaciones o controles administrativos que simulen escrituras reales; Satélite ya no inventa un NDVI fijo ni nubosidad predeterminada. Hay reintentos accesibles y verificaciones de integración en Chromium. Ver [contrato por módulo y limitaciones](docs/product/truthful-resources-0q.md).
+
 ## Centro de trabajo agronómico (Bloque 0P — inspirado en TOP)
 
 El Inicio dejó de mostrar un mapa ilustrativo presentado como semáforo de riesgo y ahora lista **prioridades verificables** (órdenes vencidas/urgentes/pendientes de aprobación y recorridas atrasadas/en curso), métricas de las API habilitadas para el rol y accesos a registros concretos. Un error del backend **no se reemplaza por datos mock** en Inicio ni en Órdenes. Las filas de Órdenes son accesibles con teclado e incorporan búsqueda y filtros; un productor, un monitoreador y un contratista ven únicamente módulos correspondientes a sus capacidades. El [inventario comparado con patrones reales de TOP y próximos bloques 0Q–0T](docs/product/top-inspired-operational-roadmap.md) identifica los fallbacks que aún deben corregirse en otros módulos.
