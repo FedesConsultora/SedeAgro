@@ -62,8 +62,11 @@ export function createApiClient(session, feedback) {
       const hasBody = requestBody !== undefined;
       const response = await fetch(`${API_URL}${path}`, {
         ...requestOptions,
+        credentials: 'include',
         headers: {
           ...(hasBody ? { 'content-type': 'application/json' } : {}),
+          ...(!['GET', 'HEAD'].includes((requestOptions.method || 'GET').toUpperCase())
+            ? { 'x-sedeagro-request': '1' } : {}),
           ...(session?.token ? { authorization: `Bearer ${session.token}` } : {}),
           ...(session?.tenant?.id ? { 'x-tenant-id': session.tenant.id } : {}),
           ...headers
@@ -80,10 +83,7 @@ export function createApiClient(session, feedback) {
         // Auto-logout on stale session or deleted tenant
         if (!preserveSessionOnAuthError && (response.status === 401 ||
             (response.status === 404 && normalized.message.includes('Tenant no encontrado')))) {
-          localStorage.removeItem('sedeagro.session');
-          localStorage.setItem('sedeagro.dataMode', 'mock');
-          window.location.reload();
-          return;
+          window.dispatchEvent(new Event('sedeagro:session-expired'));
         }
 
         const apiError = new ApiError(normalized);
@@ -114,7 +114,10 @@ export function createApiClient(session, feedback) {
 
   return {
     request,
-    me: () => request('/auth/me'),
+    me: () => request('/auth/me', { silent: true, preserveSessionOnAuthError: true }),
+    logout: () => request('/auth/logout', {
+      method: 'POST', silent: true, preserveSessionOnAuthError: true
+    }),
     members: () => request('/auth/members'),
     bootstrap: () => request('/catalogs/bootstrap'),
     producers: () => request('/farms/producers'),
