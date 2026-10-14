@@ -154,6 +154,10 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Sesiones web revocables (Bloque 0N)
+
+El navegador ahora inicia sesión con **cookie HttpOnly, SameSite=Strict y Secure en producción**, y ya no guarda JWT en `localStorage`. Cada sesión tiene una fila revocable protegida por RLS en PostgreSQL. El logout invalida el token en el servidor; la aplicación valida `/auth/me` al recargar, conserva solo un identificador no secreto de tenant y preserva los borradores offline cifrados. Clientes API REST conservan Bearer explícito. La migración requiere inicio de sesión nuevo tras actualizar el backend y [un despliegue coordinado con pruebas de cookie/CSRF en staging](docs/security/revocable-cookie-sessions-0n.md). **No se ha desplegado ni certificado un VPS.**
+
 ## Privacidad de evidencia y preparación de staging (Bloque 0M)
 
 Todas las fotos offline **nuevas**, grandes o pequeñas, se convierten a JPEG mediante Canvas antes de guardarse cifradas, para no copiar EXIF/GPS del archivo original. La interfaz ya no depende de fuentes externas y el servidor Nginx de producción impone CSP de scripts del mismo origen, aislamiento de páginas y políticas de caché verificadas en CI. El plan de [seguridad, staging, backup, restauración y go/no-go](docs/pilot-staging-readiness-0m.md) es **manual**: no acredita dispositivos físicos ni un VPS ya desplegado.
