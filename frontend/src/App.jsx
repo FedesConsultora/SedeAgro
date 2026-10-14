@@ -115,7 +115,8 @@ function Shell() {
         {currentView === 'dashboard'  && <Dashboard onNavigate={handleViewChange} />}
         {currentView === 'fields'     && <FarmsPage />}
         {currentView === 'campaigns'  && <CampaignsPage />}
-        {currentView === 'scouting'   && <ScoutingPage focusRunId={focused?.view === 'scouting' ? focused.id : null} />}
+        {currentView === 'scouting'   && <ScoutingPage focusRunId={focused?.view === 'scouting' ? focused.id : null}
+          onNavigate={handleViewChange} />}
         {currentView === 'orders'     && <WorkOrdersPage focusOrderId={focused?.view === 'orders' ? focused.id : null} />}
         {currentView === 'reports'    && <ReportsPage />}
         {currentView === 'teams'      && <TeamPage />}

@@ -6,7 +6,7 @@ const page = readFileSync(new URL('../src/pages/ScoutingPage.jsx', import.meta.u
 const [detailScope, pageScope] = page.split('export function ScoutingPage');
 
 test('RunDetail never references parent-only deep-link props or collection state', () => {
-  assert.ok(detailScope.includes('function RunDetail({ run, onChanged })'));
+  assert.ok(detailScope.includes('function RunDetail({ run, onChanged, onOpenSync })'));
   assert.doesNotMatch(detailScope, /\bfocusRunId\b/);
   assert.doesNotMatch(detailScope, /\bruns\.some\(/);
 });

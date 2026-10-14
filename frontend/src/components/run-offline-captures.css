@@ -1,0 +1,103 @@
+.run-offline {
+  display: grid;
+  gap: 11px;
+  padding: 14px 16px;
+  border: 1px solid #dce8df;
+  border-radius: 12px;
+  background: #fafdfa;
+  color: #294532;
+}
+.run-offline__heading, .run-offline__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.run-offline__heading h3 { font-size: 14px; margin: 2px 0 0; }
+.run-offline__eyebrow {
+  color: #5c8067;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-size: 10px;
+  font-weight: 700;
+}
+.run-offline__heading button, .run-offline__footer button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.run-offline__hint {
+  font-size: 12px;
+  color: #536c5c;
+  line-height: 1.55;
+  margin: 0;
+}
+.run-offline__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff1ee;
+  color: #9a2c28;
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.5;
+}
+.run-offline__counts, .run-offline__flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.run-offline__counts span {
+  border: 1px solid #d7e5da;
+  background: #fff;
+  color: #49634f;
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.run-offline__list {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.run-offline__item {
+  border: 1px solid #e0e9e3;
+  border-radius: 9px;
+  background: #fff;
+  padding: 10px 12px;
+}
+.run-offline__item-main { display: grid; gap: 5px; }
+.run-offline__item-main strong { font-size: 12px; color: #2b4534; }
+.run-offline__item-main > span:not(.run-offline__phase) {
+  color: #627969; font-size: 11px;
+}
+.run-offline__phase {
+  color: #2f7348;
+  font-size: 12px;
+  font-weight: 650;
+}
+.run-offline__phase--warning { color: #a3611a; }
+.run-offline__item-main small { font-size: 11px; line-height: 1.5; color: #586e60; }
+.run-offline__flags span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #466851;
+}
+.run-offline__footer { border-top: 1px solid #dce8df; padding-top: 10px; }
+.run-offline__footer > p { flex: 1; min-width: 200px; }
+.run-offline button:focus-visible { outline: 3px solid #168343; outline-offset: 2px; }
+@media (max-width: 640px) {
+  .run-offline { padding: 12px; }
+  .run-offline__footer button { width: 100%; justify-content: center; }
+}

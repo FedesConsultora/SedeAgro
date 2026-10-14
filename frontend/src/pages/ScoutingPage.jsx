@@ -8,6 +8,7 @@ import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
+import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
 import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
 import './scouting-workspace.css';
 
@@ -27,7 +28,7 @@ function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_ES[status] || status}</span>;
 }
 
-function RunDetail({ run, onChanged }) {
+function RunDetail({ run, onChanged, onOpenSync }) {
   const { api, dataMode, session } = useSession();
   const [details, setDetails] = useState(dataMode === 'mock' ? run : null);
   const [loading, setLoading] = useState(dataMode === 'live');
@@ -204,6 +205,9 @@ function RunDetail({ run, onChanged }) {
         {queuedNotice}
       </div>}
       {dataMode === 'live' && !loading && !error && details && (
+        <RunOfflineCaptures runId={details.id} onOpenSync={onOpenSync} />
+      )}
+      {dataMode === 'live' && !loading && !error && details && (
         <ScoutingObservationGeoPanel
           key={details.id}
           observations={observations}
@@ -279,7 +283,7 @@ function RunDetail({ run, onChanged }) {
   );
 }
 
-export function ScoutingPage({ focusRunId = null }) {
+export function ScoutingPage({ focusRunId = null, onNavigate }) {
   const { api, dataMode, session, entitlements } = useSession();
   // Do not display a previous actor's coordinates while a new membership
   // or tenant is loading. A changed scope also remounts the detail.
@@ -387,7 +391,8 @@ export function ScoutingPage({ focusRunId = null }) {
                   <span>{run.assignee?.full_name || (run.assigned_to ? 'Responsable asignado' : 'Sin asignar')}</span>
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
-                {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load} />}
+                {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load}
+                  onOpenSync={() => onNavigate?.('sync')} />}
               </div>
             ))}
         </div>
