@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshCw, Clock, AlertTriangle, CheckCircle, Trash2, Send } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { offlineQueue } from '../services/offlineQueue.js';
-import { QUEUE_EVENT } from '../services/offlineSyncModel.js';
+import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 
 const STATUS_ES = {
@@ -31,6 +31,9 @@ const OBS_LABELS = {
 export function SyncPage() {
   const { api, dataMode, session } = useSession();
   const canListAll = ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
+  const activeScope = dataMode === 'live' ? sessionScope(session) : null;
+  const scopeRef = useRef(activeScope);
+  scopeRef.current = activeScope;
   const [batches, setBatches] = useState([]);
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,20 +66,30 @@ export function SyncPage() {
   }, [api, canListAll, dataMode]);
 
   const loadLocal = useCallback(async () => {
-    if (dataMode !== 'live') {
+    const requestedScope = dataMode === 'live' ? sessionScope(session) : null;
+    if (!requestedScope) {
       setPending([]);
+      setStorageInfo(null);
+      setLocalError('');
       return;
     }
     setLoadingLocal(true);
     try {
-      setPending(await offlineQueue.list(session));
-      setLocalError('');
+      const rows = await offlineQueue.list(session);
       const info = await browserStorageStatus();
+      if (scopeRef.current !== requestedScope) return;
+      setPending(rows);
       setStorageInfo(info);
+      setLocalError('');
     } catch (err) {
+      if (scopeRef.current !== requestedScope) return;
+      // Never leave a prior tenant/account's draft metadata on the screen
+      // when the new scope cannot be decrypted.
+      setPending([]);
+      setStorageInfo(null);
       setLocalError(err?.message || 'No se pudo acceder a los datos guardados en este dispositivo.');
     } finally {
-      setLoadingLocal(false);
+      if (scopeRef.current === requestedScope) setLoadingLocal(false);
     }
   }, [dataMode, session]);
 
