@@ -7,6 +7,7 @@ import { ObservationFormModal } from '../components/ObservationFormModal.jsx';
 import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
+import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
 import './scouting-workspace.css';
 
@@ -202,6 +203,14 @@ function RunDetail({ run, onChanged }) {
         fontSize: 12, color: '#065f46' }}>
         {queuedNotice}
       </div>}
+      {dataMode === 'live' && !loading && !error && details && (
+        <ScoutingObservationGeoPanel
+          key={details.id}
+          observations={observations}
+          boundary={details.CampaignField?.Field?.boundary}
+          fieldName={details.CampaignField?.Field?.name}
+        />
+      )}
       {canManage && details?.status === 'planned' && (
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
           <label className="form-field" style={{ minWidth: 220 }}>
