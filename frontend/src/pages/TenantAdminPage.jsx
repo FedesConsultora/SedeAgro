@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Building2, Users, Settings, Shield, Key, Bell, Activity, Plus, Mail, Pencil, Trash2 } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
+import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { extractCollection } from '../services/useTenantCollection.js';
 import { Modal } from '../components/Modal.jsx';
 
 const TABS = [
@@ -41,9 +43,9 @@ function MembersTab({ members, onInvite }) {
           <h2>Miembros de la organización</h2>
           <p>Gestioná los usuarios que tienen acceso al sistema.</p>
         </div>
-        <button type="button" className="primary-action" onClick={onInvite}>
-          <Plus size={14} /> Invitar miembro
-        </button>
+        {onInvite && <button type="button" className="primary-action" onClick={onInvite}>
+          <Plus size={14} /> Simular invitación
+        </button>}
       </div>
 
       <div className="admin-table">
@@ -52,8 +54,7 @@ function MembersTab({ members, onInvite }) {
           <span>Email</span>
           <span>Rol</span>
           <span>Estado</span>
-          <span>Acciones</span>
-        </div>
+         </div>
         {members.map(m => {
           const user = m.User || {};
           const tone = ROLE_TONES[m.role_code] || 'slate';
@@ -76,14 +77,7 @@ function MembersTab({ members, onInvite }) {
                   {user.status === 'active' ? 'Activo' : user.status || '–'}
                 </span>
               </span>
-              <span className="admin-table__actions">
-                <button type="button" className="ghost-action ghost-action--sm" title="Editar">
-                  <Pencil size={12} />
-                </button>
-                <button type="button" className="ghost-action ghost-action--sm ghost-action--danger" title="Eliminar">
-                  <Trash2 size={12} />
-                </button>
-              </span>
+ 
             </div>
           );
         })}
@@ -95,11 +89,11 @@ function MembersTab({ members, onInvite }) {
 // ── Roles Tab ─────────────────────────────────────────────────
 function RolesTab() {
   const roles = [
-    { code: 'tenant_admin', name: 'Administrador', desc: 'Acceso total al tenant. Puede gestionar usuarios, configuraciones y datos.', perms: ['Crear/editar/eliminar recursos', 'Gestionar miembros', 'Configurar módulos', 'Ver reportes'] },
+    { code: 'tenant_admin', name: 'Administrador', desc: 'Acceso completo a los módulos habilitados.', perms: ['Leer recursos', 'Crear y gestionar recursos permitidos', 'Consultar miembros', 'Ver reportes'] },
     { code: 'agronomic_coordinator', name: 'Coordinador Agronómico', desc: 'Coordina campañas, monitoreos y órdenes de trabajo.', perms: ['Crear campañas', 'Asignar monitoreos', 'Crear órdenes', 'Ver reportes'] },
     { code: 'scout', name: 'Monitoreador', desc: 'Realiza recorridas de campo y registra observaciones.', perms: ['Crear observaciones', 'Subir evidencia', 'Ver lotes asignados'] },
     { code: 'contractor', name: 'Contratista', desc: 'Ejecuta las órdenes de trabajo y labores asignadas.', perms: ['Ver órdenes asignadas', 'Actualizar estado de labores', 'Registrar insumos usados'] },
-    { code: 'producer_viewer', name: 'Productor / Cliente', desc: 'Vista de lectura para productores y clientes externos.', perms: ['Ver lotes propios', 'Ver reportes', 'Ver campañas'] }
+    { code: 'producer_viewer', name: 'Productor / Cliente', desc: 'Consulta GIS limitada a productores autorizados.', perms: ['Ver lotes propios con acceso concedido'] }
   ];
 
   return (
@@ -183,21 +177,21 @@ function OrgTab({ tenant }) {
       <div className="admin-org-grid">
         <div className="admin-org-field">
           <label>Nombre</label>
-          <input type="text" defaultValue={tenant?.name || 'Agro Demo'} readOnly />
+          <input type="text" defaultValue={tenant?.name || 'No informado'} readOnly />
         </div>
         <div className="admin-org-field">
           <label>Slug / URL</label>
-          <input type="text" defaultValue={tenant?.slug || 'agro-demo'} readOnly />
+          <input type="text" defaultValue={tenant?.slug || 'No informado'} readOnly />
         </div>
         <div className="admin-org-field">
           <label>Estado</label>
           <span className={`status-badge status-badge--${tenant?.status === 'active' ? 'green' : 'slate'}`}>
-            {tenant?.status || 'active'}
+            {tenant?.status || 'No informado'}
           </span>
         </div>
         <div className="admin-org-field">
           <label>Email de facturación</label>
-          <input type="email" defaultValue={tenant?.billing_email || 'admin@agro-demo.test'} readOnly />
+          <input type="email" defaultValue={tenant?.billing_email || 'No informado'} readOnly />
         </div>
       </div>
     </div>
@@ -249,6 +243,8 @@ export function TenantAdminPage() {
   const [tab, setTab] = useState('members');
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
   const [showInvite, setShowInvite] = useState(false);
   const [modules, setModules] = useState([]);
 
@@ -256,6 +252,9 @@ export function TenantAdminPage() {
     let mounted = true;
     async function load() {
       setLoading(true);
+      setError('');
+      setMembers([]);
+      setModules([]);
       if (dataMode === 'mock') {
         setMembers([
           { id: '1', role_code: 'tenant_admin', User: { full_name: 'Ana López', email: 'admin@agro-demo.test', status: 'active', is_platform_admin: true } },
@@ -279,19 +278,23 @@ export function TenantAdminPage() {
       }
       try {
         const res = await api.members();
-        if (mounted) setMembers(Array.isArray(res?.data) ? res.data : []);
-      } catch { /* ignore */ }
-      setLoading(false);
+        if (mounted) setMembers(extractCollection(res, 'miembros'));
+      } catch (err) {
+        if (mounted) setError(err?.message || 'No se pudieron consultar los miembros.');
+      } finally {
+        if (mounted) setLoading(false);
+      }
     }
     load();
     return () => { mounted = false; };
-  }, [api, dataMode]);
+  }, [api, dataMode, revision]);
 
   const toggleModule = (code) => {
     setModules(prev => prev.map(m => m.code === code ? { ...m, enabled: !m.enabled } : m));
   };
 
   const handleInvited = (data) => {
+    if (dataMode !== 'mock') return; // No live invitation route exists yet.
     setMembers(prev => [...prev, {
       id: `inv-${Date.now()}`,
       role_code: data.role,
@@ -327,23 +330,37 @@ export function TenantAdminPage() {
         })}
       </nav>
 
+      {dataMode === 'mock' && <p className="resource-demo-note" role="status">Administración de demostración. Los cambios no persisten.</p>}
+      {dataMode === 'live' && <p className="resource-demo-note" role="status">
+        La invitación de miembros y la edición de módulos aún no están disponibles desde este panel.
+      </p>}
+      {error && <ResourceLoadNotice title="miembros" error={error}
+        onRetry={() => setRevision(value => value + 1)} />}
       {/* ── Tab content ── */}
       <div className="admin-panel">
         {loading ? (
           <div className="empty-state"><span>Cargando…</span></div>
         ) : (
           <>
-            {tab === 'members' && <MembersTab members={members} onInvite={() => setShowInvite(true)} />}
+            {tab === 'members' && !error && <MembersTab members={members}
+              onInvite={dataMode === 'mock' ? () => setShowInvite(true) : null} />}
             {tab === 'roles' && <RolesTab />}
-            {tab === 'modules' && <ModulesTab modules={modules} onToggle={toggleModule} />}
+            {tab === 'modules' && (dataMode === 'mock'
+              ? <ModulesTab modules={modules} onToggle={toggleModule} />
+              : <section className="admin-tab-content">
+                  <h2>Módulos habilitados</h2>
+                  <p>Estos son los módulos informados para tu sesión. La gestión de licencias se realiza a nivel plataforma.</p>
+                  <ul>{(session?.entitlements || []).map(code => <li key={code}>{code}</li>)}</ul>
+                </section>)}
             {tab === 'org' && <OrgTab tenant={session?.tenant} />}
-            {tab === 'audit' && <AuditTab />}
+            {tab === 'audit' && (dataMode === 'mock' ? <AuditTab /> :
+              <p role="status">La auditoría general aún no está conectada a una API de consulta. Los ejemplos solo aparecen en modo Demo.</p>)}
           </>
         )}
       </div>
 
       {/* ── Invite modal ── */}
-      {showInvite && (
+      {dataMode === 'mock' && showInvite && (
         <Modal open={showInvite} onClose={() => setShowInvite(false)} title="Invitar miembro">
           <InviteForm onSubmit={handleInvited} onCancel={() => setShowInvite(false)} />
         </Modal>
