@@ -20,7 +20,8 @@ const requiredScopedTables = [
   'irrigation_events', 'audit_events', 'teams', 'team_members',
   'machinery', 'agricultural_inputs', 'work_order_inputs',
   'work_order_machinery', 'satellite_layers', 'report_templates',
-  'report_runs', 'sync_batches', 'sync_operations', 'notifications'
+  'report_runs', 'sync_batches', 'sync_operations', 'notifications',
+  'tenant_integrations', 'tenant_seat_usage'
 ];
 
 test('postgres RLS isolates two tenants and blocks cross-tenant writes and FKs', async () => {
@@ -64,6 +65,11 @@ test('postgres RLS isolates two tenants and blocks cross-tenant writes and FKs',
       [b, `Farm B ${name}`]
     );
 
+    const { rows: [secretB] } = await admin.query(
+      "INSERT INTO tenant_integrations (tenant_id, provider, credentials) VALUES ($1, $2, $3::jsonb) RETURNING id",
+      [b, 'rls-isolation-test', JSON.stringify({ privateToken: 'not-visible-to-A' })]
+    );
+
     await app.connect();
     connectedApp = true;
     const { rows: [role] } = await app.query(`
@@ -94,6 +100,8 @@ test('postgres RLS isolates two tenants and blocks cross-tenant writes and FKs',
     await app.query("SELECT set_config('app.current_tenant', $1, true)", [a]);
     assert.equal((await app.query('SELECT id FROM farms WHERE id = $1', [farmA.id])).rowCount, 1);
     assert.equal((await app.query('SELECT id FROM farms WHERE id = $1', [farmB.id])).rowCount, 0);
+    assert.equal((await app.query('SELECT id FROM tenant_integrations WHERE id = $1', [secretB.id])).rowCount, 0,
+      'Tenant A must not read tenant B integration secrets');
 
     await assert.rejects(
       app.query('INSERT INTO fields (tenant_id, farm_id, name) VALUES ($1, $2, $3)',
