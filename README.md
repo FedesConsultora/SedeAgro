@@ -154,6 +154,14 @@ Authorization: Bearer <token>
 x-tenant-id: <tenant.id>
 ```
 
+## Aislamiento PostgreSQL y pruebas reales
+
+Los endpoints de negocio utilizan `tenant_id` + permisos y, en producción, el backend debe conectarse con un rol PostgreSQL **no privilegiado**, separado del usuario de migraciones. El contexto RLS se configura exclusivamente dentro de transacciones.
+
+Consulta el [runbook de aislamiento y despliegue seguro](docs/security/postgres-rls-runbook.md). La suite de integración `npm --workspace backend run test:db` requiere una base PostgreSQL/PostGIS **desechable** y dos URLs de conexión (`TEST_DATABASE_ADMIN_URL` y `TEST_DATABASE_APP_URL`). El flujo automatizado de GitHub Actions también ejecuta esta prueba.
+
+**Advertencia:** antes de desplegar este cambio en el VPS, definir `APP_DB_USER` y `APP_DB_PASSWORD` en el `.env` raíz y seguir el procedimiento de migraciones/credenciales. No reiniciar directamente los contenedores con el antiguo comando sin aprovisionar el rol nuevo.
+
 ## Producción
 
 1. Completar `backend/.env` con secretos reales.
