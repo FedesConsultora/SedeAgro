@@ -19,6 +19,7 @@ test('RBAC grants tenant admin and coordinator but no implicit platform privileg
   assert.equal(hasCapability(principal('agronomic_coordinator'), TENANT, 'orders.execute'), true);
   assert.equal(hasCapability(principal('platform_admin'), TENANT, 'orders.write'), false);
   assert.equal(hasCapability(principal('unknown'), TENANT, 'orders.read'), false);
+  assert.equal(hasCapability(principal('constructor'), TENANT, 'orders.read'), false);
 });
 
 test('scouts may observe, but cannot approve orders or change fields', () => {
@@ -60,6 +61,7 @@ test('work-order workflow refuses skipped, repeated, and terminal transitions', 
   assert.equal(canTransitionWorkOrder('draft', 'completed', 'tenant_admin'), false);
   assert.equal(canTransitionWorkOrder('assigned', 'assigned', 'tenant_admin'), false);
   assert.equal(canTransitionWorkOrder('completed', 'in_progress', 'tenant_admin'), false);
+  assert.equal(canTransitionWorkOrder('constructor', 'assigned', 'tenant_admin'), false);
   assert.equal(canTransitionWorkOrder('draft', 'pending_approval', 'tenant_admin'), true);
   assert.equal(canTransitionWorkOrder('pending_approval', 'approved', 'agronomic_coordinator'), true);
   assert.equal(canTransitionWorkOrder('approved', 'assigned', 'tenant_admin'), true);
