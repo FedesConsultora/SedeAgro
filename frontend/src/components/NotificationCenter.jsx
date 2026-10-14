@@ -41,7 +41,7 @@ export function NotificationCenter({ onViewChange }) {
     } catch (error) {
       if (requestNumber.current === requestId && scopeRef.current === scope) {
         setState({ scope, phase: 'error', rows: [],
-          error: error?.message || 'No se pudo consultar las notificaciones.' });
+          error: error?.message || 'No se pudieron consultar las notificaciones.' });
       }
     }
   }, [api, scope, session]);
@@ -50,6 +50,14 @@ export function NotificationCenter({ onViewChange }) {
     void load();
     return () => { requestNumber.current += 1; };
   }, [load]);
+
+  // A changed actor or tenant invalidates all pending interactions as well as
+  // loaded rows. Never allow an old PATCH response to update the new inbox.
+  useEffect(() => {
+    setOpen(false);
+    setReadWorking(null);
+    setActionError('');
+  }, [scope]);
 
   useEffect(() => {
     if (!scope) return undefined;
