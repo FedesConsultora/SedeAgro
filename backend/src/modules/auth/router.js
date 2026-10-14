@@ -1,8 +1,10 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { sequelize, setLocalTenant, withTenantTransaction } from '../../core/db.js';
 import {
   Membership,
+  AuthSession,
   Plan,
   PlanModule,
   Tenant,
@@ -11,7 +13,8 @@ import {
 } from '../../models/index.js';
 import { hashPassword, verifyPassword } from '../../utils/password.js';
 import { validatePasswordStrength } from '../../utils/password.js';
-import { signSession } from '../../utils/jwt.js';
+import { signSession, verifySession } from '../../utils/jwt.js';
+import { clearSessionCookie, sessionCookie, wantsCookieSession } from '../../infra/security/sessionTransport.js';
 import { HttpError, asyncHandler, validate } from '../../utils/http.js';
 import { rateLimit } from '../../infra/http/middlewares/rateLimit.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
@@ -58,13 +61,34 @@ async function issueTenantSession(user, membership, transaction) {
     skipTenantScope: true
   });
 
+  const id = randomUUID();
+  const token = signSession({ ...sessionPayload(user, membership), jti: id });
+  const signed = verifySession(token);
+  await AuthSession.create({
+    id,
+    tenant_id: membership.tenant_id,
+    user_id: user.id,
+    expires_at: new Date(signed.exp * 1000)
+  }, { transaction });
+
   return {
-    token: signSession(sessionPayload(user, membership)),
+    token,
     user: { id: user.id, email: user.email, fullName: user.full_name, isPlatformAdmin: user.is_platform_admin },
     tenant,
     membership: { id: membership.id, roleCode: membership.role_code, status: membership.status },
     entitlements: modules.map((module) => module.module_code)
   };
+}
+
+function finishLogin(req, res, session, status = 200) {
+  if (wantsCookieSession(req)) {
+    res.setHeader('Set-Cookie', sessionCookie(session.token));
+    const { token: _token, ...publicSession } = session;
+    res.status(status).json(publicSession);
+  } else {
+    // Non-browser REST clients explicitly use Authorization: Bearer.
+    res.status(status).json(session);
+  }
 }
 
 authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, max: 10, keyPrefix: 'register-tenant' }), validate(registerTenantSchema), asyncHandler(async (req, res) => {
@@ -128,7 +152,7 @@ authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, 
     return issueTenantSession(user, membership, transaction);
   });
 
-  res.status(201).json(result);
+  finishLogin(req, res, result, 201);
 }));
 
 authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, keyPrefix: 'login' }), validate(loginSchema), asyncHandler(async (req, res) => {
@@ -174,7 +198,18 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
     (transaction) => issueTenantSession(user, selectedMembership, transaction),
     selectedMembership.tenant_id
   );
-  res.json(session);
+  finishLogin(req, res, session);
+}));
+
+authScopedRouter.post('/logout', asyncHandler(async (req, res) => {
+  // Session row is protected by tenant RLS; revocation is visible to every
+  // backend replica and takes effect on the next authenticated request.
+  await AuthSession.update({ revoked_at: new Date() }, {
+    where: { id: req.auth.session.id, user_id: req.auth.user.id, tenant_id: req.tenantId, revoked_at: null },
+    transaction: req.dbTransaction
+  });
+  res.setHeader('Set-Cookie', clearSessionCookie());
+  res.status(204).end();
 }));
 
 authScopedRouter.get('/me', asyncHandler(async (req, res) => {
@@ -194,6 +229,7 @@ authScopedRouter.get('/me', asyncHandler(async (req, res) => {
     },
     tenant: req.tenant,
     role: req.auth.role,
+    membership: { id: req.auth.membership.id, roleCode: req.auth.membership.role_code, status: req.auth.membership.status },
     entitlements: modules.map((module) => module.module_code)
   });
 }));
