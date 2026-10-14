@@ -3,6 +3,7 @@ import {
   MAX_PENDING_BATCHES, QUEUE_EVENT, retryDelayMs, sessionScope
 } from './offlineSyncModel.js';
 import { indexedDbQueueStore } from './offlineQueueStore.js';
+import { assertStorageCapacity, browserStorageStatus } from './offlineStorageStatus.js';
 
 const changes = () => {
   if (typeof window !== 'undefined') window.dispatchEvent(new Event(QUEUE_EVENT));
@@ -32,6 +33,12 @@ export function createOfflineQueue({
       throw new Error(`La cola local llegó al límite de ${MAX_PENDING_BATCHES} observaciones.`);
     }
     const item = createPendingObservation({ session, runId, values, uuid, now: now() });
+    // Advisory preflight. In private browsing / browsers lacking the Storage
+    // API, the IndexedDB transaction is still authoritative for quota errors.
+    const capacity = await browserStorageStatus().catch(() => ({
+      supported: false, quota: null, usage: null
+    }));
+    assertStorageCapacity(capacity);
     await store.put(item);
     notify();
     return item;
