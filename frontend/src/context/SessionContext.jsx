@@ -46,8 +46,12 @@ const storedDataMode = (() => {
 export function SessionProvider({ children }) {
   const [session, setSessionState] = useState(storedSession);
   const [dataMode, setDataModeState] = useState(storedDataMode);
-  const feedback = useFeedback();
-  const api = useMemo(() => createApiClient(session, feedback), [session, feedback]);
+  const { startLoading, stopLoading, showError } = useFeedback();
+  // Toast/loading counts change on EVERY request. Keep the transport identity
+  // stable so those UI updates cannot abort an in-flight offline synchronization.
+  const feedbackActions = useMemo(() => ({ startLoading, stopLoading, showError }),
+    [startLoading, stopLoading, showError]);
+  const api = useMemo(() => createApiClient(session, feedbackActions), [session, feedbackActions]);
 
   const setSession = (nextSession) => {
     const normalized = nextSession ? normalizeSession(nextSession) : demoSession;
