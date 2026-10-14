@@ -7,21 +7,22 @@
  *   - Memberships linking each user to the tenant with their role
  *   - TenantModules from the starter plan
  *
- * All users share password: SedeAgro2026!
+ * Users share the explicitly configured DEMO_PASSWORD (non-production only)
  *
  * ┌─────────────────────────────────┬──────────────────────────┬───────────────────────┐
  * │ Email                           │ Rol                      │ Password              │
  * ├─────────────────────────────────┼──────────────────────────┼───────────────────────┤
- * │ admin@agro-demo.test            │ tenant_admin             │ SedeAgro2026!         │
- * │ coordinador@agro-demo.test      │ agronomic_coordinator    │ SedeAgro2026!         │
- * │ monitor@agro-demo.test          │ scout                    │ SedeAgro2026!         │
- * │ contratista@agro-demo.test      │ contractor               │ SedeAgro2026!         │
- * │ productor@agro-demo.test        │ producer_viewer          │ SedeAgro2026!         │
+ * │ admin@agro-demo.test            │ tenant_admin             │ configured-by-env         │
+ * │ coordinador@agro-demo.test      │ agronomic_coordinator    │ configured-by-env         │
+ * │ monitor@agro-demo.test          │ scout                    │ configured-by-env         │
+ * │ contratista@agro-demo.test      │ contractor               │ configured-by-env         │
+ * │ productor@agro-demo.test        │ producer_viewer          │ configured-by-env         │
  * └─────────────────────────────────┴──────────────────────────┴───────────────────────┘
  */
 
 import { randomBytes, scrypt as scryptCallback } from 'node:crypto';
 import { promisify } from 'node:util';
+import { assertDemoSeedConfig } from '../../src/infra/db/seedPolicy.js';
 
 const scrypt = promisify(scryptCallback);
 const keyLength = 64;
@@ -32,7 +33,6 @@ async function hashPassword(password) {
   return `scrypt$${salt}$${key.toString('hex')}`;
 }
 
-const DEMO_PASSWORD = 'SedeAgro2026!';
 const TENANT_SLUG = 'agro-demo';
 const TENANT_NAME = 'Agro Demo';
 const PLAN_CODE = 'starter';
@@ -60,10 +60,12 @@ const DEMO_FIELDS = [
 ];
 
 export async function up({ context: queryInterface }) {
+  // Reject direct execution outside explicitly permitted demo environments.
+  const demoPassword = assertDemoSeedConfig();
   const sql = queryInterface.sequelize;
 
-  // 1. Hash the shared password
-  const passwordHash = await hashPassword(DEMO_PASSWORD);
+  // 1. Hash the explicitly supplied demo-only password.
+  const passwordHash = await hashPassword(demoPassword);
 
   // 2. Get the plan
   const [[plan]] = await sql.query(
@@ -196,7 +198,7 @@ export async function up({ context: queryInterface }) {
   console.log('║  SedeAgro — Cuentas de prueba creadas ✓                        ║');
   console.log('╠══════════════════════════════════════════════════════════════════╣');
   console.log('║  Tenant: Agro Demo (agro-demo)                                 ║');
-  console.log('║  Password compartida: SedeAgro2026!                             ║');
+  console.log('║  Password compartida: configured-by-env                             ║');
   console.log('╠──────────────────────────────────┬───────────────────────────────╣');
   console.log('║  Email                           │ Rol                          ║');
   console.log('╠──────────────────────────────────┼───────────────────────────────╣');
@@ -209,6 +211,7 @@ export async function up({ context: queryInterface }) {
 }
 
 export async function down({ context: queryInterface }) {
+  assertDemoSeedConfig();
   const sql = queryInterface.sequelize;
   const [[tenant]] = await sql.query(`SELECT id FROM tenants WHERE slug = :slug LIMIT 1`, { replacements: { slug: TENANT_SLUG } });
   if (!tenant) return;
