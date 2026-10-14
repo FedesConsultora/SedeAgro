@@ -77,6 +77,7 @@ export function associateModels(models) {
 
   CampaignField.hasMany(ScoutingRun, { foreignKey: 'campaign_field_id' });
   ScoutingRun.belongsTo(CampaignField, { foreignKey: 'campaign_field_id' });
+  ScoutingRun.belongsTo(User, { foreignKey: 'assigned_to', as: 'assignee', constraints: false });
   ScoutingRun.hasMany(ScoutingObservation, { foreignKey: 'scouting_run_id' });
   ScoutingObservation.belongsTo(ScoutingRun, { foreignKey: 'scouting_run_id' });
   Field.hasMany(ScoutingObservation, { foreignKey: 'field_id' });
