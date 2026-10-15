@@ -47,6 +47,8 @@ export function ReportJobsPanel({ fields }) {
     setTemplates([]);
     setRuns([]);
     setTemplateId('');
+    lock.current = false;
+    setBusy(false);
     setWorkerOnline(false);
     setError('');
     void refresh(origin);
@@ -70,8 +72,10 @@ export function ReportJobsPanel({ fields }) {
     } catch (err) {
       if (isCurrent(origin)) setError(err?.message || 'No se pudo completar la operación.');
     } finally {
-      lock.current = false;
-      if (isCurrent(origin)) setBusy(false);
+      if (isCurrent(origin)) {
+        lock.current = false;
+        setBusy(false);
+      }
     }
   };
 
