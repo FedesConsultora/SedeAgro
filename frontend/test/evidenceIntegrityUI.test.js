@@ -32,7 +32,7 @@ test('server SQL limits one integrity byte read without transmitting bytes in si
 });
 
 test('one-by-one manual-only UI, no bulk scanning, file payload or destructive draft actions', () => {
-  assert.match(panel, /<EvidenceIntegrityChecks key=\{key\}/);
+  assert.match(panel, /<EvidenceIntegrityChecks key=\{pageKey\}/);
   assert.match(panel, /items=\{result.items.slice\(0, 10\)\}/);
   assert.match(checks, /onClick=\{\(\) => void check\(item.id\)\}/);
   assert.match(checks, /items.some\(item => item.id === id\)/);
