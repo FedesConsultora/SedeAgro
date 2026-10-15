@@ -90,7 +90,7 @@ try {
   // 0T.1: real authenticated portal; keyboard must remain inside the modal,
   // Escape must close it, and focus must return to the invoking control.
   await page1.getByRole('button', { name: 'Establecimientos' }).click();
-  const farmOpener = page1.getByRole('button', { name: 'Nuevo establecimiento' });
+  const farmOpener = page1.locator('.workspace-heading').getByRole('button', { name: 'Nuevo establecimiento' });
   await farmOpener.click();
   const farmDialog = page1.getByRole('dialog', { name: 'Nuevo establecimiento' });
   await farmDialog.waitFor();
