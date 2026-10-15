@@ -179,6 +179,14 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     reportRuns: () => request('/reports/runs'),
     createReportRun: (body) => request('/reports/runs', { method: 'POST', body }),
     getFieldReport: (fieldId) => request(`/reports/field/${fieldId}`),
+    exportFieldCsv: (fieldId, { from = '', to = '' } = {}) => {
+      const query = new URLSearchParams();
+      if (from) query.set('from', from);
+      if (to) query.set('to', to);
+      const search = query.toString();
+      return request(`/reports/field/${encodeURIComponent(fieldId)}/export.csv${search ? '?' + search : ''}`,
+        { silent: true });
+    },
     satelliteLayers: () => request('/imagery/layers'),
     createSatelliteLayer: (body) => request('/imagery/layers', { method: 'POST', body }),
     syncBatches: () => request('/sync/batches'),
