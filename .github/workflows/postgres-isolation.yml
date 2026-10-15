@@ -10,7 +10,7 @@ permissions:
 jobs:
   tenant-rls:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -45,6 +45,8 @@ jobs:
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
+          bash -n scripts/ci-disposable-restore.sh
+          node --test scripts/test/disposable-restore-guards.test.mjs
           npm --workspace backend run test
       - name: Test offline browser queue
         run: npm --workspace frontend run test
@@ -68,6 +70,12 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: npm --workspace backend run test:db
+      - name: Rehearse disposable PostGIS backup, restore and restored-db RLS
+        env:
+          CI_POSTGIS_CONTAINER: ${{ job.services.postgres.id }}
+          RESTORE_TEST_APP_PASSWORD: temporary-ci-runtime-password
+          SEDEAGRO_DISPOSABLE_RESTORE: I_ACCEPT_ONLY_CI_TEST_DATABASES
+        run: bash scripts/ci-disposable-restore.sh --run
       - name: Run real Chromium cookie and session acceptance against PostgreSQL
         env:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
