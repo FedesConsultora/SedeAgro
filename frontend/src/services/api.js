@@ -178,6 +178,9 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     createReportTemplate: (body) => request('/reports/templates', { method: 'POST', body }),
     reportRuns: () => request('/reports/runs'),
     createReportRun: (body) => request('/reports/runs', { method: 'POST', body }),
+    getReportRun: (id) => request(`/reports/runs/${encodeURIComponent(id)}`, { silent: true }),
+    cancelReportRun: (id) => request(`/reports/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', silent: true }),
+    downloadReportRun: (id) => request(`/reports/runs/${encodeURIComponent(id)}/download`, { silent: true }),
     getFieldReport: (fieldId) => request(`/reports/field/${fieldId}`),
     exportFieldCsv: (fieldId, { from = '', to = '' } = {}) => {
       const query = new URLSearchParams();
