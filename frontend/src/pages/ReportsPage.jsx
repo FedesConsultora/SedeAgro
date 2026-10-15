@@ -3,6 +3,7 @@ import { FileSpreadsheet } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { FieldReportCard } from '../components/FieldReportCard.jsx';
+import { ReportJobsPanel } from '../components/ReportJobsPanel.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
 import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
@@ -22,6 +23,8 @@ export function ReportsPage() {
   return (
     <div className="page-grid">
       <WorkspaceHeading eyebrow="Análisis por lote" title="Reportes" />
+
+      {dataMode === 'live' && !loading && !error && <ReportJobsPanel fields={fields} />}
 
       {/* Search bar */}
       <div className="data-table-toolbar" style={{ borderBottom: 'none', padding: 0 }}>

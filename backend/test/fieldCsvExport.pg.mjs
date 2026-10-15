@@ -13,6 +13,9 @@ process.env.JWT_SECRET = 'field-csv-ci-test-only-secret';
 const { createApp } = await import('../src/app.js');
 const { sequelize } = await import('../src/core/db.js');
 const { signSession } = await import('../src/utils/jwt.js');
+const {
+  markReportWorkerPresent, processNextReport, claimNextReport
+} = await import('../src/modules/reports/reportWorker.js');
 
 test('field CSV exports authorized tenant data, excludes other tenant and rejects unbounded/invalid ranges', async t => {
   const owner = new pg.Client({ connectionString: ownerUrl });
@@ -153,22 +156,70 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.equal((await get(base, restricted)).status, 403);
     assert.equal((await get(base.replace(a.fieldId, b.fieldId))).status, 404);
 
-    // A report worker does not exist; no request may claim queued success.
-    const beforeRuns = (await owner.query(
-      'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
-    )).rows[0].count;
-    const queued = await fetch(`http://127.0.0.1:${server.address().port}/api/v1/reports/runs`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': tenantA,
-        'x-sedeagro-request': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ report_template_id: randomUUID(), filters: {} })
+
+    const template = (await owner.query(`
+      INSERT INTO report_templates(tenant_id,name,code,scope,format)
+      VALUES ($1,'CSV real async','ci-report-csv','field','csv') RETURNING id
+    `, [tenantA])).rows[0].id;
+    const jobBase = `http://127.0.0.1:${server.address().port}/api/v1/reports`;
+    const submit = (reportTemplateId = template, fieldId = a.fieldId) => fetch(jobBase + '/runs', {
+      method: 'POST', headers: {
+        authorization: `Bearer ${token}`, 'x-tenant-id': tenantA,
+        'x-sedeagro-request': '1', 'content-type': 'application/json'
+      },
+      body: JSON.stringify({
+        report_template_id: reportTemplateId,
+        filters: { field_id: fieldId },
+        period_start: '2026-10-15', period_end: '2026-10-15'
+      })
     });
-    assert.equal(queued.status, 409);
-    assert.equal((await queued.json()).error.code, 'REPORT_WORKER_NOT_AVAILABLE');
-    const afterRuns = (await owner.query(
+    const countRuns = async () => Number((await owner.query(
       'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
-    )).rows[0].count;
-    assert.equal(afterRuns, beforeRuns, 'never persist unprocessable queued reports');
+    )).rows[0].count);
+    const beforeRuns = await countRuns();
+    const noWorker = await submit();
+    assert.equal(noWorker.status, 503, await noWorker.clone().text());
+    assert.equal((await noWorker.json()).error.code, 'REPORT_WORKER_OFFLINE');
+    assert.equal(await countRuns(), beforeRuns, 'offline worker cannot strand queued jobs');
+    assert.equal((await get(jobBase + '/worker-status').then(r => r.json())).data.online, false);
+
+    await markReportWorkerPresent(tenantA);
+    assert.equal((await get(jobBase + '/worker-status').then(r => r.json())).data.online, true);
+    const queued = await submit();
+    assert.equal(queued.status, 202, await queued.clone().text());
+    const job = (await queued.json()).data;
+    assert.equal(job.status, 'queued');
+    assert.equal((await get(jobBase + '/runs/' + job.id).then(r => r.json())).data.status, 'queued');
+    const beforeComplete = await get(jobBase + '/runs/' + job.id + '/download');
+    assert.equal(beforeComplete.status, 409);
+    const worked = await processNextReport(tenantA);
+    assert.deepEqual({ state: worked.state, id: worked.id }, { state: 'completed', id: job.id });
+    const completedFile = await get(jobBase + '/runs/' + job.id + '/download');
+    assert.equal(completedFile.status, 200, await completedFile.clone().text());
+    assert.match(completedFile.headers.get('cache-control') || '', /no-store/);
+    const artifact = (await completedFile.json()).data;
+    const bytes = Buffer.from(artifact.content_base64, 'base64');
+    const { createHash } = await import('node:crypto');
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
+    assert.ok(bytes.subarray(0, 3).equals(Buffer.from([239, 187, 191])));
+    assert.ok(!bytes.toString('utf8').includes('BRAVO'));
+
+    const cancelJobResponse = await submit();
+    assert.equal(cancelJobResponse.status, 202);
+    const cancelId = (await cancelJobResponse.json()).data.id;
+    const cancel = await fetch(jobBase + '/runs/' + cancelId + '/cancel', {
+      method: 'POST', headers: { authorization: `Bearer ${token}`,
+        'x-tenant-id': tenantA, 'x-sedeagro-request': '1' }
+    });
+    assert.equal(cancel.status, 200, await cancel.clone().text());
+    assert.equal((await get(jobBase + '/runs/' + cancelId).then(r => r.json())).data.status, 'cancelled');
+    assert.equal((await get(jobBase + '/runs/' + cancelId + '/download')).status, 409);
+
+    // A different tenant's files cannot be reached, even with a known UUID.
+    const isolated = await get(jobBase + '/runs/' + job.id,
+      signSession({ sub: scout, tenant_id: tenantA, role_code: 'scout' }));
+    assert.equal(isolated.status, 403);
+    assert.equal((await get(jobBase + '/runs/not-a-uuid')).status, 422);
     await owner.query(`
       INSERT INTO scouting_observations
         (tenant_id,scouting_run_id,field_id,observed_by,observation_type,notes,observed_at)
