@@ -19,3 +19,16 @@ export async function queryTenant(sql, replacements = {}, options = {}) {
     }
   });
 }
+
+// Explicit tenant + active transaction for atomic UPDATE/INSERT/DELETE and
+// SELECT ... FOR UPDATE. This is not a bypass: the caller must have installed
+// the transaction-local RLS GUC via setLocalTenant. SQL must scope tenant_id.
+import { assertTenantTransaction } from '../../core/tenantDbSafety.js';
+export async function queryTenantTransaction(sql, { transaction, replacements = {}, ...options } = {}) {
+  const tenantId = replacements.tenant;
+  assertTenantTransaction(transaction, tenantId);
+  if (!/\btenant_id\b/i.test(sql)) {
+    throw new HttpError(500, 'Tenant SQL must mention tenant_id explicitly.');
+  }
+  return sequelize.query(sql, { ...options, transaction, replacements });
+}
