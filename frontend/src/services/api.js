@@ -155,6 +155,7 @@ export function createApiClient(session, feedback) {
       method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
     }),
     getEvidenceContent: (evidenceId) => request(`/scouting/evidence/${evidenceId}/content`),
+    getEvidenceIntegrity: (id) => request(`/scouting/evidence/${id}/integrity`),
     workOrders: () => request('/work-orders'),
     createWorkOrder: (body) => request('/work-orders', { method: 'POST', body }),
     updateWorkOrderStatus: (workOrderId, body) => request(`/work-orders/${workOrderId}/status`, { method: 'PATCH', body }),
