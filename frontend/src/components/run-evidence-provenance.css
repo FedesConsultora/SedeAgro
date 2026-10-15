@@ -28,3 +28,7 @@
 .run-evidence__pagination-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .run-evidence__pagination-actions button{min-height:40px}
 @media(max-width:640px){.run-evidence__pagination-actions{width:100%}.run-evidence__pagination-actions button{flex:1;min-width:125px}}
+
+.run-evidence__retry-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.run-evidence__retry-actions button{min-height:40px}
+@media(max-width:640px){.run-evidence__retry-actions button{flex:1;min-width:140px}}
