@@ -71,14 +71,18 @@ const fieldCsvQuery = z.object({
 }).strict();
 
 reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'),
-  validate(fieldCsvQuery, 'query'), asyncHandler(async (req, res) => {
+  asyncHandler(async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
+    const parsedQuery = fieldCsvQuery.safeParse(req.query);
+    if (!parsedQuery.success) {
+      throw new HttpError(422, 'Parámetros de fecha inválidos.', parsedQuery.error.flatten());
+    }
     if (!z.string().uuid().safeParse(req.params.fieldId).success) {
       throw new HttpError(422, 'Identificador de lote inválido.');
     }
     let period;
     try {
-      period = fieldCsvPeriod(req.query.from, req.query.to);
+      period = fieldCsvPeriod(parsedQuery.data.from, parsedQuery.data.to);
     } catch (error) {
       throw new HttpError(422, error.message);
     }
