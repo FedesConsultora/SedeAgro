@@ -42,7 +42,7 @@ function InviteMemberModal({ open, onClose, onInvited }) {
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Invitar miembro">
+    <Modal isOpen={open} onClose={onClose} title="Invitar miembro">
       <form onSubmit={handleSubmit}>
         <div className="form-row">
           <label className="form-field">
