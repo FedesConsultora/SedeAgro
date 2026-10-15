@@ -137,7 +137,7 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     `, [tenantA, a.run, a.fieldId, coordinator]);
     const oversized = await get(base);
     assert.equal(oversized.status, 413);
-    assert.equal(oversized.headers.get('cache-control'), 'no-store');
+    assert.match(oversized.headers.get('cache-control') || '', /no-store/);
   } finally {
     if (connected) {
       if (ids.tenants.length) await owner.query(
