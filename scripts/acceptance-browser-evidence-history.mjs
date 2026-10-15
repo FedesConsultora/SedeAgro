@@ -153,6 +153,68 @@ try {
   assert.equal(await panel.getByText('Archivo ausente').count(),0);
   console.log('PASS: cursor paging resets stale SHA results and respects page bounds');
 
+  // Hold a REAL 200 returned by Express while React navigates to another
+  // screen. Chromium must never paint an old result after this component
+  // unmounts, regardless of when the intercept finally releases.
+  let releaseDelayedPage;
+  let startedDelayedPage;
+  let finishedDelayedPage;
+  const delayedPageStarted = new Promise(resolve => { startedDelayedPage = resolve; });
+  const delayedPageFinished = new Promise(resolve => { finishedDelayedPage = resolve; });
+  const delayedPageGate = new Promise(resolve => { releaseDelayedPage = resolve; });
+  let delayedHandled = false;
+  await page.route('**/api/v1/scouting/runs/*/evidence-status?limit=10', async route => {
+    if (delayedHandled) {
+      await route.continue();
+      return;
+    }
+    delayedHandled = true;
+    try {
+      const realResponse = await route.fetch();
+      assert.equal(realResponse.status(), 200, 'delayed content must come from Express');
+      startedDelayedPage();
+      await delayedPageGate;
+      try {
+        await route.fulfill({ response: realResponse });
+      } catch {
+        // Navigating away aborts the HTTP reader. Chromium may reject a
+        // late route fulfillment because its original fetch was cancelled.
+      }
+    } finally {
+      finishedDelayedPage();
+    }
+  });
+  await panel.getByRole('button',{name:'Verificar de nuevo'}).click();
+  await delayedPageStarted;
+  await page.getByTitle('Sesiones').click();
+  await page.getByText('Esta sesión').waitFor();
+  assert.equal(await panel.count(), 0, 'unmounted scouting panel must not persist');
+  releaseDelayedPage();
+  await delayedPageFinished;
+  await page.unroute('**/api/v1/scouting/runs/*/evidence-status?limit=10');
+  assert.equal(await panel.count(), 0, 'late HTTP must not re-mount private evidence');
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
+  await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
+  console.log('PASS: late real HTTP response discarded after run panel unmount');
+
+  // Emulate delayed 401 notifications from a superseded account incarnation
+  // and an unrelated tenant, verifying the live React handler ignores both.
+  // This is an event-race assertion, not a fabricated API success response.
+  await page.evaluate(({tenantId,userId}) => {
+    window.dispatchEvent(new CustomEvent('sedeagro:session-expired', {
+      detail: { scope: `${tenantId}:${userId}`, epoch: 0 }
+    }));
+    window.dispatchEvent(new CustomEvent('sedeagro:session-expired', {
+      detail: { scope: `00000000-0000-4000-8000-000000000001:${userId}`, epoch: 1 }
+    }));
+  },{tenantId,userId});
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
+  console.log('PASS: stale 401 from old generation or tenant cannot sign out active cookie session');
+
   // Force a REAL backend 400 from a modified cursor: do not fake an API error.
   await page.route('**/api/v1/scouting/runs/*/evidence-status?limit=10&cursor=*',async route => {
     await route.continue({ url: route.request().url().replace(/cursor=[^&]*/, 'cursor=forged') });

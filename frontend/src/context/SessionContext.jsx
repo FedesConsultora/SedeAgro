@@ -1,7 +1,8 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { API_URL, createApiClient } from '../services/api.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
+import { isCurrentSessionExpiry } from '../services/sessionExpiryScope.js';
 import { useFeedback } from './FeedbackContext.jsx';
 
 const SessionContext = createContext(null);
@@ -43,6 +44,10 @@ const storedDataMode = (() => {
 
 export function SessionProvider({ children }) {
   const [session, setSessionState] = useState(demoSession);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const authEpochRef = useRef(0);
+  const [authEpoch, setAuthEpoch] = useState(0);
   const [restoring, setRestoring] = useState(Boolean(tenantHint));
   const [dataMode, setDataModeState] = useState(storedDataMode);
   const { startLoading, stopLoading, showError } = useFeedback();
@@ -50,10 +55,14 @@ export function SessionProvider({ children }) {
   // stable so those UI updates cannot abort an in-flight offline synchronization.
   const feedbackActions = useMemo(() => ({ startLoading, stopLoading, showError }),
     [startLoading, stopLoading, showError]);
-  const api = useMemo(() => createApiClient(session, feedbackActions), [session, feedbackActions]);
+  const api = useMemo(() => createApiClient(session, feedbackActions, authEpoch),
+    [session, feedbackActions, authEpoch]);
 
   const setSession = (nextSession) => {
     const normalized = nextSession ? normalizeSession(nextSession) : demoSession;
+    sessionRef.current = normalized;
+    authEpochRef.current += 1;
+    setAuthEpoch(authEpochRef.current);
     setSessionState(normalized);
     if (nextSession?.tenant?.id) localStorage.setItem('sedeagro.tenantHint', normalized.tenant.id);
     else localStorage.removeItem('sedeagro.tenantHint');
@@ -104,27 +113,30 @@ export function SessionProvider({ children }) {
   useEffect(() => {
     if (!tenantHint) return undefined;
     let cancelled = false;
+    const startingEpoch = authEpochRef.current;
     fetch(`${API_URL}/auth/me`, {
       credentials: 'include', headers: { 'x-tenant-id': tenantHint }
     }).then(async (res) => {
       if (!res.ok) throw new Error('Session expired');
       return res.json();
     }).then((profile) => {
-      if (cancelled) return;
-      setSessionState(normalizeSession({ ...profile, authenticated: true }));
+      if (cancelled || startingEpoch !== authEpochRef.current) return;
+      setSession({ ...profile, authenticated: true });
       setDataModeState('live');
       localStorage.setItem('sedeagro.dataMode', 'live');
     }).catch(() => {
-      if (cancelled) return;
-      localStorage.removeItem('sedeagro.tenantHint');
-      setSessionState(demoSession);
+      if (cancelled || startingEpoch !== authEpochRef.current) return;
+      setSession(null);
       setDataModeState('mock');
     }).finally(() => { if (!cancelled) setRestoring(false); });
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    const expired = () => {
+    const expired = (event) => {
+      // Never let a delayed 401 from an old user, tenant or cookie generation
+      // sign out the currently active session.
+      if (!isCurrentSessionExpiry(event?.detail, sessionRef.current, authEpochRef.current)) return;
       setSession(null);
       setDataModeState('mock');
       localStorage.setItem('sedeagro.dataMode', 'mock');
