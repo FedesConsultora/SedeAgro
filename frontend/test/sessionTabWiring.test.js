@@ -21,6 +21,7 @@ test('external identity changes quarantine React before server verification', ()
   assert.match(provider, /sequence === validationSequenceRef\.current && epoch === authEpochRef\.current/);
   assert.match(provider, /createSessionTabSync\(\(\) => \{ void revalidate\(\{ quarantine: true \}\)/);
   assert.match(provider, /shouldRecheckOnForeground/);
+  assert.match(app, /if \(isAuthenticated\) setAuthView\('login'\)/);
   assert.match(app, /if \(sessionCheckError\)/);
   assert.match(app, /No se muestran\s+datos privados hasta recuperar una sesión autorizada/);
 });
