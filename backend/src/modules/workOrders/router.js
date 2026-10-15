@@ -18,7 +18,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
-import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor } from './assignmentPolicy.js';
+import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { ORDER_RECIPIENT_ROLES } from '../notifications/assignmentNotificationPolicy.js';
 
@@ -176,7 +176,7 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
     entity_id: order.id,
     before: { status: previousStatus },
     after: { status: nextStatus },
-    request_id: req.requestId
+    request_id: safeAuditRequestId(req.requestId)
   }, { transaction: req.dbTransaction });
 
   res.json({ data: order });
@@ -238,7 +238,7 @@ workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), valid
       entity_type: 'work_order',
       entity_id: order.id,
       after: { user_id: assignee.user_id },
-      request_id: req.requestId
+      request_id: safeAuditRequestId(req.requestId)
     }, { transaction: req.dbTransaction });
   }
   res.status(created ? 201 : 200).json({ data: assignee, replayed: !created });
