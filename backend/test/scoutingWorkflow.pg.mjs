@@ -269,6 +269,49 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.equal(blob.tenant_id, tenantA);
     assert.deepEqual(blob.content, png);
 
+    // 0S.12: verify that metadata presence and actual private byte storage
+    // are distinct; no bytes, SHA or file names escape this read-only API.
+    const trace = await request(`/runs/${runId}/evidence-status`);
+    assert.equal(trace.status, 200, JSON.stringify(trace.json));
+    assert.equal(trace.headers.get('cache-control'), 'private, no-store');
+    assert.equal(trace.json.data.run_id, runId);
+    assert.equal(trace.json.data.limit, 100);
+    assert.equal(trace.json.data.has_more, false);
+    assert.equal(trace.json.data.items.length, 2);
+    const offlineTrace = trace.json.data.items.find(item => item.client_upload_id === offlineUploadId);
+    assert.equal(offlineTrace.id, offlineFirst.json.data.id);
+    assert.equal(offlineTrace.uploaded_by, scoutId);
+    assert.equal(offlineTrace.scouting_observation_id, observationId);
+    assert.equal(offlineTrace.bytes_available, true);
+    assert.ok(trace.json.data.items.every(item => item.bytes_available));
+    for (const privateField of ['content', 'content_base64', 'storage_key',
+      'original_name', 'content_sha256']) {
+      assert.ok(!JSON.stringify(trace.json).includes(`"${privateField}"`));
+    }
+    assert.equal((await request(`/runs/${runId}/evidence-status`, otherToken)).status, 404,
+      'scout without assignment cannot inspect evidence presence');
+    assert.equal((await request(`/runs/${runId}/evidence-status`, scoutToken,
+      'GET', undefined, tenantB)).status, 403,
+      'another tenant cannot inspect evidence');
+    assert.equal((await request(`/runs/${randomUUID()}/evidence-status`, scoutToken)).status, 404);
+    const replayTrace = await request(`/runs/${runId}/evidence-status`);
+    assert.equal(replayTrace.json.data.items.filter(item =>
+      item.client_upload_id === offlineUploadId).length, 1,
+    'idempotent replay must not create duplicate provenance rows');
+
+    // Disposable DB only: simulate a historical metadata-only asset, then
+    // restore bytes so remaining scouting acceptance continues unchanged.
+    await owner.query('DELETE FROM evidence_blobs WHERE evidence_id = $1', [evidenceId]);
+    const missingBlob = await request(`/runs/${runId}/evidence-status`);
+    assert.equal(missingBlob.status, 200);
+    assert.equal(missingBlob.json.data.items.find(item => item.id === evidenceId).bytes_available, false);
+    assert.equal(missingBlob.json.data.items.find(item =>
+      item.client_upload_id === offlineUploadId).bytes_available, true);
+    await owner.query(
+      'INSERT INTO evidence_blobs (evidence_id, tenant_id, content) VALUES ($1,$2,$3)',
+      [evidenceId, tenantA, png]
+    );
+
     const completed = await request(`/runs/${runId}`, adminToken, 'PATCH', { status: 'completed' });
     assert.equal(completed.status, 200, JSON.stringify(completed.json));
     assert.ok(completed.json.data.completed_at);
