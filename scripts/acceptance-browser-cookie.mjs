@@ -87,6 +87,52 @@ try {
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: browser restores cookie session and renders current device');
+  // 0T.1: real authenticated portal; keyboard must remain inside the modal,
+  // Escape must close it, and focus must return to the invoking control.
+  await page1.getByRole('button', { name: 'Establecimientos' }).click();
+  const farmOpener = page1.getByRole('button', { name: 'Nuevo establecimiento' });
+  await farmOpener.click();
+  const farmDialog = page1.getByRole('dialog', { name: 'Nuevo establecimiento' });
+  await farmDialog.waitFor();
+  assert.equal(await farmDialog.evaluate(el => el === document.activeElement), true);
+  await page1.keyboard.press('Shift+Tab');
+  assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true })
+    .evaluate(el => el === document.activeElement), true);
+  await page1.keyboard.press('Tab');
+  assert.equal(await farmDialog.getByRole('button', { name: 'Cerrar Nuevo establecimiento' })
+    .evaluate(el => el === document.activeElement), true);
+  await page1.keyboard.press('Escape');
+  await farmDialog.waitFor({ state: 'detached' });
+  assert.equal(await farmOpener.evaluate(el => el === document.activeElement), true);
+  console.log('PASS: Chromium modal focus, Escape and return to opener');
+
+  // An actual live lookup failure must not silently insert demo producer IDs
+  // into a create form. Retry is explicit and a failed lookup blocks submit.
+  await page1.route('**/api/v1/farms/producers', route => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Consulta de productores interrumpida' } })
+  }));
+  await farmOpener.click();
+  await farmDialog.getByText('No se pudieron cargar productores.').waitFor();
+  assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true }).isDisabled(), true);
+  assert.equal(await farmDialog.locator('#farm-producer option').count(), 0);
+  await page1.unroute('**/api/v1/farms/producers');
+  await farmDialog.getByRole('button', { name: 'Reintentar' }).click();
+  await farmDialog.getByRole('button', { name: 'Crear', exact: true }).isEnabled();
+  await farmDialog.locator('#farm-name').fill('Fixture Accesibilidad 0T1');
+  await farmDialog.getByRole('button', { name: 'Crear', exact: true }).click();
+  await farmDialog.waitFor({ state: 'detached' });
+  await page1.getByRole('button', { name: /Establecimiento Fixture Accesibilidad 0T1, mostrar lotes/ }).waitFor();
+  const farmToggle = page1.getByRole('button', {
+    name: /Establecimiento Fixture Accesibilidad 0T1, mostrar lotes/
+  });
+  await farmToggle.press('Space');
+  assert.equal(await farmToggle.getAttribute('aria-expanded'), 'true');
+  console.log('PASS: live farm form never falls back to mock producer list');
+  await page1.getByRole('button', { name: 'Sesiones' }).click();
+  await page1.getByText('Esta sesión').waitFor();
+
+
 
   // TOP-inspired operational landing must fail visibly when an API resource
   // fails, never hydrate unrelated demo orders or a fabricated field score.
