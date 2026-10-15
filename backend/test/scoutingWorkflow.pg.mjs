@@ -118,7 +118,7 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
         ...(body === undefined ? {} : { body: JSON.stringify(body) })
       });
       const json = await response.json();
-      return { status: response.status, json };
+      return { status: response.status, json, headers: response.headers };
     }
     const assigneeOptions = await request('/assignees', adminToken);
     assert.equal(assigneeOptions.status, 200);
