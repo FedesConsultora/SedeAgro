@@ -7,6 +7,7 @@ import { FieldFormModal } from '../components/FieldFormModal.jsx';
 import { FieldGeographyPanel } from '../components/FieldGeographyPanel.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
+import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
 
 const STATUS_ES = { active: 'Activo', inactive: 'Inactivo', archived: 'Archivado' };
 
@@ -130,16 +131,10 @@ export function FarmsPage() {
 
   return (
     <div className="page-grid">
-      {/* Header */}
-      <section className="page-heading">
-        <div>
-          <span className="eyebrow">Gestión territorial</span>
-          <h1>Establecimientos y lotes</h1>
-        </div>
-        {canEdit && <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
+      <WorkspaceHeading eyebrow="Gestión territorial" title="Establecimientos y lotes"
+        actions={canEdit && <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
           <Plus size={16} /> Nuevo establecimiento
-        </button>}
-      </section>
+        </button>} />
 
       {error && <ResourceLoadNotice title="establecimientos" error={error} onRetry={reload} />}
       {dataMode === 'mock' && <p role="status" className="resource-demo-note">Vista de demostración: datos de ejemplo.</p>}
@@ -169,16 +164,14 @@ export function FarmsPage() {
 
       {/* Farm Cards */}
       {error ? null : loading ? (
-        <div className="empty-state"><span>Cargando…</span></div>
+        <CollectionState status="loading" />
       ) : farms.length === 0 ? (
-        <div className="empty-state">
-          <Landmark size={40} />
-          <h3>Sin establecimientos</h3>
-          <p>Creá tu primer establecimiento para empezar a organizar tus lotes.</p>
-          {canEdit && <button type="button" className="primary-action" onClick={() => setShowFarmModal(true)}>
+        <CollectionState status="empty" title="Sin establecimientos" icon={Landmark}
+          description="Todavía no hay establecimientos registrados para esta empresa."
+          action={canEdit && <button type="button" className="primary-action"
+            onClick={() => setShowFarmModal(true)}>
             <Plus size={16} /> Nuevo establecimiento
-          </button>}
-        </div>
+          </button>} />
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {farms.map((farm) => (
