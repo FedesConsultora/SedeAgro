@@ -121,8 +121,8 @@ try {
   `,[tenantId,observation,userId]);
 
   await page.reload();
-  await page.getByRole('button',{name:'Monitoreo'}).waitFor();
-  await page.getByRole('button',{name:'Monitoreo'}).click();
+  await page.getByTitle('Monitoreo').waitFor();
+  await page.getByTitle('Monitoreo').click();
   await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
   await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
   const panel = page.getByRole('region',{name:'Verificación de evidencias de la recorrida'});
