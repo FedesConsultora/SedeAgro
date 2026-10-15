@@ -245,14 +245,14 @@ export function AssetsPage() {
 
       {/* Machinery Modal */}
       {showMachineryModal && (
-        <Modal open={showMachineryModal} onClose={() => setShowMachineryModal(false)} title="Agregar Maquinaria / Sensor">
+        <Modal isOpen={showMachineryModal} onClose={() => setShowMachineryModal(false)} title="Agregar Maquinaria / Sensor">
           <MachineryForm onSubmit={handleCreateMachinery} onCancel={() => setShowMachineryModal(false)} />
         </Modal>
       )}
 
       {/* Input Modal */}
       {showInputModal && (
-        <Modal open={showInputModal} onClose={() => setShowInputModal(false)} title="Agregar Insumo">
+        <Modal isOpen={showInputModal} onClose={() => setShowInputModal(false)} title="Agregar Insumo">
           <InputForm onSubmit={handleCreateInput} onCancel={() => setShowInputModal(false)} />
         </Modal>
       )}
