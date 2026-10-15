@@ -1,28 +1,49 @@
 import { useEffect, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
+import { ResourceLoadNotice } from './ResourceLoadNotice.jsx';
 import { mockData } from '../services/mockData.js';
 
 export function FarmFormModal({ isOpen, onClose, onCreated }) {
   const { api, dataMode } = useSession();
   const [producers, setProducers] = useState([]);
+  const [producersLoading, setProducersLoading] = useState(false);
+  const [producersError, setProducersError] = useState(null);
+  const [retry, setRetry] = useState(0);
   const [form, setForm] = useState({ name: '', locality: '', province: '', country: 'Argentina', producer_id: '', notes: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) return undefined;
+    let cancelled = false;
+    setProducers([]);
+    setProducersError(null);
+    setProducersLoading(true);
     const load = async () => {
-      if (dataMode === 'mock') { setProducers(mockData.producers); return; }
-      try { const res = await api.producers(); setProducers(res.data || []); } catch { setProducers(mockData.producers); }
+      try {
+        if (dataMode === 'mock') {
+          if (!cancelled) setProducers(mockData.producers);
+          return;
+        }
+        const response = await api.producers();
+        if (!Array.isArray(response?.data)) throw new Error('Lista de productores inválida.');
+        if (!cancelled) setProducers(response.data);
+      } catch (error) {
+        if (!cancelled) setProducersError(error?.message || 'No se pudieron consultar los productores.');
+      } finally {
+        if (!cancelled) setProducersLoading(false);
+      }
     };
-    load();
-  }, [isOpen, api, dataMode]);
+    void load();
+    return () => { cancelled = true; };
+  }, [isOpen, api, dataMode, retry]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (producersLoading || producersError) return;
     setSaving(true);
     setError('');
     try {
@@ -41,10 +62,13 @@ export function FarmFormModal({ isOpen, onClose, onCreated }) {
     <Modal isOpen={isOpen} onClose={onClose} title="Nuevo establecimiento"
       footer={<>
         <button type="button" className="ghost-action" onClick={onClose}>Cancelar</button>
-        <button type="submit" form="farm-form" className="primary-action" disabled={saving}>{saving ? 'Guardando…' : 'Crear'}</button>
+        <button type="submit" form="farm-form" className="primary-action" disabled={saving || producersLoading || Boolean(producersError)}>{saving ? 'Guardando…' : 'Crear'}</button>
       </>}
     >
       <form id="farm-form" onSubmit={handleSubmit} style={{ display: 'contents' }}>
+        {producersLoading && <p role="status">Cargando productores autorizados…</p>}
+        {producersError && <ResourceLoadNotice title="productores" error={producersError}
+          onRetry={() => setRetry(value => value + 1)} />}
         {error && <div className="auth-error" style={{ marginBottom: 0 }}><span>{error}</span></div>}
 
         <label className="form-field">

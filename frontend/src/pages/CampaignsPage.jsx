@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
@@ -6,6 +6,7 @@ import { CampaignFormModal } from '../components/CampaignFormModal.jsx';
 import { AssignFieldModal } from '../components/AssignFieldModal.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
+import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
 
 const STATUS_ES = { planned: 'Planificado', active: 'Activo', closed: 'Cerrado', archived: 'Archivado' };
 const STATUS_FILTER = ['Todos', 'active', 'planned', 'closed'];
@@ -16,6 +17,7 @@ function StatusBadge({ status }) {
 
 function CampaignCard({ campaign, onUpdated, canEdit }) {
   const [expanded, setExpanded] = useState(false);
+  const regionId = useId();
   const [showAssignModal, setShowAssignModal] = useState(false);
   const fields = campaign.CampaignFields || [];
 
@@ -23,43 +25,35 @@ function CampaignCard({ campaign, onUpdated, canEdit }) {
 
   return (
     <div className="farm-card">
-      <div className="farm-card__header" onClick={() => setExpanded((v) => !v)} role="button" tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && setExpanded((v) => !v)}>
-        <div className="farm-card__meta">
-          <div className="farm-card__icon" style={{ background: 'rgba(245,158,11,0.08)', color: '#f59e0b' }}>
-            <Sprout size={22} />
-          </div>
-          <div className="farm-card__info">
-            <strong>{campaign.name}</strong>
-            <span>
-              {campaign.season_year} · {fmt(campaign.starts_at)} → {fmt(campaign.ends_at)}
+      <div className="farm-card__header">
+        <button type="button" className="farm-card__toggle"
+          onClick={() => setExpanded(value => !value)} aria-expanded={expanded}
+          aria-controls={regionId} aria-label={`Campaña ${campaign.name}, ${expanded ? 'ocultar' : 'mostrar'} lotes`}>
+          <span className="farm-card__meta">
+            <span className="farm-card__icon" style={{ background: 'rgba(245,158,11,0.08)', color: '#b45309' }}>
+              <Sprout size={22} aria-hidden="true" />
             </span>
-          </div>
-        </div>
-
-        <div className="farm-card__stats">
-          <div className="stat">
-            <strong>{fields.length}</strong>
-            <span>{fields.length === 1 ? 'lote' : 'lotes'}</span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="farm-card__info">
+              <strong>{campaign.name}</strong>
+              <span>{campaign.season_year} · {fmt(campaign.starts_at)} → {fmt(campaign.ends_at)}</span>
+            </span>
+          </span>
+          <span className="farm-card__stats">
+            <span className="stat"><strong>{fields.length}</strong><span>{fields.length === 1 ? 'lote' : 'lotes'}</span></span>
+          </span>
+          {expanded ? <ChevronDown size={18} aria-hidden="true" /> :
+            <ChevronRight size={18} aria-hidden="true" />}
+        </button>
+        <div className="farm-card__actions">
           <StatusBadge status={campaign.status} />
-          {canEdit && <button
-            type="button"
-            className="ghost-action"
-            style={{ minHeight: 34, padding: '0 12px', fontSize: 12 }}
-            onClick={(e) => { e.stopPropagation(); setShowAssignModal(true); }}
-          >
-            <Plus size={14} /> Asignar lote
+          {canEdit && <button type="button" className="ghost-action" onClick={() => setShowAssignModal(true)}>
+            <Plus size={14} aria-hidden="true" /> Asignar lote
           </button>}
-          {expanded ? <ChevronDown size={18} style={{ color: '#64748b' }} /> : <ChevronRight size={18} style={{ color: '#64748b' }} />}
         </div>
       </div>
 
       {expanded && (
-        <div className="farm-card__fields">
+        <div id={regionId} className="farm-card__fields">
           {fields.length === 0 ? (
             <div style={{ padding: '16px 24px', color: '#94a3b8', fontSize: 13 }}>Sin lotes asignados</div>
           ) : (
@@ -111,42 +105,41 @@ export function CampaignsPage() {
 
   return (
     <div className="page-grid">
-      <section className="page-heading">
-        <div>
-          <span className="eyebrow">Planificación temporal</span>
-          <h1>Campañas</h1>
-        </div>
-        {canEdit && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
+      <WorkspaceHeading eyebrow="Planificación temporal" title="Campañas"
+        actions={canEdit && <button type="button" className="primary-action"
+          onClick={() => setShowModal(true)}>
           <Plus size={16} /> Nueva campaña
-        </button>}
-      </section>
+        </button>} />
 
       <div className="page-toolbar">
         <div className="filter-bar">
           {STATUS_FILTER.map((s) => (
             <button key={s} type="button"
               className={`filter-chip ${filter === s ? 'filter-chip--active' : ''}`}
+              aria-pressed={filter === s}
               onClick={() => setFilter(s)}>
               {s === 'Todos' ? 'Todos' : STATUS_ES[s] || s}
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 13, color: '#64748b' }}>{visible.length} campañas</span>
+        <span role="status" className="workspace-results-count">{loading || error ? '—' : visible.length} campañas</span>
       </div>
 
       {error && <ResourceLoadNotice title="campañas" error={error} onRetry={reload} />}
       {dataMode === 'mock' && <p className="resource-demo-note" role="status">Campañas de demostración.</p>}
       {error ? null : loading ? (
-        <div className="empty-state"><span>Cargando…</span></div>
+        <CollectionState status="loading" />
       ) : visible.length === 0 ? (
-        <div className="empty-state">
-          <Sprout size={40} />
-          <h3>Sin campañas</h3>
-          <p>Creá tu primera campaña para organizar los cultivos por temporada.</p>
-          {canEdit && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
-            <Plus size={16} /> Nueva campaña
-          </button>}
-        </div>
+        <CollectionState status={filter === 'Todos' ? 'empty' : 'filtered'} icon={Sprout}
+          title={filter === 'Todos' ? 'Sin campañas' : 'Sin campañas con ese estado'}
+          description={filter === 'Todos'
+            ? 'Todavía no hay campañas registradas para esta empresa.'
+            : 'Probá otro estado o seleccioná Todos para revisar el historial.'}
+          action={filter !== 'Todos'
+            ? <button type="button" className="ghost-action" onClick={() => setFilter('Todos')}>Ver todas</button>
+            : canEdit && <button type="button" className="primary-action" onClick={() => setShowModal(true)}>
+                <Plus size={16} /> Nueva campaña
+              </button>} />
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {visible.map((c) => <CampaignCard key={c.id} campaign={c} canEdit={canEdit} onUpdated={reload} />)}
