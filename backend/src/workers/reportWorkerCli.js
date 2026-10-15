@@ -3,7 +3,7 @@
 import { sequelize, connectDb } from '../core/db.js';
 import '../models/index.js';
 import { logger } from '../core/logger.js';
-import { assertWorkerTenant, processNextReport, purgeExpiredReportFiles } from '../modules/reports/reportWorker.js';
+import { assertWorkerTenant, markReportWorkerPresent, processNextReport, purgeExpiredReportFiles } from '../modules/reports/reportWorker.js';
 
 const tenantId = assertWorkerTenant(process.env.REPORT_WORKER_TENANT_ID);
 const once = process.argv.includes('--once');
@@ -17,6 +17,7 @@ await connectDb();
 try {
   let tick = 0;
   do {
+    await markReportWorkerPresent(tenantId);
     const result = await processNextReport(tenantId);
     tick += 1;
     if (tick % 60 === 1) {
