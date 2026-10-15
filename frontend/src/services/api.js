@@ -187,6 +187,15 @@ export function createApiClient(session, feedback, authEpoch = 0) {
       return request(`/reports/field/${encodeURIComponent(fieldId)}/export.csv${search ? '?' + search : ''}`,
         { silent: true });
     },
+    exportFieldDocument: (fieldId, format, { from = '', to = '' } = {}) => {
+      if (!['pdf', 'xlsx'].includes(format)) throw new Error('Formato de reporte no permitido.');
+      const query = new URLSearchParams();
+      if (from) query.set('from', from);
+      if (to) query.set('to', to);
+      const search = query.toString();
+      return request(`/reports/field/${encodeURIComponent(fieldId)}/export.${format}${search ? '?' + search : ''}`,
+        { silent: true });
+    },
     satelliteLayers: () => request('/imagery/layers'),
     createSatelliteLayer: (body) => request('/imagery/layers', { method: 'POST', body }),
     syncBatches: () => request('/sync/batches'),
