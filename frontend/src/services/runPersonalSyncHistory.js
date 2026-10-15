@@ -17,7 +17,7 @@ export function buildRunPersonalSyncHistory(response, session, runId) {
   }
   const receipts = parseMySyncReceipts(response, session);
   const seenBatches = new Set();
-  const seenOperations = new Set();
+  const operationCounts = new Map();
   const candidates = [];
 
   for (const batch of receipts) {
@@ -36,9 +36,8 @@ export function buildRunPersonalSyncHistory(response, session, runId) {
         operation.status === 'applied' &&
         validUuid(operation.result?.observation_id);
       const identity = validUuid(operation?.id) ? operation.id : `${batch.id}:${index}`;
-      const repeated = seenOperations.has(identity);
-      seenOperations.add(identity);
-      const confirmed = !repeated && validOperation && batch.status === 'processed';
+      operationCounts.set(identity, (operationCounts.get(identity) || 0) + 1);
+      const confirmed = validOperation && batch.status === 'processed';
       candidates.push({
         key: `${batch.id}:${index}`,
         batchId: batch.id,
@@ -48,8 +47,7 @@ export function buildRunPersonalSyncHistory(response, session, runId) {
         status: confirmed ? 'confirmed' : 'unverified',
         receivedAt: dateValue(batch.received_at),
         processedAt: dateValue(batch.processed_at),
-        timestamp: dateValue(batch.processed_at) || dateValue(batch.received_at),
-        isReplay: false
+        timestamp: dateValue(batch.processed_at) || dateValue(batch.received_at)
       });
     }
   }
@@ -63,7 +61,8 @@ export function buildRunPersonalSyncHistory(response, session, runId) {
     }
   }
   for (const item of candidates) {
-    if (item.observedIdentity && observationCounts.get(item.observedIdentity) !== 1) {
+    if ((item.observedIdentity && observationCounts.get(item.observedIdentity) !== 1) ||
+        (item.operationId && operationCounts.get(item.operationId) !== 1)) {
       item.status = 'unverified';
       item.observationId = null;
     }
