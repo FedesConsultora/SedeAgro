@@ -30,7 +30,7 @@ test('contractors only advance assigned work on their own account', () => {
   assert.deepEqual(availableWorkOrderTransitions(order('assigned', assigned), 'contractor', 'contractor-1', true),
     ['in_progress']);
   assert.deepEqual(availableWorkOrderTransitions(order('in_progress', assigned), 'contractor', 'contractor-1', true),
-    ['completed']);
+    []);
   assert.deepEqual(availableWorkOrderTransitions(order('pending_approval', assigned), 'contractor', 'contractor-1', true), []);
   assert.deepEqual(availableWorkOrderTransitions(order('assigned', assigned), 'contractor', 'other-user', true), []);
   assert.deepEqual(availableWorkOrderTransitions(order('assigned'), 'contractor', 'contractor-1', true), []);
