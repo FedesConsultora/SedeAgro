@@ -40,6 +40,8 @@ test('same cookie-authenticated session/tenant fences all three formats', () => 
   assert.match(api, /!\['pdf', 'xlsx'\]\.includes\(format\)/);
   assert.match(reportCard, /api\.exportFieldDocument\(fieldId, format, \{ from, to \}\)/);
   assert.match(reportCard, /scope !== currentScope\.current/);
+  assert.match(reportCard, /requestApi !== currentApiRef\.current/);
+  assert.match(reportCard, /const requestApi = api;/);
   assert.match(reportCard, /exportLock\.current = true/);
   assert.match(reportCard, /\['csv', 'pdf', 'xlsx'\]\.map/);
   assert.match(reportCard, /dataMode === 'live' &&/);
