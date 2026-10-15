@@ -126,7 +126,7 @@ export function createOfflineQueue({
           if (JSON.stringify(latest) !== JSON.stringify(current)) {
             return { status: 'changed' };
           }
-          if (await store.delete(id, { expected: latest }) === false) {
+          if (await store.delete(id, { expected: current }) === false) {
             return { status: 'changed' };
           }
           notify();
@@ -150,7 +150,7 @@ export function createOfflineQueue({
             lastError: String(error?.message || 'No se confirmó la fotografía.').slice(0, 220),
             nextRetryAt: outcome === 'retry'
               ? new Date(now().getTime() + retryDelayMs(attempts)).toISOString() : null
-          }, { expected: latest });
+          }, { expected: current });
           if (saved === false) return { status: 'changed' };
           notify();
           return { status: outcome === 'retry' ? 'pending' : outcome };
@@ -248,15 +248,12 @@ export function createOfflineQueue({
               if (!current || JSON.stringify(current) !== JSON.stringify(item)) {
                 continue; // changed/discarded during HTTP: never overwrite
               }
-              const applied = await store.put({
-                ...current, syncedObservationId: observationId
-              }, { expected: current });
+              const appliedDraft = { ...current, syncedObservationId: observationId };
+              const applied = await store.put(appliedDraft, { expected: item });
               if (applied === false) continue;
-              expectedAfterWrite = await store.get(item.id);
-              if (!expectedAfterWrite || JSON.stringify(expectedAfterWrite) !==
-                  JSON.stringify({ ...current, syncedObservationId: observationId })) {
-                continue; // concurrent mutation after partial-success ACK
-              }
+              // The returned object carries the revision from THIS commit.
+              // A later get could observe a new re-seal with identical data.
+              expectedAfterWrite = appliedDraft;
               notify();
               if (typeof sendEvidence !== 'function') {
                 throw new Error('El envío de fotografías no está disponible en este cliente.');
@@ -272,7 +269,7 @@ export function createOfflineQueue({
             if (!latest || JSON.stringify(latest) !== JSON.stringify(expectedAfterWrite)) {
               continue; // another tab changed this row after HTTP success
             }
-            if (await store.delete(item.id, { expected: latest }) === false) {
+            if (await store.delete(item.id, { expected: expectedAfterWrite }) === false) {
               continue; // atomic CAS loss: do not report delivery as complete
             }
             summary.sent += 1;
@@ -291,7 +288,7 @@ export function createOfflineQueue({
               lastError: String(error?.message || 'No se pudo enviar.').slice(0, 220),
               nextRetryAt: state === 'retry'
                 ? new Date(now().getTime() + retryDelayMs(attempts)).toISOString() : null
-            }, { expected: current });
+            }, { expected: expectedAfterWrite });
             if (saved === false) continue;
             if (state === 'conflict') summary.conflicts += 1;
             notify();
