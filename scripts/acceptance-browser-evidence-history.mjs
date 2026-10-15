@@ -132,11 +132,18 @@ try {
   assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
   await panel.getByText('Página 1 · 10 archivos en esta página').waitFor();
   console.log('PASS: real cookie/tenant run returns ten live evidence rows, no blob downloads');
+  await page.evaluate(() => {
+    const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
+    window.__gpsDescriptor = original ?? null;
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: { getCurrentPosition(success) { window.__completeGps = success; } }
+    });
+  });
   await page.getByRole('button', { name: 'Agregar observación' }).click();
   const mobileDialog = page.getByRole('dialog', { name: 'Agregar observación' });
-  await mobileDialog.getByRole('button', { name: 'Cerrar Agregar observación' }).click();
-  await mobileDialog.waitFor({ state: 'detached' });
-  console.log('PASS: hidden-tab GPS callback did not resurrect optional coordinates');
+  await mobileDialog.getByRole('button', { name: 'Usar ubicación actual' }).click();
+  await mobileDialog.getByText(/Esperando precisión GPS/).waitFor();
 
 
   // SHA is deliberate: no integrity endpoint until the operator requests it.
