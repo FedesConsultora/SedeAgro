@@ -174,48 +174,4 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     }
   }
 });
-));
-      const file = Buffer.from(doc.content_base64, 'base64');
-      assert.equal(file.length, doc.size_bytes);
-      assert.ok(file.length > 250 && file.length < 3 * 1024 * 1024);
-      assert.equal(file.subarray(0, 4).toString('latin1'),
-        format === 'pdf' ? '%PDF' : 'PK\\x03\\x04');
-      const text = file.toString(format === 'pdf' ? 'latin1' : 'utf8');
-      assert.ok(text.includes('HYPERLINK'));
-      assert.ok(!text.includes('DO NOT LEAK BRAVO'));
-      assert.ok(!text.includes('Bravo secret'));
-      assert.equal((await get(url, restricted)).status, 403);
-      assert.equal((await get(url.replace(a.fieldId, b.fieldId))).status, 404);
-      assert.equal((await get(url + '?from=2026-02-30')).status, 422);
-    }
 
-    const empty = await get(base + '?from=2026-10-16&to=2026-10-16');
-    assert.equal(empty.status, 200);
-    assert.deepEqual((await empty.json()).data.counts, { observations: 0, workOrders: 0 });
-    assert.equal((await get(base + '?from=2026-02-30')).status, 422);
-    assert.equal((await get(base + '?from=2026-10-16&to=2026-10-15')).status, 422);
-    assert.equal((await get(base + '?evil=1')).status, 422);
-    assert.equal((await get(base, restricted)).status, 403);
-    assert.equal((await get(base.replace(a.fieldId, b.fieldId))).status, 404);
-
-    await owner.query(`
-      INSERT INTO scouting_observations
-        (tenant_id,scouting_run_id,field_id,observed_by,observation_type,notes,observed_at)
-      SELECT $1,$2,$3,$4,'general','bounded', '2026-10-15T12:00:00Z'
-      FROM generate_series(1, 201)
-    `, [tenantA, a.run, a.fieldId, coordinator]);
-    const oversized = await get(base);
-    assert.equal(oversized.status, 413);
-    assert.match(oversized.headers.get('cache-control') || '', /no-store/);
-  } finally {
-    if (connected) {
-      if (ids.tenants.length) await owner.query(
-        'DELETE FROM tenants WHERE id = ANY($1::uuid[])', [ids.tenants]
-      ).catch(() => {});
-      if (ids.users.length) await owner.query(
-        'DELETE FROM users WHERE id = ANY($1::uuid[])', [ids.users]
-      ).catch(() => {});
-      await owner.end();
-    }
-  }
-});
