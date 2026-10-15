@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
+import { sessionScope } from '../services/offlineSyncModel.js';
 
 const STATUS_ES = {
   planned: 'Planificado', active: 'Activo', closed: 'Cerrado',
@@ -8,14 +9,61 @@ const STATUS_ES = {
 };
 
 export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) {
-  const { api, dataMode } = useSession();
+  const { api, dataMode, session } = useSession();
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const [exportStatus, setExportStatus] = useState('');
+  const currentScope = useRef(null);
+  currentScope.current = dataMode === 'live' ? sessionScope(session) : null;
+  useEffect(() => () => { currentScope.current = null; }, []);
+
+  const exportCsv = async () => {
+    if (exporting || dataMode !== 'live' || !currentScope.current) return;
+    setExportError('');
+    setExportStatus('');
+    if (from && to && from > to) {
+      setExportError('La fecha final no puede ser anterior a la inicial.');
+      return;
+    }
+    const scope = currentScope.current;
+    setExporting(true);
+    try {
+      const response = await api.exportFieldCsv(fieldId, { from, to });
+      if (scope !== currentScope.current || !response?.data?.csv ||
+          response.data.mimeType !== 'text/csv;charset=utf-8') return;
+      const blob = new Blob([response.data.csv], { type: response.data.mimeType });
+      const url = URL.createObjectURL(blob);
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `reporte-lote-${fieldId}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      } finally {
+        // Let the navigation consume the object URL before revocation.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      setExportStatus(`Reporte descargado: ${response.data.counts.observations} observaciones y ${response.data.counts.workOrders} órdenes.`);
+    } catch (error) {
+      if (scope === currentScope.current) {
+        setExportError(error?.message || 'No se pudo generar el reporte CSV.');
+      }
+    } finally {
+      if (scope === currentScope.current) setExporting(false);
+    }
+  };
 
   const load = async () => {
     if (loading || report) { setExpanded((v) => !v); return; }
     setLoading(true);
+    setReportError('');
     setExpanded(true);
     try {
       if (dataMode === 'mock') {
@@ -34,7 +82,8 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       }
       const res = await api.getFieldReport(fieldId);
       setReport(res.data);
-    } catch {
+    } catch (error) {
+      setReportError(error?.message || 'No se pudo cargar el resumen del lote.');
       setReport(null);
       setExpanded(false);
     } finally {
@@ -67,9 +116,34 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
         </div>
       </div>
 
+      {reportError && <p role="alert" className="resource-error">{reportError} Reintentá desde Ver reporte.</p>}
+
       {/* Expanded detail */}
       {expanded && report && (
         <>
+          {dataMode === 'live' && (
+            <section aria-label={`Descargar reporte CSV de ${fieldName}`}
+              style={{ display: 'flex', alignItems: 'end', flexWrap: 'wrap', gap: 12, padding: '12px 0' }}>
+              <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                Desde (opcional)
+                <input type="date" value={from} max={to || undefined}
+                  onChange={e => setFrom(e.target.value)} disabled={exporting} />
+              </label>
+              <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                Hasta (opcional)
+                <input type="date" value={to} min={from || undefined}
+                  onChange={e => setTo(e.target.value)} disabled={exporting} />
+              </label>
+              <button type="button" className="primary-action"
+                disabled={exporting} onClick={exportCsv} aria-busy={exporting}>
+                {exporting ? 'Generando CSV…' : 'Descargar CSV real'}
+              </button>
+              <small>Datos actuales del servidor; fechas UTC, máximo 200 registros por tipo.</small>
+              {exportError && <p role="alert" style={{ width: '100%', margin: 0 }}>{exportError}</p>}
+              {exportStatus && <p role="status" style={{ width: '100%', margin: 0 }}>{exportStatus}</p>}
+            </section>
+          )}
+
           {/* KPI row */}
           <div className="report-card__kpis">
             <div className={`report-kpi ${openOrders > 0 ? 'report-kpi--amber' : 'report-kpi--green'}`}>
