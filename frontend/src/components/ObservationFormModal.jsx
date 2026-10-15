@@ -30,7 +30,12 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   // Render-time fence: asynchronous JPEG decoding can finish before an effect
   // runs after a tenant/run change. Do not use a stale closure to persist.
   captureFence.current.setScope(isOpen && dataMode === 'live' ? locationKey : null);
-  useEffect(() => () => captureFence.current.invalidate(), []);
+  useEffect(() => {
+    // React StrictMode replays effects on mount. Restore the current valid
+    // scope after its development-only cleanup invalidates old tickets.
+    captureFence.current.setScope(isOpen && dataMode === 'live' ? locationKey : null);
+    return () => captureFence.current.invalidate();
+  }, [isOpen, dataMode, locationKey]);
   const selectedLocation = location?.key === locationKey ? location.fix : null;
   const [error, setError] = useState('');
 
