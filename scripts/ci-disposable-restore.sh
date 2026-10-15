@@ -113,7 +113,8 @@ for required in 'auth_sessions' 'evidence_blobs' 'sequelize_migrations' 'tenant_
 done
 archive_sha="$(sha256sum "$dump" | cut -d' ' -f1)"
 echo "PASS: pg_restore --list accepted encrypted-storage-safe CI archive SHA256 ${archive_sha:0:12}…"
-docker exec "$CI_POSTGIS_CONTAINER" createdb -U "$OWNER" -O "$OWNER" "$RESTORED_DB"
+docker exec "$CI_POSTGIS_CONTAINER" createdb -U "$OWNER" -O "$OWNER" \
+  --template=template0 "$RESTORED_DB"
 created=1
 docker exec -i "$CI_POSTGIS_CONTAINER" pg_restore \
   -U "$OWNER" -d "$RESTORED_DB" --exit-on-error \
