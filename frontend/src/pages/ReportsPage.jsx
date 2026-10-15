@@ -5,6 +5,7 @@ import { mockData } from '../services/mockData.js';
 import { FieldReportCard } from '../components/FieldReportCard.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
+import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
 
 export function ReportsPage() {
   const { api, dataMode, session } = useSession();
@@ -20,36 +21,35 @@ export function ReportsPage() {
 
   return (
     <div className="page-grid">
-      <section className="page-heading">
-        <div>
-          <span className="eyebrow">Análisis por lote</span>
-          <h1>Reportes</h1>
-        </div>
-      </section>
+      <WorkspaceHeading eyebrow="Análisis por lote" title="Reportes" />
 
       {/* Search bar */}
       <div className="data-table-toolbar" style={{ borderBottom: 'none', padding: 0 }}>
         <div className="data-table-toolbar__search">
           <FileSpreadsheet size={15} />
           <input
+            aria-label="Buscar lotes para reportes"
+            type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar lote o establecimiento…"
           />
         </div>
-        <span style={{ fontSize: 13, color: '#64748b' }}>{loading ? '…' : error ? '—' : visible.length} lotes</span>
+        <span role="status" className="workspace-results-count">{loading || error ? "—" : visible.length} lotes</span>
       </div>
 
       {error && <ResourceLoadNotice title="lotes para reportes" error={error} onRetry={reload} />}
       {dataMode === 'mock' && <p className="resource-demo-note" role="status">Reportes de ejemplo.</p>}
       {error ? null : loading ? (
-        <div className="empty-state"><span>Cargando lotes…</span></div>
+        <CollectionState status="loading" />
       ) : visible.length === 0 ? (
-        <div className="empty-state">
-          <FileSpreadsheet size={40} />
-          <h3>Sin lotes</h3>
-          <p>Creá lotes en Establecimientos para ver sus reportes aquí.</p>
-        </div>
+        <CollectionState status={fields.length === 0 ? 'empty' : 'filtered'} icon={FileSpreadsheet}
+          title={fields.length === 0 ? 'Sin lotes para reportar' : 'No hay lotes que coincidan'}
+          description={fields.length === 0
+            ? 'Todavía no hay lotes disponibles para esta empresa. Revisá Establecimientos.'
+            : 'Probá otra búsqueda para encontrar un lote registrado.'}
+          action={fields.length > 0 && <button type="button" className="ghost-action"
+            onClick={() => setSearch('')}>Limpiar búsqueda</button>} />
       ) : (
         <div style={{ display: 'grid', gap: 16 }}>
           {visible.map((field) => (
