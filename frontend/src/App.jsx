@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ClipboardList,
@@ -133,10 +133,28 @@ function Shell() {
 }
 
 export function App() {
-  const { isAuthenticated, restoring } = useSession();
+  const { isAuthenticated, restoring, sessionCheckError, retrySessionCheck } = useSession();
   const [authView, setAuthView] = useState('login');
+  // After registration/sign-in, a later logout must open Login, not the
+  // stale registration form that happened to be selected before signing in.
+  useEffect(() => {
+    if (isAuthenticated) setAuthView('login');
+  }, [isAuthenticated]);
 
   if (restoring) return <div role="status" className="auth-shell">Restaurando sesión segura…</div>;
+
+  if (sessionCheckError) return (
+    <div className="auth-shell" role="alert">
+      <div className="auth-card">
+        <h1>No se pudo verificar tu sesión</h1>
+        <p>La conexión o el servidor no permiten confirmar tu identidad. No se muestran
+          datos privados hasta recuperar una sesión autorizada.</p>
+        <button type="button" className="primary-action" onClick={retrySessionCheck}>
+          Reintentar verificación
+        </button>
+      </div>
+    </div>
+  );
 
   if (!isAuthenticated) {
     return authView === 'login'

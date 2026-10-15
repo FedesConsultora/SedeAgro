@@ -3,6 +3,7 @@ import { API_URL, createApiClient } from '../services/api.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { isCurrentSessionExpiry } from '../services/sessionExpiryScope.js';
+import { createSessionTabSync, shouldRecheckOnForeground } from '../services/sessionTabSync.js';
 import { useFeedback } from './FeedbackContext.jsx';
 
 const SessionContext = createContext(null);
@@ -49,6 +50,10 @@ export function SessionProvider({ children }) {
   const authEpochRef = useRef(0);
   const [authEpoch, setAuthEpoch] = useState(0);
   const [restoring, setRestoring] = useState(Boolean(tenantHint));
+  const [sessionCheckError, setSessionCheckError] = useState(false);
+  const validationSequenceRef = useRef(0);
+  const tabSyncRef = useRef(null);
+  const retrySessionCheckRef = useRef(null);
   const [dataMode, setDataModeState] = useState(storedDataMode);
   const { startLoading, stopLoading, showError } = useFeedback();
   // Toast/loading counts change on EVERY request. Keep the transport identity
@@ -60,10 +65,13 @@ export function SessionProvider({ children }) {
 
   const setSession = (nextSession) => {
     const normalized = nextSession ? normalizeSession(nextSession) : demoSession;
+    validationSequenceRef.current += 1;
     sessionRef.current = normalized;
     authEpochRef.current += 1;
     setAuthEpoch(authEpochRef.current);
     setSessionState(normalized);
+    setRestoring(false);
+    setSessionCheckError(false);
     if (nextSession?.tenant?.id) localStorage.setItem('sedeagro.tenantHint', normalized.tenant.id);
     else localStorage.removeItem('sedeagro.tenantHint');
     localStorage.removeItem('sedeagro.session');
@@ -87,6 +95,7 @@ export function SessionProvider({ children }) {
     setSession(next);
     setDataModeState('live');
     localStorage.setItem('sedeagro.dataMode', 'live');
+    tabSyncRef.current?.publish();
   };
 
 
@@ -98,6 +107,7 @@ export function SessionProvider({ children }) {
       setSession(null);
       setDataModeState('mock');
       localStorage.setItem('sedeagro.dataMode', 'mock');
+      tabSyncRef.current?.publish();
     } catch (error) {
       showError({ message: 'No se pudo cerrar la sesión en el servidor. Reintentá cuando tengas conexión.',
         status: error?.status || 0 });
@@ -108,28 +118,111 @@ export function SessionProvider({ children }) {
   const isAuthenticated = Boolean(session?.authenticated &&
     session?.user?.id && session?.tenant?.id);
 
-  // Validate the cookie against the server on every page reload; the only
-  // persistent browser hint is the non-secret tenant ID used for routing.
+  // A tab message never authenticates a user. It fences old requests, hides
+  // private React views, and asks Express to verify the cookie and tenant anew.
+  // A transient outage stays locked with a retry instead of claiming logout.
   useEffect(() => {
-    if (!tenantHint) return undefined;
-    let cancelled = false;
-    const startingEpoch = authEpochRef.current;
-    fetch(`${API_URL}/auth/me`, {
-      credentials: 'include', headers: { 'x-tenant-id': tenantHint }
-    }).then(async (res) => {
-      if (!res.ok) throw new Error('Session expired');
-      return res.json();
-    }).then((profile) => {
-      if (cancelled || startingEpoch !== authEpochRef.current) return;
-      setSession({ ...profile, authenticated: true });
-      setDataModeState('live');
-      localStorage.setItem('sedeagro.dataMode', 'live');
-    }).catch(() => {
-      if (cancelled || startingEpoch !== authEpochRef.current) return;
-      setSession(null);
-      setDataModeState('mock');
-    }).finally(() => { if (!cancelled) setRestoring(false); });
-    return () => { cancelled = true; };
+    let disposed = false;
+    let lastAttemptAt = 0;
+    let retryOnOnline = false;
+
+    const revalidate = ({ quarantine = true } = {}) => {
+      if (disposed) return Promise.resolve();
+      const sequence = ++validationSequenceRef.current;
+      if (quarantine) {
+        // Do not call setSession(null): that would remove the *other* tab's
+        // newly written tenant hint before we can verify its cookie.
+        sessionRef.current = demoSession;
+        authEpochRef.current += 1;
+        setAuthEpoch(authEpochRef.current);
+        setSessionState(demoSession);
+      }
+      const epoch = authEpochRef.current;
+      const isCurrent = () => !disposed &&
+        sequence === validationSequenceRef.current && epoch === authEpochRef.current;
+      const hint = localStorage.getItem('sedeagro.tenantHint') || '';
+      setRestoring(true);
+      setSessionCheckError(false);
+      if (!hint) {
+        if (isCurrent()) {
+          setSession(null);
+          setDataModeState('mock');
+          localStorage.setItem('sedeagro.dataMode', 'mock');
+        }
+        return Promise.resolve();
+      }
+      lastAttemptAt = Date.now();
+      if (navigator.onLine === false) {
+        if (isCurrent()) {
+          retryOnOnline = true;
+          setSessionCheckError(true);
+          setRestoring(false);
+        }
+        return Promise.resolve();
+      }
+      return fetch(`${API_URL}/auth/me`, {
+        credentials: 'include', headers: { 'x-tenant-id': hint }
+      }).then(async (res) => {
+        if ([401, 403, 404].includes(res.status)) return { unauthorized: true };
+        if (!res.ok) throw new Error('Temporary session validation failure');
+        const profile = await res.json();
+        if (!profile?.user?.id || profile?.tenant?.id !== hint || !profile?.membership?.id) {
+          throw new Error('Invalid session authority response');
+        }
+        return { profile };
+      }).then((result) => {
+        if (!isCurrent()) return;
+        retryOnOnline = false;
+        if (result.unauthorized) {
+          setSession(null);
+          setDataModeState('mock');
+          localStorage.setItem('sedeagro.dataMode', 'mock');
+        } else {
+          setSession({ ...result.profile, authenticated: true });
+          setDataModeState('live');
+          localStorage.setItem('sedeagro.dataMode', 'live');
+        }
+      }).catch(() => {
+        if (!isCurrent()) return;
+        retryOnOnline = true;
+        setSessionCheckError(true);
+      }).finally(() => {
+        if (isCurrent()) setRestoring(false);
+      });
+    };
+
+    retrySessionCheckRef.current = () => revalidate({ quarantine: true });
+    const sync = createSessionTabSync(() => { void revalidate({ quarantine: true }); });
+    tabSyncRef.current = sync;
+    void revalidate({ quarantine: Boolean(tenantHint) });
+
+    // A suspended/background tab may miss a browser event. Adopt TOP's
+    // bounded foreground revalidation; never interrupt active offline work.
+    const onForeground = () => {
+      if (!localStorage.getItem('sedeagro.tenantHint')) return;
+      if (shouldRecheckOnForeground(lastAttemptAt, Date.now(),
+        document.visibilityState === 'visible', navigator.onLine !== false)) {
+        void revalidate({ quarantine: true });
+      }
+    };
+    const onOnline = () => {
+      if (retryOnOnline) void revalidate({ quarantine: true });
+    };
+    window.addEventListener('focus', onForeground);
+    window.addEventListener('pageshow', onForeground);
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onForeground);
+    return () => {
+      disposed = true;
+      validationSequenceRef.current += 1;
+      if (tabSyncRef.current === sync) tabSyncRef.current = null;
+      retrySessionCheckRef.current = null;
+      sync.close();
+      window.removeEventListener('focus', onForeground);
+      window.removeEventListener('pageshow', onForeground);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onForeground);
+    };
   }, []);
 
   useEffect(() => {
@@ -140,6 +233,7 @@ export function SessionProvider({ children }) {
       setSession(null);
       setDataModeState('mock');
       localStorage.setItem('sedeagro.dataMode', 'mock');
+      tabSyncRef.current?.publish();
     };
     window.addEventListener('sedeagro:session-expired', expired);
     return () => window.removeEventListener('sedeagro:session-expired', expired);
@@ -214,6 +308,8 @@ export function SessionProvider({ children }) {
     entitlements: session?.entitlements || [],
     isAuthenticated,
     restoring,
+    sessionCheckError,
+    retrySessionCheck: () => retrySessionCheckRef.current?.(),
     login,
     logout
   // eslint-disable-next-line react-hooks/exhaustive-deps

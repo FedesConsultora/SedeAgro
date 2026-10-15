@@ -20,7 +20,7 @@ test('provider synchronizes generation before delivering new session to React', 
   assert.match(provider, /setAuthEpoch\(authEpochRef\.current\)/);
   assert.match(provider, /createApiClient\(session, feedbackActions, authEpoch\)/);
   assert.match(provider, /isCurrentSessionExpiry\(event\?\.detail, sessionRef\.current, authEpochRef\.current\)/);
-  assert.match(provider, /startingEpoch !== authEpochRef\.current/);
+  assert.match(provider, /sequence === validationSequenceRef\.current && epoch === authEpochRef\.current/);
 });
 
 test('browser coverage delays actual HTTP and checks stale 401 plus current revoked cookie', () => {

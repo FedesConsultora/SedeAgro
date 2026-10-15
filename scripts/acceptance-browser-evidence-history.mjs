@@ -39,6 +39,8 @@ const password = 'StrongEvidence-CI-2026!';
 const admin = new pg.Client({ connectionString: adminUrl });
 let tenantId;
 let userId;
+let secondTenantId;
+let secondUserId;
 let backend;
 let vite;
 let browser;
@@ -215,6 +217,60 @@ try {
   assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
   console.log('PASS: stale 401 from old generation or tenant cannot sign out active cookie session');
 
+  // Real two-tab shared-cookie acceptance for 0S.18.
+  const secondTab = await context.newPage();
+  await secondTab.goto('http://127.0.0.1:4177/');
+  await secondTab.getByTitle('Sesiones').waitFor();
+  await secondTab.getByTitle('Cerrar sesión').click();
+  await secondTab.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  assert.equal(await panel.count(), 0);
+  console.log('PASS: multi-tab server logout removed previous tenant private view');
+
+  // A transient validation failure must lock the old React view instead
+  // of claiming the user was logged out or reviving private evidence.
+  await page.route('**/api/v1/auth/me', route => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Temporary test outage' } })
+  }), { times: 1 });
+  // Switch the shared browser cookie to a genuinely different tenant.
+  await secondTab.getByRole('button', { name: 'Crear cuenta nueva' }).click();
+  await secondTab.locator('#reg-org-name').fill('Other Browser Tenant');
+  await secondTab.locator('#reg-slug').fill(`other-tab-${suffix}`);
+  await secondTab.locator('#reg-full-name').fill('Different Browser User');
+  await secondTab.locator('#reg-email').fill(`other-tab-${suffix}@example.test`);
+  await secondTab.locator('#reg-password').fill(password);
+  const otherRegistrationRequest = secondTab.waitForResponse(res =>
+    res.url().endsWith('/auth/register-tenant') && res.request().method() === 'POST');
+  await secondTab.locator('#register-submit').click();
+  const otherRegistration = await otherRegistrationRequest;
+  assert.equal(otherRegistration.status(), 201, await otherRegistration.text());
+  const otherProfile = await otherRegistration.json();
+  secondTenantId = otherProfile.tenant.id;
+  secondUserId = otherProfile.user.id;
+
+  await page.getByRole('alert').getByText('No se pudo verificar tu sesión').waitFor();
+  assert.equal(await panel.count(), 0);
+  await page.getByRole('button', { name: 'Reintentar verificación' }).click();
+  await page.getByTitle('Perfil de usuario').click();
+  await page.locator('.user-menu__tenant-name').getByText('Other Browser Tenant').waitFor();
+  assert.equal(await panel.count(), 0);
+  console.log('PASS: cross-tenant browser login adopted new authenticated identity');
+  await secondTab.getByTitle('Cerrar sesión').click();
+  await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+
+  await secondTab.locator('#login-email').fill(email);
+  await secondTab.locator('#login-password').fill(password);
+  await secondTab.locator('#login-submit').click();
+  await secondTab.getByTitle('Sesiones').waitFor();
+  await page.getByTitle('Monitoreo').waitFor();
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('button', { name: /Evidence Browser Lote/ }).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  assert.equal(await panel.getByRole('button', { name: 'Verificar SHA-256' }).count(), 10);
+  await secondTab.close();
+  console.log('PASS: returning to first account reads its own evidence anew');
+
   // Force a REAL backend 400 from a modified cursor: do not fake an API error.
   await page.route('**/api/v1/scouting/runs/*/evidence-status?limit=10&cursor=*',async route => {
     await route.continue({ url: route.request().url().replace(/cursor=[^&]*/, 'cursor=forged') });
@@ -277,6 +333,8 @@ try {
   if(browser)await browser.close();
   if(vite)vite.kill();
   if(backend)backend.kill();
+  if(secondTenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[secondTenantId]).catch(()=>{});
+  if(secondUserId)await admin.query('DELETE FROM users WHERE id=$1',[secondUserId]).catch(()=>{});
   if(tenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[tenantId]).catch(()=>{});
   if(userId)await admin.query('DELETE FROM users WHERE id=$1',[userId]).catch(()=>{});
   await admin.end().catch(()=>{});
