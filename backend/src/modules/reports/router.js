@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Op, QueryTypes } from 'sequelize';
-import { sequelize } from '../../core/db.js';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import { createHash } from 'node:crypto';
 import {
   ReportRun, ReportTemplate,
@@ -84,8 +84,8 @@ reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSche
       id: req.body.filters.field_id, tenant_id: req.tenantId
     }, attributes: ['id'], transaction: tx });
     if (!field) throw new HttpError(404, 'Lote no encontrado.');
-    await sequelize.query(
-      'SELECT pg_advisory_xact_lock(hashtext(:tenant))',
+    await queryTenantTransaction(
+      'SELECT pg_advisory_xact_lock(hashtext(:tenant)), :tenant AS tenant_id',
       { replacements: { tenant: req.tenantId }, transaction: tx }
     );
     const count = await ReportRun.count({ where: {
@@ -128,7 +128,7 @@ reportsRouter.post('/runs/:runId/cancel', requireCapability('reports.write'),
   asyncHandler(async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
     if (!reportRunId.safeParse(req.params.runId).success) throw new HttpError(422, 'Identificador inválido.');
-    const [run] = await sequelize.query(`
+    const [run] = await queryTenantTransaction(`
       UPDATE report_runs SET status='cancelled', lease_token=NULL,
         lease_expires_at=NULL, next_attempt_at=NULL, updated_at=now()
       WHERE id=:run AND tenant_id=:tenant AND status IN ('queued','running')
@@ -149,7 +149,7 @@ reportsRouter.get('/runs/:runId/download', requireCapability('reports.read'),
     transaction: req.dbTransaction });
     if (!run) throw new HttpError(404, 'Reporte no encontrado.');
     if (run.status !== 'completed') throw new HttpError(409, 'El reporte todavía no está disponible.');
-    const [file] = await sequelize.query(`
+    const [file] = await queryTenantTransaction(`
       SELECT format, mime_type, encode(content, 'base64') AS content_base64,
         octet_length(content)::integer AS size_bytes, sha256
       FROM report_run_files
