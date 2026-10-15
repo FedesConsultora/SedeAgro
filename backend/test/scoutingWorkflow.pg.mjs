@@ -366,7 +366,7 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.equal(firstPage.json.data.limit, 1);
     assert.equal(firstPage.json.data.items.length, 1);
     assert.equal(firstPage.json.data.has_more, true);
-    assert.match(firstPage.json.data.next_cursor, /^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$/);
+    assert.match(firstPage.json.data.next_cursor, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/);
     assert.equal(firstPage.json.data.items[0].id, evidenceIds.slice().sort().reverse()[0]);
     const token = firstPage.json.data.next_cursor;
     const secondUrl = `/runs/${runId}/evidence-status?limit=1&cursor=${encodeURIComponent(token)}`;
