@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { Op } from 'sequelize';
 import {
   AgriculturalInput,
+  AuditEvent,
   CampaignField,
   Field,
   Machinery,
@@ -17,6 +18,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
+import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { ORDER_RECIPIENT_ROLES } from '../notifications/assignmentNotificationPolicy.js';
 
@@ -132,18 +134,49 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
       undefined, 'WORK_ORDER_TRANSITION_DENIED');
   }
   if (nextStatus === 'assigned') {
-    const assignees = await WorkOrderAssignee.count({
+    const assignees = await WorkOrderAssignee.findAll({
       where: { tenant_id: req.tenantId, work_order_id: order.id },
+      attributes: ['user_id'],
       transaction: req.dbTransaction
     });
-    if (assignees === 0) {
-      throw new HttpError(409, 'La orden necesita al menos un responsable para pasar a asignada.');
+    const userIds = assignees.map(item => item.user_id);
+    const memberships = userIds.length ? await Membership.findAll({
+      where: {
+        tenant_id: req.tenantId,
+        user_id: { [Op.in]: userIds },
+        status: 'active',
+        role_code: { [Op.in]: ORDER_RECIPIENT_ROLES }
+      },
+      attributes: ['user_id'],
+      include: [{
+        model: User,
+        attributes: ['id'],
+        where: { status: 'active' },
+        required: true
+      }],
+      transaction: req.dbTransaction
+    }) : [];
+    if (!hasActiveWorkOrderExecutor(userIds, memberships.map(item => item.user_id))) {
+      throw new HttpError(409,
+        'La orden necesita al menos un responsable activo para pasar a asignada.',
+        undefined, 'WORK_ORDER_ACTIVE_ASSIGNEE_REQUIRED');
     }
   }
+  const previousStatus = order.status;
   await order.update({
     status: nextStatus,
     approved_at: nextStatus === 'approved' ? new Date() : order.approved_at,
     completed_at: nextStatus === 'completed' ? new Date() : order.completed_at
+  }, { transaction: req.dbTransaction });
+  await AuditEvent.create({
+    tenant_id: req.tenantId,
+    actor_id: req.auth.user.id,
+    action: 'work_order.status_changed',
+    entity_type: 'work_order',
+    entity_id: order.id,
+    before: { status: previousStatus },
+    after: { status: nextStatus },
+    request_id: safeAuditRequestId(req.requestId)
   }, { transaction: req.dbTransaction });
 
   res.json({ data: order });
@@ -158,6 +191,10 @@ workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), valid
     lock: req.dbTransaction.LOCK.UPDATE
   });
   if (!order) throw new HttpError(404, 'Orden de trabajo no encontrada.');
+  if (!canAddWorkOrderAssignee(order.status)) {
+    throw new HttpError(409, 'No se pueden incorporar responsables después de iniciar la asignación operativa.',
+      undefined, 'WORK_ORDER_ASSIGNMENT_CLOSED');
+  }
 
   const membership = await Membership.findOne({
     where: {
@@ -194,6 +231,15 @@ workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), valid
     await createAssignmentNotification(req, {
       entityType: 'work_order', entityId: order.id, userId: assignee.user_id
     });
+    await AuditEvent.create({
+      tenant_id: req.tenantId,
+      actor_id: req.auth.user.id,
+      action: 'work_order.assignee_added',
+      entity_type: 'work_order',
+      entity_id: order.id,
+      after: { user_id: assignee.user_id },
+      request_id: safeAuditRequestId(req.requestId)
+    }, { transaction: req.dbTransaction });
   }
   res.status(created ? 201 : 200).json({ data: assignee, replayed: !created });
 }));

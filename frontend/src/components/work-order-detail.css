@@ -21,3 +21,12 @@
   .order-detail .detail-row { flex-wrap: wrap; }
   .order-detail .detail-row__value { overflow-wrap: anywhere; }
 }
+
+.order-detail__assignment { border-top: 1px solid #e4ece7; padding-top: 14px; }
+.order-detail__assignment p { line-height: 1.5; }
+.order-detail__assignment form { display: grid; gap: 10px; }
+.order-detail__assignment select { width: 100%; max-width: 100%; }
+.order-detail__assignment .primary-action { min-height: 42px; justify-self: start; }
+@media (max-width: 600px) {
+  .order-detail__assignment .primary-action { width: 100%; }
+}

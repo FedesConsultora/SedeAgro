@@ -44,13 +44,14 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const sql = `SELECT count(*)::int AS total FROM ${table} WHERE ${conditions}`;
     return (await owner.query(sql, params)).rows[0].total;
   }
-  async function request(path, token, tenant, method = 'GET', body) {
+  async function request(path, token, tenant, method = 'GET', body, extraHeaders = {}) {
     const response = await fetch(base + path, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
         'x-tenant-id': tenant,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' })
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...extraHeaders
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
@@ -236,6 +237,65 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal((await request(`/work-orders/${orderId}`,
       contractorBToken, tenantB)).status, 404);
     assert.equal((await request('/notifications', adminBToken, tenantB)).body.data.length, 0);
+
+    // A contractor cannot add executors. Every state change and new assignment
+    // writes minimal audit metadata atomically, without duplicating replays.
+    assert.equal((await request(route, contractorToken, tenantA, 'POST', payload)).status, 403);
+    assert.equal(await count('audit_events',
+      'tenant_id=$1 AND entity_id=$2 AND action=$3',
+      [tenantA, orderId, 'work_order.assignee_added']), 2);
+    for (const status of ['pending_approval', 'approved', 'assigned']) {
+      const transition = await request(`/work-orders/${orderId}/status`,
+        adminToken, tenantA, 'PATCH', { status });
+      assert.equal(transition.status, 200, JSON.stringify(transition.body));
+    }
+    assert.equal(await count('audit_events',
+      'tenant_id=$1 AND entity_id=$2 AND action=$3',
+      [tenantA, orderId, 'work_order.status_changed']), 3);
+    const frozenCount = await count('notifications', 'entity_id=$1', [orderId]);
+    const frozen = await request(route, adminToken, tenantA, 'POST',
+      { user_id: adminA, responsibility: 'executor' });
+    assert.equal(frozen.status, 409, JSON.stringify(frozen.body));
+    assert.equal(frozen.body.error.code, 'WORK_ORDER_ASSIGNMENT_CLOSED');
+    assert.equal((await request(route, adminToken, tenantA, 'POST', payload)).status, 409);
+    assert.equal(await count('notifications', 'entity_id=$1', [orderId]), frozenCount);
+    assert.equal(await count('audit_events',
+      'tenant_id=$1 AND entity_id=$2 AND action=$3',
+      [tenantA, orderId, 'work_order.assignee_added']), 2);
+
+    // Membership may be revoked after assignment, before the order is ready.
+    // A revoked executor never satisfies the approval -> assigned gate.
+    const revocationOrder = await request('/work-orders', adminToken, tenantA, 'POST',
+      { field_id: fieldA, type: 'inspection', title: 'Revoked executor gate' });
+    assert.equal(revocationOrder.status, 201);
+    const revokedId = revocationOrder.body.data.id;
+    assert.equal((await request(`/work-orders/${revokedId}/assignees`,
+      adminToken, tenantA, 'POST', { user_id: contractor2 },
+      { 'x-request-id': 'not-a-uuid' })).status, 201);
+    const auditCorrelation = (await owner.query(`SELECT request_id FROM audit_events
+      WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.assignee_added'`,
+      [tenantA, revokedId])).rows;
+    assert.equal(auditCorrelation.length, 1);
+    assert.equal(auditCorrelation[0].request_id, null);
+    for (const status of ['pending_approval', 'approved']) {
+      assert.equal((await request(`/work-orders/${revokedId}/status`,
+        adminToken, tenantA, 'PATCH', { status })).status, 200);
+    }
+    await owner.query(`UPDATE memberships SET status='blocked'
+      WHERE tenant_id=$1 AND user_id=$2`, [tenantA, contractor2]);
+    const denied = await request(`/work-orders/${revokedId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'assigned' });
+    assert.equal(denied.status, 409, JSON.stringify(denied.body));
+    assert.equal(denied.body.error.code, 'WORK_ORDER_ACTIVE_ASSIGNEE_REQUIRED');
+    assert.equal((await request(`/work-orders/${revokedId}`,
+      adminToken, tenantA)).body.data.status, 'approved');
+    assert.equal(await count('audit_events',
+      'tenant_id=$1 AND entity_id=$2 AND action=$3',
+      [tenantA, revokedId, 'work_order.status_changed']), 2);
+    await owner.query(`UPDATE memberships SET status='active'
+      WHERE tenant_id=$1 AND user_id=$2`, [tenantA, contractor2]);
+    assert.equal((await request(`/work-orders/${revokedId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'assigned' })).status, 200);
 
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
