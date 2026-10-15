@@ -14,6 +14,16 @@ export async function up({ context: queryInterface }) {
     CREATE INDEX idx_report_runs_claim ON report_runs(tenant_id, status, next_attempt_at, created_at)
       WHERE status IN ('queued', 'running');
 
+    CREATE TABLE report_worker_presence (
+      tenant_id uuid PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+      last_seen_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE report_worker_presence ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE report_worker_presence FORCE ROW LEVEL SECURITY;
+    CREATE POLICY report_worker_presence_tenant_isolation ON report_worker_presence
+      USING (tenant_id = app.current_tenant_id())
+      WITH CHECK (tenant_id = app.current_tenant_id());
+
     CREATE TABLE report_run_files (
       run_id uuid PRIMARY KEY,
       tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -39,6 +49,7 @@ export async function up({ context: queryInterface }) {
 export async function down({ context: queryInterface }) {
   await queryInterface.sequelize.query(`
     DROP TABLE IF EXISTS report_run_files;
+    DROP TABLE IF EXISTS report_worker_presence;
     DROP INDEX IF EXISTS idx_report_runs_claim;
     ALTER TABLE report_runs
       DROP CONSTRAINT IF EXISTS report_runs_lease_pair,
