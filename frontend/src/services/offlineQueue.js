@@ -123,12 +123,12 @@ export function createOfflineQueue({
           const confirmed = verifiedPhotoUpload(uploaded, plan);
           const latest = await store.get(id);
           if (!latest || latest.scope !== scope) return { status: 'missing' };
-          if (JSON.stringify(latest.body) !== JSON.stringify(current.body) ||
-              JSON.stringify(latest.evidence) !== JSON.stringify(current.evidence) ||
-              latest.idempotencyKey !== current.idempotencyKey) {
+          if (JSON.stringify(latest) !== JSON.stringify(current)) {
             return { status: 'changed' };
           }
-          await store.delete(id);
+          if (await store.delete(id, { expected: latest }) === false) {
+            return { status: 'changed' };
+          }
           notify();
           return { status: 'uploaded', evidenceId: confirmed.evidenceId,
             replayed: confirmed.replayed };
@@ -137,13 +137,12 @@ export function createOfflineQueue({
           // the original bytes and client_upload_id for idempotent replay.
           const latest = await store.get(id);
           if (!latest || latest.scope !== scope) return { status: 'missing' };
-          if (JSON.stringify(latest.body) !== JSON.stringify(current.body) ||
-              JSON.stringify(latest.evidence) !== JSON.stringify(current.evidence)) {
+          if (JSON.stringify(latest) !== JSON.stringify(current)) {
             return { status: 'changed' };
           }
           const outcome = classifySyncError(error);
           const attempts = latest.attempts + 1;
-          await store.put({
+          const saved = await store.put({
             ...latest,
             attempts,
             state: outcome === 'retry' ? 'pending' : outcome,
@@ -151,7 +150,8 @@ export function createOfflineQueue({
             lastError: String(error?.message || 'No se confirmó la fotografía.').slice(0, 220),
             nextRetryAt: outcome === 'retry'
               ? new Date(now().getTime() + retryDelayMs(attempts)).toISOString() : null
-          });
+          }, { expected: latest });
+          if (saved === false) return { status: 'changed' };
           notify();
           return { status: outcome === 'retry' ? 'pending' : outcome };
         }
