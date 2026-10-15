@@ -5,6 +5,7 @@ import { canNavigateView } from '../services/navigationAccess.js';
 import { sessionScope, QUEUE_EVENT } from '../services/offlineSyncModel.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { buildRunEvidenceProvenance } from '../services/runEvidenceProvenance.js';
+import { EvidenceIntegrityChecks } from './EvidenceIntegrityChecks.jsx';
 import './run-evidence-provenance.css';
 
 const STATUS = {
@@ -154,16 +155,12 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
         </>}
         {result.items.length > 0 && <>
           <h4 className="run-evidence__subheading">Últimos archivos registrados en el servidor</h4>
-          <ol className="run-evidence__list">
-            {result.items.slice(0, 10).map(asset => (
-              <li className="run-evidence__server-row" key={asset.id}>
-                <span>{asset.kind === 'photo' ? 'Fotografía' : 'Documento'} {shortId(asset.id)}</span>
-                <strong className={asset.bytesAvailable ? 'run-evidence__present' : 'run-evidence__missing'}>
-                  {asset.bytesAvailable ? 'Bytes presentes' : 'Solo metadatos'}
-                </strong>
-              </li>
-            ))}
-          </ol>
+          <p className="run-evidence__hint">
+            Para verificar el SHA-256 seleccioná un archivo. La comprobación se ejecuta
+            individualmente en el servidor sin descargar su contenido a este dispositivo.
+          </p>
+          <EvidenceIntegrityChecks key={key}
+            scopeKey={key} items={result.items.slice(0, 10)} />
           {result.items.length > 10 && <p className="run-evidence__hint">
             Se resumen 10 de {result.items.length} archivos registrados en esta respuesta.
           </p>}

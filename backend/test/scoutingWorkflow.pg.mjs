@@ -269,6 +269,56 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.equal(blob.tenant_id, tenantA);
     assert.deepEqual(blob.content, png);
 
+    // 0S.13 — explicit integrity is about CURRENT private bytes, not just a
+    // valid upload ACK or an EvidenceAsset metadata row. All mutations here
+    // happen only in this disposable PostGIS test fixture.
+    const integrityPath = `/evidence/${evidenceId}/integrity`;
+    const validIntegrity = await request(integrityPath);
+    assert.equal(validIntegrity.status, 200, JSON.stringify(validIntegrity.json));
+    assert.equal(validIntegrity.headers.get('cache-control'), 'private, no-store');
+    assert.deepEqual(validIntegrity.json, { data: { id: evidenceId, status: 'verified' } });
+    assert.deepEqual((await request(`/evidence/${offlineFirst.json.data.id}/integrity`)).json,
+      { data: { id: offlineFirst.json.data.id, status: 'verified' } });
+    assert.equal((await request(integrityPath, otherToken)).status, 404,
+      'a scout cannot compute a digest for an unassigned run');
+    assert.equal((await request(integrityPath, scoutToken, 'GET', undefined, tenantB)).status, 403);
+    assert.equal((await request(`/evidence/${randomUUID()}/integrity`)).status, 404);
+    const originalHash = added.json.data.content_sha256;
+    assert.match(originalHash, /^[0-9a-f]{64}$/);
+
+    const corrupted = Buffer.from(png);
+    corrupted[corrupted.length - 1] ^= 0x01;
+    await owner.query('UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
+      [evidenceId, corrupted]);
+    assert.deepEqual((await request(integrityPath)).json,
+      { data: { id: evidenceId, status: 'mismatch' } }, 'same-length corruption must be detected');
+    await owner.query('UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
+      [evidenceId, png]);
+    await owner.query('UPDATE evidence_assets SET size_bytes = $2 WHERE id = $1',
+      [evidenceId, png.length + 1]);
+    assert.equal((await request(integrityPath)).json.data.status, 'mismatch',
+      'wrong declared file size must be reported');
+    await owner.query('UPDATE evidence_assets SET size_bytes = $2 WHERE id = $1',
+      [evidenceId, png.length]);
+
+    await owner.query('UPDATE evidence_assets SET content_sha256 = NULL WHERE id = $1',
+      [evidenceId]);
+    assert.equal((await request(integrityPath)).json.data.status, 'unverifiable',
+      'legacy metadata without hash must not be called verified');
+    await owner.query('UPDATE evidence_assets SET content_sha256 = $2 WHERE id = $1',
+      [evidenceId, originalHash]);
+
+    // Existing DB constraint is a first defense: even the owner cannot
+    // store an oversized private blob. The pure integrity tests exercise the
+    // oversize fallback for schema drift/legacy imports independently.
+    await assert.rejects(owner.query(
+      'UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
+      [evidenceId, Buffer.alloc(2 * 1024 * 1024 + 1, 0x11)]
+    ), /evidence_blobs_content_check/,
+    'database itself must reject files over 2 MiB');
+    assert.equal((await request(integrityPath)).json.data.status, 'verified',
+      'failed oversized UPDATE leaves the original bytes intact');
+
     // 0S.12: verify that metadata presence and actual private byte storage
     // are distinct; no bytes, SHA or file names escape this read-only API.
     const trace = await request(`/runs/${runId}/evidence-status`);
@@ -305,6 +355,9 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     const missingBlob = await request(`/runs/${runId}/evidence-status`);
     assert.equal(missingBlob.status, 200);
     assert.equal(missingBlob.json.data.items.find(item => item.id === evidenceId).bytes_available, false);
+    assert.deepEqual((await request(integrityPath)).json,
+      { data: { id: evidenceId, status: 'missing' } },
+      'asset metadata without a blob cannot be considered intact');
     assert.equal(missingBlob.json.data.items.find(item =>
       item.client_upload_id === offlineUploadId).bytes_available, true);
     await owner.query(
