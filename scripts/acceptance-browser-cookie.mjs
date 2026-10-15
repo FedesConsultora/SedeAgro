@@ -118,14 +118,16 @@ try {
   assert.equal(await farmDialog.locator('#farm-producer option').count(), 0);
   await page1.unroute('**/api/v1/farms/producers');
   await farmDialog.getByRole('button', { name: 'Reintentar' }).click();
-  await farmDialog.getByRole('button', { name: 'Crear', exact: true }).isEnabled();
+  await page1.waitForFunction(() => {
+    const button = [...document.querySelectorAll('[role="dialog"] button')]
+      .find(node => node.textContent.trim() === 'Crear');
+    return Boolean(button && !button.disabled);
+  });
   await farmDialog.locator('#farm-name').fill('Fixture Accesibilidad 0T1');
   await farmDialog.getByRole('button', { name: 'Crear', exact: true }).click();
   await farmDialog.waitFor({ state: 'detached' });
   await page1.getByRole('button', { name: /Establecimiento Fixture Accesibilidad 0T1, mostrar lotes/ }).waitFor();
-  const farmToggle = page1.getByRole('button', {
-    name: /Establecimiento Fixture Accesibilidad 0T1, mostrar lotes/
-  });
+  const farmToggle = page1.locator('.farm-card__toggle').filter({ hasText: 'Fixture Accesibilidad 0T1' });
   await farmToggle.press('Space');
   assert.equal(await farmToggle.getAttribute('aria-expanded'), 'true');
   console.log('PASS: live farm form never falls back to mock producer list');
@@ -150,6 +152,21 @@ try {
   await page1.unroute('**/api/v1/work-orders');
   await page1.getByRole('button', { name: 'Ver órdenes' }).click();
   await page1.getByRole('heading', { name: 'Órdenes de trabajo' }).waitFor();
+  await page1.route('**/api/v1/fields', route => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Consulta de lotes interrumpida' } })
+  }));
+  await page1.getByRole('button', { name: 'Nueva orden' }).click();
+  const orderDialog = page1.getByRole('dialog', { name: 'Nueva orden de trabajo' });
+  await orderDialog.getByText('No se pudieron cargar lotes de la orden.').waitFor();
+  assert.equal(await orderDialog.getByRole('button', { name: 'Crear orden' }).isDisabled(), true);
+  assert.equal(await orderDialog.locator('#wo-field option').count(), 1,
+    'no private or fake field choices after lookup fails');
+  await page1.keyboard.press('Escape');
+  await orderDialog.waitFor({ state: 'detached' });
+  await page1.unroute('**/api/v1/fields');
+  console.log('PASS: live order form blocks creation when field lookup fails');
+
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: operational home surfaces partial failure and opens real orders without mock fallback');
