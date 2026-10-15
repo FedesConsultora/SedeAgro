@@ -88,6 +88,16 @@ reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSche
       'SELECT pg_advisory_xact_lock(hashtext(:tenant)), :tenant AS tenant_id',
       { replacements: { tenant: req.tenantId }, transaction: tx }
     );
+    const [presence] = await queryTenantTransaction(`
+      SELECT (last_seen_at > now()-interval '20 seconds') AS online
+      FROM report_worker_presence WHERE tenant_id=:tenant
+    `, { transaction: tx, type: QueryTypes.SELECT,
+      replacements: { tenant: req.tenantId } });
+    if (!presence?.online) {
+      throw new HttpError(503,
+        'No hay un procesador de reportes activo para esta empresa. Probá la descarga inmediata.',
+        undefined, 'REPORT_WORKER_OFFLINE');
+    }
     const count = await ReportRun.count({ where: {
       tenant_id: req.tenantId, status: ['queued', 'running']
     }, transaction: tx });
@@ -107,6 +117,17 @@ reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSche
       report_template_id: template.id, format: template.format,
       period_start: run.period_start, period_end: run.period_end
     } });
+  }));
+
+reportsRouter.get('/worker-status', requireCapability('reports.read'),
+  asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const [result] = await queryTenantTransaction(`
+      SELECT (last_seen_at > now()-interval '20 seconds') AS online
+      FROM report_worker_presence WHERE tenant_id=:tenant
+    `, { transaction: req.dbTransaction, type: QueryTypes.SELECT,
+      replacements: { tenant: req.tenantId } });
+    res.json({ data: { online: Boolean(result?.online) } });
   }));
 
 const reportRunId = z.string().uuid();
