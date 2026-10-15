@@ -6,6 +6,7 @@ import { sessionScope, QUEUE_EVENT } from '../services/offlineSyncModel.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { buildRunEvidenceProvenance } from '../services/runEvidenceProvenance.js';
 import { EvidenceIntegrityChecks } from './EvidenceIntegrityChecks.jsx';
+import { advanceEvidencePage, previousEvidencePage, isInvalidEvidenceCursor } from '../services/evidencePageNavigation.js';
 import './run-evidence-provenance.css';
 
 const STATUS = {
@@ -42,6 +43,7 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
 
   useEffect(() => {
     const sequence = ++requestSeq.current;
+    const controller = new AbortController();
     if (!pageKey) {
       setSnapshot({ key: null, phase: 'unavailable', result: null, error: '' });
       return undefined;
@@ -52,26 +54,34 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
       // Read metadata and the active account's encrypted browser drafts.
       // No binary body is retrieved from the server.
       void Promise.all([
-        api.getRunEvidencePage(runId, cursor),
+        api.getRunEvidencePage(runId, cursor, { signal: controller.signal }),
         offlineQueue.list(session)
       ]).then(([response, rows]) => {
         const result = buildRunEvidenceProvenance(response, rows, session, runId,
           { paginated: true, expectedLimit: 10 });
-        if (requestSeq.current === sequence && contextRef.current === key &&
-            navigator.onLine !== false) {
+        if (!controller.signal.aborted && requestSeq.current === sequence &&
+            contextRef.current === key && navigator.onLine !== false) {
           setSnapshot({ key: pageKey, phase: 'ready', result, error: '' });
         }
       }).catch(error => {
-        if (requestSeq.current === sequence && contextRef.current === key) {
+        if (!controller.signal.aborted && requestSeq.current === sequence &&
+            contextRef.current === key) {
           setSnapshot({
-            key: pageKey, phase: 'error', result: null,
+            key: pageKey, phase: cursor && isInvalidEvidenceCursor(error) ? 'invalid-cursor' : 'error',
+            result: null,
             error: error?.message || 'No se pudo verificar la disponibilidad de las evidencias.'
           });
         }
       });
     }
     const update = () => setRevision(value => value + 1);
+    const online = () => {
+      // Do not continue a cursor chain that may have become stale offline.
+      setNavigation({ key, cursors: [] });
+      update();
+    };
     const offline = () => {
+      controller.abort();
       requestSeq.current += 1;
       if (contextRef.current === key) {
         setSnapshot({ key: pageKey, phase: 'offline', result: null, error: '' });
@@ -81,13 +91,14 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
       if (document.visibilityState === 'visible') update();
     };
     window.addEventListener(QUEUE_EVENT, update);
-    window.addEventListener('online', update);
+    window.addEventListener('online', online);
     window.addEventListener('offline', offline);
     document.addEventListener('visibilitychange', visibility);
     return () => {
       requestSeq.current += 1;
+      controller.abort();
       window.removeEventListener(QUEUE_EVENT, update);
-      window.removeEventListener('online', update);
+      window.removeEventListener('online', online);
       window.removeEventListener('offline', offline);
       document.removeEventListener('visibilitychange', visibility);
     };
@@ -103,12 +114,17 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
   };
   const nextPage = () => {
     if (result?.hasMore && result?.nextCursor) {
-      setNavigation({ key, cursors: [...pageCursors, result.nextCursor] });
+      try {
+        setNavigation({ key, cursors: advanceEvidencePage(pageCursors, result.nextCursor) });
+      } catch {
+        setSnapshot({ key: pageKey, phase: 'error', result: null,
+          error: 'La paginación devolvió una página repetida. Reiniciá el historial.' });
+      }
     }
   };
   const previousPage = () => {
     if (pageCursors.length) {
-      setNavigation({ key, cursors: pageCursors.slice(0, -1) });
+      setNavigation({ key, cursors: previousEvidencePage(pageCursors) });
     }
   };
 
@@ -135,11 +151,24 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
         <p role="status" className="run-evidence__hint">
           Sin conexión. No se puede afirmar qué archivos están actualmente disponibles.
         </p>}
-      {visible.phase === 'error' &&
-        <p role="alert" className="run-evidence__error">
-          <AlertTriangle size={16} aria-hidden="true" /> {visible.error}
-          No se puede afirmar que no existan archivos.
-        </p>}
+      {(visible.phase === 'error' || visible.phase === 'invalid-cursor') &&
+        <div className="run-evidence__error" role="alert">
+          <AlertTriangle size={16} aria-hidden="true" />
+          <div>
+            <p>{visible.phase === 'invalid-cursor'
+              ? 'Este cursor dejó de ser válido. Volvé a la primera página para consultar una lista actual.'
+              : visible.error} No se puede afirmar que no existan archivos.</p>
+            <div className="run-evidence__retry-actions">
+              {visible.phase === 'error' && <button className="ghost-action" type="button"
+                onClick={() => setRevision(value => value + 1)}
+                disabled={navigator.onLine === false}>Reintentar esta página</button>}
+              <button className="ghost-action" type="button"
+                onClick={refreshFirst} disabled={navigator.onLine === false}>
+                Reiniciar historial
+              </button>
+            </div>
+          </div>
+        </div>}
       {result && <>
         <div className="run-evidence__counts" role="status">
           <span><Camera size={15} aria-hidden="true" /> {result.photosWithBytes} fotografías con bytes presentes</span>

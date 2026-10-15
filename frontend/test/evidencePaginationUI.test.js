@@ -61,11 +61,11 @@ test('pagination navigation does not touch bulk byte transfer or mutable local s
   const checks = read('components/EvidenceIntegrityChecks.jsx');
   assert.match(api,/getRunEvidencePage:/);
   assert.match(api,/encodeURIComponent\(cursor\)/);
-  assert.match(panel,/api\.getRunEvidencePage\(runId, cursor\)/);
+  assert.match(panel,/api\.getRunEvidencePage\(runId, cursor, \{ signal: controller\.signal \}\)/);
   assert.match(panel,/expectedLimit: 10/);
   assert.match(panel,/nextPage/);
   assert.match(panel,/previousPage/);
-  assert.match(panel,/pageCursors\.slice\(0, -1\)/);
+  assert.match(panel,/previousEvidencePage\(pageCursors\)/);
   assert.match(panel,/pageKey/);
   assert.match(panel,/<EvidenceIntegrityChecks key=\{pageKey\}/);
   assert.match(checks,/api\.getEvidenceIntegrity\(id\)/);
