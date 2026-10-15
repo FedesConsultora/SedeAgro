@@ -194,10 +194,10 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.equal(beforeComplete.status, 409);
     const worked = await processNextReport(tenantA);
     assert.deepEqual({ state: worked.state, id: worked.id }, { state: 'completed', id: job.id });
-    const result = await get(jobBase + '/runs/' + job.id + '/download');
-    assert.equal(result.status, 200, await result.clone().text());
-    assert.match(result.headers.get('cache-control') || '', /no-store/);
-    const artifact = (await result.json()).data;
+    const completedFile = await get(jobBase + '/runs/' + job.id + '/download');
+    assert.equal(completedFile.status, 200, await completedFile.clone().text());
+    assert.match(completedFile.headers.get('cache-control') || '', /no-store/);
+    const artifact = (await completedFile.json()).data;
     const bytes = Buffer.from(artifact.content_base64, 'base64');
     const { createHash } = await import('node:crypto');
     assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256);
