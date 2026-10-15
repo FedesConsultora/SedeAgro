@@ -7,7 +7,8 @@ import {
   ScoutingRun, ScoutingObservation, WorkOrder
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, validate, HttpError } from '../../utils/http.js';
+import { buildFieldCsv, fieldCsvPeriod, FIELD_CSV_MAX_ROWS_PER_KIND } from './fieldCsv.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const reportsRouter = Router();
@@ -60,6 +61,82 @@ reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSche
   }, { transaction: req.dbTransaction });
   res.status(202).json({ data: run });
 }));
+
+// 0T.5 — Real, read-only CSV snapshot. It never queues a fake PDF/XLSX job.
+// Bound each result before materializing private notes and forbid formula
+// execution. All queries participate in the HTTP tenant transaction (FORCE RLS).
+const fieldCsvQuery = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+}).strict();
+
+reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'),
+  asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    const parsedQuery = fieldCsvQuery.safeParse(req.query);
+    if (!parsedQuery.success) {
+      throw new HttpError(422, 'Parámetros de fecha inválidos.', parsedQuery.error.flatten());
+    }
+    if (!z.string().uuid().safeParse(req.params.fieldId).success) {
+      throw new HttpError(422, 'Identificador de lote inválido.');
+    }
+    let period;
+    try {
+      period = fieldCsvPeriod(parsedQuery.data.from, parsedQuery.data.to);
+    } catch (error) {
+      throw new HttpError(422, error.message);
+    }
+    const tx = req.dbTransaction;
+    const field = await Field.findOne({
+      where: { id: req.params.fieldId, tenant_id: req.tenantId },
+      attributes: ['id', 'name', 'area_hectares'],
+      include: [{ model: Farm, attributes: ['id', 'name'] }],
+      transaction: tx
+    });
+    if (!field) throw new HttpError(404, 'Lote no encontrado.');
+    const dateWhere = () => ({
+      ...(period.start ? { [Op.gte]: period.start } : {}),
+      ...(period.exclusiveEnd ? { [Op.lt]: period.exclusiveEnd } : {})
+    });
+    const observations = await ScoutingObservation.findAll({
+      where: {
+        tenant_id: req.tenantId, field_id: field.id,
+        ...((period.start || period.exclusiveEnd)
+          ? { observed_at: dateWhere() } : {})
+      },
+      attributes: ['id', 'observed_at', 'observation_type', 'severity', 'notes'],
+      order: [['observed_at', 'DESC'], ['id', 'DESC']],
+      limit: FIELD_CSV_MAX_ROWS_PER_KIND + 1, transaction: tx
+    });
+    const orders = await WorkOrder.findAll({
+      where: {
+        tenant_id: req.tenantId, field_id: field.id,
+        ...((period.start || period.exclusiveEnd)
+          ? { created_at: dateWhere() } : {})
+      },
+      attributes: ['id', 'created_at', 'type', 'status', 'priority', 'title'],
+      order: [['created_at', 'DESC'], ['id', 'DESC']],
+      limit: FIELD_CSV_MAX_ROWS_PER_KIND + 1, transaction: tx
+    });
+    if (observations.length > FIELD_CSV_MAX_ROWS_PER_KIND ||
+        orders.length > FIELD_CSV_MAX_ROWS_PER_KIND) {
+      throw new HttpError(413,
+        'Demasiados registros para exportar. Elegí un período más corto.',
+        undefined, 'REPORT_EXPORT_TOO_LARGE');
+    }
+    let csv;
+    try {
+      csv = buildFieldCsv({ field, observations, workOrders: orders });
+    } catch (error) {
+      throw new HttpError(413, error.message, undefined, 'REPORT_EXPORT_TOO_LARGE');
+    }
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: {
+      filename: `reporte-lote-${field.id}.csv`, mimeType: 'text/csv;charset=utf-8',
+      csv, counts: { observations: observations.length, workOrders: orders.length },
+      period: { from: period.from, to: period.to }
+    } });
+  }));
 
 // ─── Field-level report ───────────────────────────────────────
 reportsRouter.get('/field/:fieldId', requireCapability('reports.read'), asyncHandler(async (req, res) => {
