@@ -4,6 +4,7 @@ import { useSession } from '../context/SessionContext.jsx';
 import { availableWorkOrderTransitions, validateWorkOrderDetail, WORK_ORDER_STATUS_LABELS } from '../services/workOrderDetails.js';
 import { Drawer } from './Modal.jsx';
 import { WorkOrderAssigneePicker } from './WorkOrderAssigneePicker.jsx';
+import { WorkOrderExecutionPanel } from './WorkOrderExecutionPanel.jsx';
 import './work-order-detail.css';
 
 const PRIORITY_ES = { low: 'Baja', normal: 'Normal', high: 'Alta', urgent: 'Urgente' };
@@ -163,6 +164,7 @@ export function WorkOrderDetailDrawer({ isOpen, onClose, order, onUpdated }) {
               Esta orden necesita al menos un responsable antes de marcarla como asignada.
             </p>}
           <WorkOrderAssigneePicker order={detail} onAssigned={refresh} />
+          <WorkOrderExecutionPanel order={detail} onChanged={refresh} />
           {hasExecutionDetails && <details className="order-detail__more">
             <summary>Responsables, insumos y maquinaria</summary>
             {assignees.length > 0 && <section className="detail-section">

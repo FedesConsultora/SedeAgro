@@ -103,6 +103,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       return id;
     }
     const adminA = await addUser('admin a', 'tenant_admin', tenantA);
+    const coordinatorA = await addUser('coordinator a', 'agronomic_coordinator', tenantA);
     const scout1 = await addUser('scout 1', 'scout', tenantA);
     const scout2 = await addUser('scout 2', 'scout', tenantA);
     const blockedScout = await addUser('scout blocked', 'scout', tenantA, { membershipStatus: 'blocked' });
@@ -135,6 +136,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       sub: userId, role_code: role, tenant_id: tenant
     });
     const adminToken = token(adminA, 'tenant_admin', tenantA);
+    const coordinatorToken = token(coordinatorA, 'agronomic_coordinator', tenantA);
     const scoutToken = token(scout1, 'scout', tenantA);
     const scout2Token = token(scout2, 'scout', tenantA);
     const contractorToken = token(contractor1, 'contractor', tenantA);
@@ -296,6 +298,120 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       WHERE tenant_id=$1 AND user_id=$2`, [tenantA, contractor2]);
     assert.equal((await request(`/work-orders/${revokedId}/status`,
       adminToken, tenantA, 'PATCH', { status: 'assigned' })).status, 200);
+
+    // 0T.9: a status click is not evidence of execution. The actual operator
+    // submits declared observations; another authorized person reviews them.
+    const inProgress = await request(`/work-orders/${orderId}/status`,
+      contractorToken, tenantA, 'PATCH', { status: 'in_progress' });
+    assert.equal(inProgress.status, 200, JSON.stringify(inProgress.body));
+    const premature = await request(`/work-orders/${orderId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'completed' });
+    assert.equal(premature.status, 409);
+    assert.equal(premature.body.error.code, 'WORK_ORDER_EXECUTION_REVIEW_REQUIRED');
+    assert.equal((await request(`/work-orders/${orderId}/status`,
+      contractorToken, tenantA, 'PATCH', { status: 'completed' })).status, 403);
+
+    const reportedStart = new Date(new Date(inProgress.body.data.approved_at).getTime() + 100);
+    const reportedFinish = new Date(reportedStart.getTime() + 200);
+    const executionPayload = {
+      started_at: reportedStart.toISOString(), finished_at: reportedFinish.toISOString(),
+      worked_area_hectares: 2.25, result_summary: 'Se realizó inspección visual del lote informado.'
+    };
+    const executionRoute = `/work-orders/${orderId}/executions`;
+    assert.equal((await request(executionRoute, contractorBToken, tenantB,
+      'POST', executionPayload)).status, 404);
+    assert.equal((await request(executionRoute, scoutToken, tenantA,
+      'POST', executionPayload)).status, 403);
+    assert.equal((await request(executionRoute, contractorToken, tenantA,
+      'POST', { ...executionPayload, worked_area_hectares: 0 })).status, 422);
+    assert.equal((await request(executionRoute, contractorToken, tenantA,
+      'POST', { ...executionPayload, finished_at: new Date(Date.now() + 86400000).toISOString() })).status, 422);
+    const recorded = await request(executionRoute, contractorToken, tenantA,
+      'POST', executionPayload);
+    assert.equal(recorded.status, 201, JSON.stringify(recorded.body));
+    const firstReportId = recorded.body.data.id;
+    assert.equal(recorded.body.data.review_status, 'submitted');
+    assert.equal(recorded.body.data.submitted_by, contractor1);
+    assert.equal((await request(executionRoute, contractorToken, tenantA,
+      'POST', executionPayload)).status, 409);
+    assert.equal((await request(`/work-orders/${orderId}`,
+      contractorToken, tenantA)).body.data.WorkOrderExecutions.length, 1);
+    assert.equal((await request(`/work-orders/${orderId}`,
+      adminBToken, tenantB)).status, 404);
+    assert.equal((await request(`/work-orders/${orderId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 409);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_submitted'",
+      [tenantA, orderId]), 1);
+    const reviewRoute = `${executionRoute}/${firstReportId}/review`;
+    assert.equal((await request(reviewRoute, contractorToken, tenantA,
+      'POST', { decision: 'verified' })).status, 403);
+    assert.equal((await request(reviewRoute, adminBToken, tenantB,
+      'POST', { decision: 'verified' })).status, 404);
+    assert.equal((await request(reviewRoute, adminToken, tenantA,
+      'POST', { decision: 'rejected' })).status, 422);
+    const rejected = await request(reviewRoute, adminToken, tenantA,
+      'POST', { decision: 'rejected', reason: 'Falta validar superficie realmente recorrida.' });
+    assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
+    assert.equal(rejected.body.data.review_status, 'rejected');
+    assert.equal((await request(reviewRoute, adminToken, tenantA,
+      'POST', { decision: 'verified' })).status, 409);
+
+    const corrected = await request(executionRoute, contractor2Token, tenantA,
+      'POST', { ...executionPayload, worked_area_hectares: 2.5,
+        result_summary: 'Inspección corregida luego de revisar la superficie.' });
+    assert.equal(corrected.status, 201, JSON.stringify(corrected.body));
+    const correctedId = corrected.body.data.id;
+    const verified = await request(`${executionRoute}/${correctedId}/review`,
+      adminToken, tenantA, 'POST', { decision: 'verified' });
+    assert.equal(verified.status, 200, JSON.stringify(verified.body));
+    assert.equal(verified.body.data.review_status, 'verified');
+    const history = await request(`/work-orders/${orderId}`, adminToken, tenantA);
+    assert.equal(history.status, 200);
+    assert.equal(history.body.data.WorkOrderExecutions.length, 2);
+    assert.deepEqual(new Set(history.body.data.WorkOrderExecutions.map(x => x.review_status)),
+      new Set(['rejected', 'verified']));
+    assert.equal((await request(`/work-orders/${orderId}/status`,
+      contractorToken, tenantA, 'PATCH', { status: 'completed' })).status, 403);
+    const completed = await request(`/work-orders/${orderId}/status`,
+      coordinatorToken, tenantA, 'PATCH', { status: 'completed' });
+    assert.equal(completed.status, 200, JSON.stringify(completed.body));
+    assert.ok(completed.body.data.completed_at);
+    assert.equal((await request(executionRoute, contractorToken, tenantA,
+      'POST', executionPayload)).status, 409);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'",
+      [tenantA, orderId]), 2);
+    // Runtime role must not read another tenant's declarations, even with a known UUID.
+    await appClient.query('BEGIN');
+    await appClient.query("SELECT set_config('app.current_tenant',$1,true)", [tenantB]);
+    assert.equal((await appClient.query('SELECT id FROM work_order_executions WHERE id=$1',
+      [correctedId])).rowCount, 0);
+    await appClient.query('ROLLBACK');
+
+    // Admin authors cannot self-review, even though their role can review others.
+    const selfOrder = await request('/work-orders', adminToken, tenantA, 'POST',
+      { field_id: fieldA, type: 'inspection', title: 'Two-person review' });
+    const selfOrderId = selfOrder.body.data.id;
+    assert.equal((await request(`/work-orders/${selfOrderId}/assignees`, adminToken,
+      tenantA, 'POST', { user_id: adminA })).status, 201);
+    for (const status of ['pending_approval', 'approved', 'assigned', 'in_progress']) {
+      assert.equal((await request(`/work-orders/${selfOrderId}/status`,
+        adminToken, tenantA, 'PATCH', { status })).status, 200);
+    }
+    const selfLive = await request(`/work-orders/${selfOrderId}`, adminToken, tenantA);
+    const selfStart = new Date(new Date(selfLive.body.data.approved_at).getTime() + 100);
+    const selfReport = await request(`/work-orders/${selfOrderId}/executions`,
+      adminToken, tenantA, 'POST', {
+        ...executionPayload, started_at: selfStart.toISOString(),
+        finished_at: new Date(selfStart.getTime() + 100).toISOString()
+      });
+    assert.equal(selfReport.status, 201, JSON.stringify(selfReport.body));
+    const selfReviewPath = `/work-orders/${selfOrderId}/executions/${selfReport.body.data.id}/review`;
+    assert.equal((await request(selfReviewPath, adminToken, tenantA, 'POST',
+      { decision: 'verified' })).status, 403);
+    assert.equal((await request(selfReviewPath, coordinatorToken, tenantA, 'POST',
+      { decision: 'verified' })).status, 200);
 
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',

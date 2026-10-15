@@ -30,3 +30,18 @@
 @media (max-width: 600px) {
   .order-detail__assignment .primary-action { width: 100%; }
 }
+
+.order-detail__execution { border-top: 1px solid #e4ece7; padding-top: 14px; }
+.order-detail__execution > p { line-height: 1.55; }
+.order-detail__execution-form { display: grid; gap: 10px; }
+.order-detail__execution-form input, .order-detail__execution-form textarea { max-width: 100%; }
+.order-detail__execution-consent { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+.order-detail__execution-consent input { margin-top: 4px; }
+.order-detail__execution-record { padding: 12px; margin-top: 12px; border: 1px solid #dce9df; border-radius: 8px; overflow-wrap: anywhere; }
+.order-detail__execution-record p { line-height: 1.55; }
+.order-detail__execution-review { display: grid; gap: 10px; }
+.order-detail__execution-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.order-detail__execution-actions button { min-height: 42px; }
+@media (max-width: 600px) {
+  .order-detail__execution-actions button, .order-detail__execution-form .primary-action { width: 100%; }
+}
