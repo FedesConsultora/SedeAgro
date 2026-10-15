@@ -144,6 +144,25 @@ try {
   const mobileDialog = page.getByRole('dialog', { name: 'Agregar observación' });
   await mobileDialog.getByRole('button', { name: 'Usar ubicación actual' }).click();
   await mobileDialog.getByText(/Esperando precisión GPS/).waitFor();
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await mobileDialog.getByText(/La consulta GPS se interrumpió/).waitFor();
+  await page.evaluate(() => {
+    window.__completeGps({
+      coords: { longitude: 0, latitude: 0, accuracy: 5 },
+      timestamp: Date.now()
+    });
+    if (window.__gpsDescriptor) {
+      Object.defineProperty(navigator, 'geolocation', window.__gpsDescriptor);
+    } else {
+      delete navigator.geolocation;
+    }
+    delete window.__completeGps;
+    delete window.__gpsDescriptor;
+  });
+  assert.equal(await mobileDialog.getByText('Ubicación lista para adjuntar').count(), 0);
+  await mobileDialog.getByRole('button', { name: 'Cerrar Agregar observación' }).click();
+  console.log('PASS: hidden-tab GPS callback did not resurrect optional coordinates');
+
 
 
   // SHA is deliberate: no integrity endpoint until the operator requests it.
