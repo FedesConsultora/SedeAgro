@@ -11,6 +11,11 @@ export function defineReportRun(sequelize, DataTypes) {
     period_end: DataTypes.DATEONLY,
     filters: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
     storage_key: DataTypes.TEXT,
-    generated_at: DataTypes.DATE
+    generated_at: DataTypes.DATE,
+    attempt_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    lease_token: DataTypes.UUID,
+    lease_expires_at: DataTypes.DATE,
+    next_attempt_at: DataTypes.DATE,
+    error_code: DataTypes.STRING(64)
   }, { tableName: 'report_runs' });
 }
