@@ -27,9 +27,9 @@ function draft(photo = false) {
     uuid: () => uuids[i++]
   });
 }
-function serverAck(d) {
-  return { data: { status: 'processed', idempotency_key: d.idempotencyKey,
-    operations: [{ status: 'applied', entity_client_id: d.body.operations[0].entity_client_id,
+function serverAck(body) {
+  return { data: { status: 'processed', idempotency_key: body.idempotency_key,
+    operations: [{ status: 'applied', entity_client_id: body.operations[0].entity_client_id,
       result: { observation_id: OBS, scouting_run_id: RUN } }] } };
 }
 function receipt(d) {
