@@ -31,7 +31,7 @@ test('server route validates assignment and capability before returning metadata
 
 test('only read-only scoped sources are touched; local data never cleared or resent', () => {
   assert.match(api, /getRunEvidenceStatus: \(id\) => request\(`\/scouting\/runs\/\$\{id\}\/evidence-status`\)/);
-  assert.match(panel, /api\.getRunEvidencePage\(runId, cursor\)/);
+  assert.match(panel, /api\.getRunEvidencePage\(runId, cursor, \{ signal: controller\.signal \}\)/);
   assert.match(panel, /offlineQueue\.list\(session\)/);
   assert.match(panel, /buildRunEvidenceProvenance\(response, rows, session, runId,/);
   assert.doesNotMatch(panel, /getEvidenceContent|submitOfflineEvidence|offlineQueue\.(discard|flush|recoverPhoto|confirmApplied|allowRetry)/);
@@ -44,7 +44,7 @@ test('offline, malformed or revocation results cannot present previous confirmed
   assert.match(panel, /phase: 'offline', result: null/);
   assert.match(panel, /phase: 'error', result: null/);
   assert.match(panel, /window\.addEventListener\('offline', offline\)/);
-  assert.match(panel, /window\.addEventListener\('online', update\)/);
+  assert.match(panel, /window\.addEventListener\('online', online\)/);
   assert.match(panel, /window\.addEventListener\(QUEUE_EVENT, update\)/);
   assert.match(panel, /visibilitychange/);
   assert.match(panel, /No se puede afirmar que no existan archivos/);
