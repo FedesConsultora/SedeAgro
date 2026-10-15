@@ -12,3 +12,34 @@
   .workspace-heading__actions > button { width: 100%; justify-content: center; }
   .collection-state { padding: 28px 16px; }
 }
+
+.workspace-results-count { font-size: 13px; color: #64748b; font-variant-numeric: tabular-nums; }
+.farm-card__header { cursor: default; padding: 0; gap: 0; }
+.farm-card__header:hover { background: transparent; }
+.farm-card__toggle {
+  appearance: none; border: 0; background: transparent; color: inherit;
+  cursor: pointer; font: inherit; display: flex; flex: 1 1 0; min-width: 0;
+  align-items: center; text-align: left; gap: 12px; padding: 20px;
+  transition: background .15s ease;
+}
+.farm-card__toggle:hover { background: rgba(5,150,105,.035); }
+.farm-card__toggle > svg { flex-shrink: 0; color: #64748b; }
+.farm-card__toggle:focus-visible { outline: 3px solid #059669; outline-offset: -3px; border-radius: 10px; }
+.farm-card__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px 10px 0; }
+.farm-card__actions .ghost-action { min-height: 40px; }
+.modal-card:focus, .drawer:focus { outline: none; }
+.modal-card:focus-visible, .drawer:focus-visible { outline: 3px solid #059669; outline-offset: -3px; }
+@media (max-width: 680px) {
+  .farm-card__header { flex-wrap: wrap; }
+  .farm-card__toggle { flex-basis: 100%; padding: 16px; }
+  .farm-card__actions { width: 100%; justify-content: flex-end; padding: 0 16px 12px; }
+  .modal-overlay { padding: 12px; }
+  .modal-card { max-height: calc(100dvh - 24px); }
+  .modal__header, .modal__body { padding: 16px; }
+  .modal__footer { padding: 12px 16px; flex-wrap: wrap; }
+  .drawer__header, .drawer__body { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay, .modal-card, .drawer, .drawer-overlay { animation: none !important; }
+  .farm-card__toggle { transition: none; }
+}
