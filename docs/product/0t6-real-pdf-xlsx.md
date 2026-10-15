@@ -13,7 +13,7 @@ Se amplía el reporte por lote del PR #69 para ofrecer **CSV, PDF y XLSX reales*
 
 ## Por qué no se creó un worker engañoso
 
-La tabla `report_runs` puede representar queued/running/completed/failed, pero el código previo solo crea filas `queued`; **no hay agente de procesamiento, storage de resultados ni política de expiración/retención asociada**. Por eso 0T.6 expone generación **síncrona acotada**, con botón Generando… y archivo real o error real. La UI no la anuncia como trabajo en background.
+La tabla `report_runs` puede representar queued/running/completed/failed, pero el código previo solo crea filas `queued`; **no hay agente de procesamiento, storage de resultados ni política de expiración/retención asociada**. En 0T.6 el endpoint POST `/reports/runs` **deja de fingir aceptación (202)**: devuelve 409 `REPORT_WORKER_NOT_AVAILABLE` y no persiste trabajos que nadie ejecutará. Por eso 0T.6 expone generación **síncrona acotada**, con botón Generando… y archivo real o error real. La UI no la anuncia como trabajo en background.
 
 La cola de reportes PDF/XLSX (plantillas, generación por campaña/productor, auditoría, digest del archivo, persistencia cifrada, transiciones transaccionales, entregas por email, límites de concurrencia y cancelación) sigue pendiente de diseño e implementación separada. No se declara cubierta por este bloque.
 
