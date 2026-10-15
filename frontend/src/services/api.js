@@ -177,6 +177,7 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     reportTemplates: () => request('/reports/templates'),
     createReportTemplate: (body) => request('/reports/templates', { method: 'POST', body }),
     reportRuns: () => request('/reports/runs'),
+    reportWorkerStatus: () => request('/reports/worker-status', { silent: true }),
     createReportRun: (body) => request('/reports/runs', { method: 'POST', body }),
     getReportRun: (id) => request(`/reports/runs/${encodeURIComponent(id)}`, { silent: true }),
     cancelReportRun: (id) => request(`/reports/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', silent: true }),
