@@ -215,6 +215,28 @@ try {
   assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
   console.log('PASS: stale 401 from old generation or tenant cannot sign out active cookie session');
 
+  // Real two-tab shared-cookie acceptance for 0S.18.
+  const secondTab = await context.newPage();
+  await secondTab.goto('http://127.0.0.1:4177/');
+  await secondTab.getByTitle('Sesiones').waitFor();
+  await secondTab.getByTitle('Cerrar sesión').click();
+  await secondTab.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  assert.equal(await panel.count(), 0);
+  console.log('PASS: multi-tab server logout removed previous tenant private view');
+
+  await secondTab.locator('#login-email').fill(email);
+  await secondTab.locator('#login-password').fill(password);
+  await secondTab.locator('#login-submit').click();
+  await secondTab.getByTitle('Sesiones').waitFor();
+  await page.getByTitle('Monitoreo').waitFor();
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('button', { name: /Evidence Browser Lote/ }).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  assert.equal(await panel.getByRole('button', { name: 'Verificar SHA-256' }).count(), 10);
+  await secondTab.close();
+  console.log('PASS: returning to first account reads its own evidence anew');
+
   // Force a REAL backend 400 from a modified cursor: do not fake an API error.
   await page.route('**/api/v1/scouting/runs/*/evidence-status?limit=10&cursor=*',async route => {
     await route.continue({ url: route.request().url().replace(/cursor=[^&]*/, 'cursor=forged') });
