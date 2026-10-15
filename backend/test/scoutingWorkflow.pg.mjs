@@ -349,6 +349,46 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       item.client_upload_id === offlineUploadId).length, 1,
     'idempotent replay must not create duplicate provenance rows');
 
+    // 0S.14: exercise real keyset pagination against two documents sharing the
+    // same timestamp; id DESC is the deterministic tie-breaker.
+    const evidenceIds = [evidenceId, offlineFirst.json.data.id];
+    const { rows: originalDates } = await owner.query(
+      'SELECT id, created_at FROM evidence_assets WHERE id = ANY($1::uuid[])',
+      [evidenceIds]
+    );
+    await owner.query(
+      'UPDATE evidence_assets SET created_at = $1 WHERE id = ANY($2::uuid[])',
+      ['2026-10-15T09:15:01.123Z', evidenceIds]
+    );
+    const firstPage = await request(`/runs/${runId}/evidence-status?limit=1`);
+    assert.equal(firstPage.status, 200, JSON.stringify(firstPage.json));
+    assert.equal(firstPage.headers.get('cache-control'), 'private, no-store');
+    assert.equal(firstPage.json.data.limit, 1);
+    assert.equal(firstPage.json.data.items.length, 1);
+    assert.equal(firstPage.json.data.has_more, true);
+    assert.match(firstPage.json.data.next_cursor, /^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]{43}$/);
+    assert.equal(firstPage.json.data.items[0].id, evidenceIds.slice().sort().reverse()[0]);
+    const token = firstPage.json.data.next_cursor;
+    const secondUrl = `/runs/${runId}/evidence-status?limit=1&cursor=${encodeURIComponent(token)}`;
+    const secondPage = await request(secondUrl);
+    assert.equal(secondPage.status, 200, JSON.stringify(secondPage.json));
+    assert.equal(secondPage.json.data.items.length, 1);
+    assert.equal(secondPage.json.data.items[0].id, evidenceIds.slice().sort()[0]);
+    assert.equal(secondPage.json.data.has_more, false);
+    assert.equal(secondPage.json.data.next_cursor, null);
+    assert.equal((await request(secondUrl)).json.data.items[0].id, secondPage.json.data.items[0].id);
+    assert.equal((await request(`/runs/${runId}/evidence-status?limit=2&cursor=${encodeURIComponent(token)}`)).status, 400);
+    assert.equal((await request(`/runs/${runId}/evidence-status?limit=101`)).status, 400);
+    assert.equal((await request(`/runs/${runId}/evidence-status?limit=1&cursor=bad`)).status, 400);
+    assert.equal((await request(`/runs/${otherRun.json.data.id}/evidence-status?limit=1&cursor=${encodeURIComponent(token)}`,
+      adminToken)).status, 400, 'same-tenant but different run cannot replay signed cursor');
+    assert.equal((await request(secondUrl, otherToken)).status, 404);
+    assert.equal((await request(secondUrl, scoutToken, 'GET', undefined, tenantB)).status, 403);
+    for (const original of originalDates) {
+      await owner.query('UPDATE evidence_assets SET created_at = $2 WHERE id = $1',
+        [original.id, original.created_at]);
+    }
+
     // Disposable DB only: simulate a historical metadata-only asset, then
     // restore bytes so remaining scouting acceptance continues unchanged.
     await owner.query('DELETE FROM evidence_blobs WHERE evidence_id = $1', [evidenceId]);
