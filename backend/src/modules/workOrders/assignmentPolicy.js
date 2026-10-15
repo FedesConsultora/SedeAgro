@@ -13,3 +13,11 @@ export function hasActiveWorkOrderExecutor(assigneeUserIds, eligibleUserIds) {
   const active = new Set(eligibleUserIds);
   return assigneeUserIds.some(id => active.has(id));
 }
+
+// Clients can supply x-request-id. Never persist an untrusted value into a
+// PostgreSQL uuid audit column or turn an otherwise valid write into HTTP 500.
+export function safeAuditRequestId(value) {
+  return typeof value === 'string' &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)
+    ? value : null;
+}
