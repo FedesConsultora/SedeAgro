@@ -40,16 +40,11 @@ function iso(input) {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
-export function buildFieldCsv({ field, observations, workOrders }) {
-  if (!field?.id || !Array.isArray(observations) || !Array.isArray(workOrders) ||
-      observations.length > FIELD_CSV_MAX_ROWS_PER_KIND ||
-      workOrders.length > FIELD_CSV_MAX_ROWS_PER_KIND) {
-    throw new Error('Reporte sin lote válido o demasiadas filas.');
-  }
+export function fieldReportRows({ field, observations, workOrders }) {
   const name = field.name || '';
   const farm = field.Farm?.name || '';
-  const rows = [
-    COLUMNS,
+  return [
+    [...COLUMNS],
     ['lote', field.id, '', name, farm, 'hectareas', '', '',
       field.area_hectares ?? ''],
     ...observations.map(item => [
@@ -61,6 +56,15 @@ export function buildFieldCsv({ field, observations, workOrders }) {
       item.type, item.status, item.priority, item.title
     ])
   ];
+}
+
+export function buildFieldCsv({ field, observations, workOrders }) {
+  if (!field?.id || !Array.isArray(observations) || !Array.isArray(workOrders) ||
+      observations.length > FIELD_CSV_MAX_ROWS_PER_KIND ||
+      workOrders.length > FIELD_CSV_MAX_ROWS_PER_KIND) {
+    throw new Error('Reporte sin lote válido o demasiadas filas.');
+  }
+  const rows = fieldReportRows({ field, observations, workOrders });
   const csv = '\uFEFF' + rows.map(row => row.map(csvSafeCell).join(',')).join('\r\n') + '\r\n';
   if (Buffer.byteLength(csv, 'utf8') > FIELD_CSV_MAX_BYTES) {
     throw new Error('El reporte supera 1 MiB. Elegí un período más corto.');
