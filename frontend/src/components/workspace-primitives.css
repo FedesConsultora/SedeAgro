@@ -1,0 +1,14 @@
+.workspace-heading { min-width: 0; }
+.workspace-heading__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.collection-state { min-height: 180px; gap: 12px; }
+.collection-state p { max-width: 410px; }
+.collection-state__loader { animation: collection-state-turn 1.1s linear infinite; }
+@keyframes collection-state-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .collection-state__loader { animation: none; }
+}
+@media (max-width: 480px) {
+  .workspace-heading__actions { width: 100%; }
+  .workspace-heading__actions > button { width: 100%; justify-content: center; }
+  .collection-state { padding: 28px 16px; }
+}
