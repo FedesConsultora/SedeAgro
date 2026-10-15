@@ -222,6 +222,9 @@ export function createOfflineQueue({
           if (item.state !== 'pending' && !(
             single && manualReview && ['auth', 'conflict'].includes(item.state))) continue;
           summary.attempted += 1;
+          // Snapshot to protect against non-cooperating tabs that mutate or
+          // discard the row while the network and photo upload are in flight.
+          let expectedAfterWrite = item;
           try {
             const receipt = await send(item.body);
             // An unexpected empty or non-applied response is ambiguous. Preserve
@@ -242,8 +245,18 @@ export function createOfflineQueue({
               // Persist that partial success so the user can distinguish a
               // photo conflict from an entirely unsent observation.
               const current = await store.get(item.id);
-              if (!current) continue; // discarded during HTTP
-              await store.put({ ...current, syncedObservationId: observationId });
+              if (!current || JSON.stringify(current) !== JSON.stringify(item)) {
+                continue; // changed/discarded during HTTP: never overwrite
+              }
+              const applied = await store.put({
+                ...current, syncedObservationId: observationId
+              }, { expected: current });
+              if (applied === false) continue;
+              expectedAfterWrite = await store.get(item.id);
+              if (!expectedAfterWrite || JSON.stringify(expectedAfterWrite) !==
+                  JSON.stringify({ ...current, syncedObservationId: observationId })) {
+                continue; // concurrent mutation after partial-success ACK
+              }
               notify();
               if (typeof sendEvidence !== 'function') {
                 throw new Error('El envío de fotografías no está disponible en este cliente.');
@@ -255,7 +268,13 @@ export function createOfflineQueue({
                 throw new Error('No se recibió confirmación válida del archivo adjunto.');
               }
             }
-            await store.delete(item.id);
+            const latest = await store.get(item.id);
+            if (!latest || JSON.stringify(latest) !== JSON.stringify(expectedAfterWrite)) {
+              continue; // another tab changed this row after HTTP success
+            }
+            if (await store.delete(item.id, { expected: latest }) === false) {
+              continue; // atomic CAS loss: do not report delivery as complete
+            }
             summary.sent += 1;
             notify();
           } catch (error) {
@@ -264,14 +283,16 @@ export function createOfflineQueue({
             // The user may have discarded this draft while it was being sent.
             // Never resurrect locally removed data after a failed request.
             const current = await store.get(item.id);
-            if (!current || current.scope !== scope) continue;
-            await store.put({
+            if (!current || current.scope !== scope ||
+                JSON.stringify(current) !== JSON.stringify(expectedAfterWrite)) continue;
+            const saved = await store.put({
               ...current, attempts, state: state === 'retry' ? 'pending' : state,
               errorCode: typeof error?.code === 'string' ? error.code.slice(0, 64) : null,
               lastError: String(error?.message || 'No se pudo enviar.').slice(0, 220),
               nextRetryAt: state === 'retry'
                 ? new Date(now().getTime() + retryDelayMs(attempts)).toISOString() : null
-            });
+            }, { expected: current });
+            if (saved === false) continue;
             if (state === 'conflict') summary.conflicts += 1;
             notify();
             // Authentication needs a new session; network/backend failures should
