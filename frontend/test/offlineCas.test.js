@@ -68,7 +68,9 @@ function harness() {
       const old = db.get(value.id);
       if (expected && (!old || old.revision !== revisions.get(expected))) return false;
       if (!expected && old) throw Error('Duplicate local UUID');
-      db.set(value.id, { value: structuredClone(value), revision: ++counter });
+      const revision = ++counter;
+      db.set(value.id, { value: structuredClone(value), revision });
+      revisions.set(value, revision); // matching real store: exact commit stamp
       return value.id;
     },
     delete: async (id, { expected } = {}) => {
