@@ -11,6 +11,7 @@ import {
   User,
   WorkOrder,
   WorkOrderAssignee,
+  WorkOrderExecution,
   WorkOrderInput,
   WorkOrderMachinery
 } from '../../models/index.js';
@@ -18,6 +19,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
+import { canSubmitExecution, canReviewExecution, canCloseReviewedOrder, validExecutionWindow, MAX_EXECUTION_REPORTS } from './executionPolicy.js';
 import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { ORDER_RECIPIENT_ROLES } from '../notifications/assignmentNotificationPolicy.js';
@@ -57,6 +59,28 @@ const inputSchema = z.object({
 const machinerySchema = z.object({
   machinery_id: z.string().uuid(),
   role: z.string().max(80).default('primary')
+});
+
+// Explicit ISO offsets: the server records authored time, not an inferred timezone.
+const executionSchema = z.object({
+  started_at: z.string().datetime({ offset: true }),
+  finished_at: z.string().datetime({ offset: true }),
+  worked_area_hectares: z.number().positive().max(1000000),
+  result_summary: z.string().trim().min(10).max(2000)
+}).strict();
+
+const executionReviewSchema = z.object({
+  decision: z.enum(['verified', 'rejected']),
+  reason: z.string().trim().min(10).max(500).optional()
+}).strict().superRefine((body, ctx) => {
+  if (body.decision === 'rejected' && !body.reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
+      message: 'El rechazo requiere una explicación.' });
+  }
+  if (body.decision === 'verified' && body.reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
+      message: 'La revisión positiva no admite un motivo de rechazo.' });
+  }
 });
 
 async function contractorAssignedToOrder(req, orderId) {
@@ -113,7 +137,13 @@ workOrdersRouter.get('/:id', requireCapability('orders.read'), asyncHandler(asyn
     transaction: req.dbTransaction
   });
   if (!order) return res.status(404).json({ error: { message: 'Orden de trabajo no encontrada.' } });
-  res.json({ data: order });
+  const executions = await WorkOrderExecution.findAll({
+    where: { tenant_id: req.tenantId, work_order_id: order.id },
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: MAX_EXECUTION_REPORTS,
+    transaction: req.dbTransaction
+  });
+  res.json({ data: { ...order.toJSON(), WorkOrderExecutions: executions } });
 }));
 
 workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), validate(statusSchema), asyncHandler(async (req, res) => {
@@ -132,6 +162,18 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
     throw new HttpError(roleCode === 'contractor' ? 403 : 409,
       'Transición de orden no permitida para este usuario o estado.',
       undefined, 'WORK_ORDER_TRANSITION_DENIED');
+  }
+  if (nextStatus === 'completed') {
+    const reports = await WorkOrderExecution.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, review_status: 'verified' },
+      attributes: ['id', 'review_status'],
+      limit: 1, transaction: req.dbTransaction
+    });
+    if (!canCloseReviewedOrder(roleCode, reports)) {
+      throw new HttpError(roleCode === 'contractor' ? 403 : 409,
+        'El cierre requiere un parte de ejecución verificado y autorización de coordinación.',
+        undefined, 'WORK_ORDER_EXECUTION_REVIEW_REQUIRED');
+    }
   }
   if (nextStatus === 'assigned') {
     const assignees = await WorkOrderAssignee.findAll({
@@ -180,6 +222,106 @@ workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), valid
   }, { transaction: req.dbTransaction });
 
   res.json({ data: order });
+}));
+
+workOrdersRouter.post('/:id/executions', requireCapability('orders.execute'), validate(executionSchema), asyncHandler(async (req, res) => {
+  const order = await WorkOrder.findByPk(req.params.id, {
+    transaction: req.dbTransaction, lock: req.dbTransaction.LOCK.UPDATE
+  });
+  if (!order) throw new HttpError(404, 'Orden no encontrada.');
+  const roleCode = req.auth.role.code;
+  const assigned = roleCode === 'contractor' && await contractorAssignedToOrder(req, order.id);
+  if (!canSubmitExecution(roleCode, assigned)) {
+    throw new HttpError(403, 'No tenés asignación vigente para informar este trabajo.',
+      undefined, 'EXECUTION_SUBMISSION_DENIED');
+  }
+  if (order.status !== 'in_progress') {
+    throw new HttpError(409, 'Solo se puede declarar ejecución en una orden en curso.',
+      undefined, 'WORK_ORDER_NOT_IN_PROGRESS');
+  }
+  const started = new Date(req.body.started_at);
+  const finished = new Date(req.body.finished_at);
+  if (!validExecutionWindow(started, finished, order.approved_at)) {
+    throw new HttpError(422, 'El intervalo debe estar dentro de la orden aprobada, sin fechas futuras.',
+      undefined, 'EXECUTION_TIME_INVALID');
+  }
+  const active = await WorkOrderExecution.findOne({
+    where: { tenant_id: req.tenantId, work_order_id: order.id,
+      review_status: { [Op.in]: ['submitted', 'verified'] } },
+    transaction: req.dbTransaction
+  });
+  if (active) {
+    throw new HttpError(409, 'Ya existe una declaración pendiente o verificada. Actualizá el detalle.',
+      undefined, 'EXECUTION_ALREADY_SUBMITTED');
+  }
+  const count = await WorkOrderExecution.count({
+    where: { tenant_id: req.tenantId, work_order_id: order.id },
+    transaction: req.dbTransaction
+  });
+  if (count >= MAX_EXECUTION_REPORTS) {
+    throw new HttpError(409, 'La orden alcanzó el máximo de revisiones; contactá a coordinación.',
+      undefined, 'EXECUTION_REPORT_LIMIT');
+  }
+  const report = await WorkOrderExecution.create({
+    tenant_id: req.tenantId,
+    work_order_id: order.id,
+    submitted_by: req.auth.user.id,
+    started_at: started,
+    finished_at: finished,
+    worked_area_hectares: req.body.worked_area_hectares,
+    result_summary: req.body.result_summary,
+    review_status: 'submitted'
+  }, { transaction: req.dbTransaction });
+  await AuditEvent.create({
+    tenant_id: req.tenantId, actor_id: req.auth.user.id,
+    action: 'work_order.execution_submitted', entity_type: 'work_order',
+    entity_id: order.id, after: { execution_id: report.id, review_status: 'submitted' },
+    request_id: safeAuditRequestId(req.requestId)
+  }, { transaction: req.dbTransaction });
+  res.status(201).json({ data: report });
+}));
+
+workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('orders.write'),
+  validate(executionReviewSchema), asyncHandler(async (req, res) => {
+  const order = await WorkOrder.findByPk(req.params.id, {
+    transaction: req.dbTransaction, lock: req.dbTransaction.LOCK.UPDATE
+  });
+  if (!order) throw new HttpError(404, 'Orden no encontrada.');
+  const roleCode = req.auth.role.code;
+  if (!['tenant_admin', 'agronomic_coordinator'].includes(roleCode)) {
+    throw new HttpError(403, 'Solo coordinación puede revisar ejecuciones.');
+  }
+  if (order.status !== 'in_progress') {
+    throw new HttpError(409, 'La orden ya no admite revisiones de ejecución.',
+      undefined, 'EXECUTION_REVIEW_CLOSED');
+  }
+  const report = await WorkOrderExecution.findOne({
+    where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
+    transaction: req.dbTransaction, lock: req.dbTransaction.LOCK.UPDATE
+  });
+  if (!report) throw new HttpError(404, 'Parte de ejecución no encontrado.');
+  if (!canReviewExecution(roleCode, req.auth.user.id, report.submitted_by)) {
+    throw new HttpError(403, 'No podés revisar una declaración propia.',
+      undefined, 'EXECUTION_SELF_REVIEW_DENIED');
+  }
+  if (report.review_status !== 'submitted') {
+    throw new HttpError(409, 'Esta declaración ya fue revisada.',
+      undefined, 'EXECUTION_ALREADY_REVIEWED');
+  }
+  await report.update({
+    review_status: req.body.decision,
+    reviewed_by: req.auth.user.id,
+    reviewed_at: new Date(),
+    review_note: req.body.decision === 'rejected' ? req.body.reason : null
+  }, { transaction: req.dbTransaction });
+  await AuditEvent.create({
+    tenant_id: req.tenantId, actor_id: req.auth.user.id,
+    action: 'work_order.execution_reviewed', entity_type: 'work_order',
+    entity_id: order.id, before: { execution_id: report.id, review_status: 'submitted' },
+    after: { execution_id: report.id, review_status: report.review_status },
+    request_id: safeAuditRequestId(req.requestId)
+  }, { transaction: req.dbTransaction });
+  res.json({ data: report });
 }));
 
 workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), validate(assigneeSchema), asyncHandler(async (req, res) => {
