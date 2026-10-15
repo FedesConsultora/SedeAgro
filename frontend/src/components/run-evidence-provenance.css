@@ -1,0 +1,19 @@
+.run-evidence{display:grid;gap:12px;padding:14px 16px;border:1px solid #cbdfe1;border-radius:12px;background:#fbfdfc;color:#273e46}
+.run-evidence__header{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+.run-evidence__header h3{font-size:14px;margin:2px 0 0}
+.run-evidence__eyebrow{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#417383}
+.run-evidence__hint{font-size:12px;line-height:1.55;color:#556d77;margin:0}
+.run-evidence__counts{display:flex;gap:8px;flex-wrap:wrap}
+.run-evidence__counts span{display:inline-flex;gap:6px;align-items:center;padding:6px 9px;border-radius:7px;border:1px solid #dce7e8;background:#fff;font-size:11px;font-weight:650}
+.run-evidence__error,.run-evidence__warning{font-size:12px;line-height:1.5;border-radius:8px;margin:0;padding:10px;display:flex;gap:8px;align-items:flex-start;color:#994b20;background:#fff3e7}
+.run-evidence__subheading{font-size:12px;color:#304958;margin:2px 0 -5px}
+.run-evidence__list{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.run-evidence__item{padding:10px 12px;border:1px solid #dce7e8;background:white;border-radius:9px;display:grid;gap:6px}
+.run-evidence__item-heading{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+.run-evidence__item-heading small{margin-left:auto;color:#6a7b82;font-size:11px}
+.run-evidence__server-row{padding:9px 12px;border:1px solid #dce7e8;background:white;border-radius:7px;font-size:12px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.run-evidence__present{color:#25734b}
+.run-evidence__missing{color:#99531c}
+.run-evidence__footer{border-top:1px solid #dce7e8;padding-top:10px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.run-evidence button:focus-visible{outline:3px solid #1d8e9e;outline-offset:2px}
+@media(max-width:640px){.run-evidence{padding:12px}.run-evidence__header button,.run-evidence__footer button{width:100%;justify-content:center;min-height:40px}}

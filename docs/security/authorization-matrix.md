@@ -45,7 +45,7 @@ Se utiliza un bloqueo de escritura de fila al cambiar estado para serializar las
 ## Pruebas y límites
 
 - Pruebas unitarias del mapeo rol/capability, rechazo de otros tenants, transiciones y contratistas.
-- Prueba estática de 56 rutas de negocio: toda ruta debe declarar un `requireCapability` explícito.
+- Prueba estática de 57 rutas de negocio: toda ruta debe declarar un `requireCapability` explícito.
 - Regresión sobre consulta de notificaciones personales y directorio de miembros.
 - **Integrado:** gate de PostgreSQL/PostGIS RLS para tenants A/B, con pruebas de concesión y revocación de productor. Aún falta ejecutar pruebas en el VPS y una auditoría completa antes del piloto.
 - **Pendiente de UX:** adaptar controles del frontend a los capabilities server-side y separar claramente el modo mock del modo real.

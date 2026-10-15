@@ -144,6 +144,7 @@ export function createApiClient(session, feedback) {
     scoutingAssignees: () => request('/scouting/assignees'),
     scoutingRuns: () => request('/scouting/runs'),
     getScoutingRun: (id) => request(`/scouting/runs/${id}`),
+    getRunEvidenceStatus: (id) => request(`/scouting/runs/${id}/evidence-status`),
     getScoutingAudit: (id) => request(`/scouting/runs/${id}/audit`),
     createScoutingRun: (body) => request('/scouting/runs', { method: 'POST', body }),
     updateScoutingRun: (id, body) => request(`/scouting/runs/${id}`, { method: 'PATCH', body }),

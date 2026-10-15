@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
+import { Op } from 'sequelize';
 import {
-  AuditEvent, CampaignField, EvidenceAsset, Field, Membership, User,
+  AuditEvent, CampaignField, EvidenceAsset, EvidenceBlob, Field, Membership, User,
   ScoutingObservation, ScoutingRun
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
@@ -11,6 +12,7 @@ import { requireCapability } from '../../infra/http/middlewares/requireCapabilit
 import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
 import { getPrivateEvidence, putPrivateEvidence } from './evidenceStorage.js';
+import { evidenceProvenanceView, RUN_EVIDENCE_LIMIT } from './evidenceProvenance.js';
 import { recordScoutingAudit } from './audit.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { shouldNotifyRunAssignment } from '../notifications/assignmentNotificationPolicy.js';
@@ -160,6 +162,39 @@ scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler
     transaction: req.dbTransaction
   });
   res.json({ data: run });
+}));
+
+// A separate read-only proof of presence: no private bytes and no filename,
+// original notes, coordinates or content hashes are returned. Only current
+// run readers can query it, with FORCE RLS still applying to both tables.
+scoutingRouter.get('/runs/:id/evidence-status', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
+  const run = await findRun(req, req.params.id);
+  const assets = await EvidenceAsset.findAll({
+    attributes: ['id', 'scouting_observation_id', 'uploaded_by', 'client_upload_id',
+      'kind', 'mime_type', 'size_bytes', 'captured_at'],
+    where: { tenant_id: req.tenantId },
+    include: [{
+      model: ScoutingObservation, attributes: [], required: true,
+      where: { tenant_id: req.tenantId, scouting_run_id: run.id }
+    }],
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: RUN_EVIDENCE_LIMIT + 1,
+    transaction: req.dbTransaction
+  });
+  const visible = assets.slice(0, RUN_EVIDENCE_LIMIT);
+  const ids = visible.map(item => item.id);
+  const blobs = ids.length ? await EvidenceBlob.findAll({
+    attributes: ['evidence_id'],
+    where: { tenant_id: req.tenantId, evidence_id: { [Op.in]: ids } },
+    transaction: req.dbTransaction
+  }) : [];
+  const result = evidenceProvenanceView(
+    assets.map(item => item.get({ plain: true })),
+    blobs.map(item => item.evidence_id),
+    run.id
+  );
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ data: result });
 }));
 
 scoutingRouter.post('/runs/:runId/observations', requireCapability('scouting.observe'), validate(observationSchema), asyncHandler(async (req, res) => {

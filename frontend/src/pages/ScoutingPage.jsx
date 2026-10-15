@@ -10,6 +10,7 @@ import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
 import { RunSyncHistory } from '../components/RunSyncHistory.jsx';
+import { RunEvidenceProvenance } from '../components/RunEvidenceProvenance.jsx';
 import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
 import './scouting-workspace.css';
 
@@ -210,6 +211,9 @@ function RunDetail({ run, onChanged, onOpenSync }) {
       )}
       {dataMode === 'live' && !loading && !error && details && (
         <RunSyncHistory runId={details.id} />
+      )}
+      {dataMode === 'live' && !loading && !error && details && (
+        <RunEvidenceProvenance runId={details.id} onOpenSync={onOpenSync} />
       )}
       {dataMode === 'live' && !loading && !error && details && (
         <ScoutingObservationGeoPanel
