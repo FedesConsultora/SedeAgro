@@ -65,7 +65,9 @@ const machinerySchema = z.object({
 const executionSchema = z.object({
   started_at: z.string().datetime({ offset: true }),
   finished_at: z.string().datetime({ offset: true }),
-  worked_area_hectares: z.number().positive().max(1000000),
+  worked_area_hectares: z.number().finite().min(0.01).max(1000000)
+    .refine(value => Math.abs(value * 100 - Math.round(value * 100)) < 1e-6,
+      'Informá hectáreas con hasta dos decimales.'),
   result_summary: z.string().trim().min(10).max(2000)
 }).strict();
 
