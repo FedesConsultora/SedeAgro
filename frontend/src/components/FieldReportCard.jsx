@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
+import { decodeFieldDocument } from '../services/reportDownload.js';
 
 const STATUS_ES = {
   planned: 'Planificado', active: 'Activo', closed: 'Cerrado',
@@ -17,14 +18,15 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [exporting, setExporting] = useState(false);
+  const exportLock = useRef(false);
   const [exportError, setExportError] = useState('');
   const [exportStatus, setExportStatus] = useState('');
   const currentScope = useRef(null);
   currentScope.current = dataMode === 'live' ? sessionScope(session) : null;
   useEffect(() => () => { currentScope.current = null; }, []);
 
-  const exportCsv = async () => {
-    if (exporting || dataMode !== 'live' || !currentScope.current) return;
+  const exportReport = async (format) => {
+    if (exportLock.current || dataMode !== 'live' || !currentScope.current) return;
     setExportError('');
     setExportStatus('');
     if (from && to && from > to) {
@@ -32,36 +34,46 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       return;
     }
     const scope = currentScope.current;
+    exportLock.current = true;
     setExporting(true);
     try {
-      const response = await api.exportFieldCsv(fieldId, { from, to });
+      const response = format === 'csv'
+        ? await api.exportFieldCsv(fieldId, { from, to })
+        : await api.exportFieldDocument(fieldId, format, { from, to });
       if (scope !== currentScope.current) return;
-      if (typeof response?.data?.csv !== 'string' ||
-          !response.data.csv.startsWith('\uFEFF') ||
-          response.data.mimeType !== 'text/csv;charset=utf-8' ||
-          !Number.isSafeInteger(response.data.counts?.observations) ||
-          !Number.isSafeInteger(response.data.counts?.workOrders)) {
-        throw new Error('El servidor devolvió un reporte inválido. No se descargó ningún archivo.');
+      let blob, counts;
+      if (format === 'csv') {
+        if (typeof response?.data?.csv !== 'string' ||
+            !response.data.csv.startsWith('\uFEFF') ||
+            response.data.mimeType !== 'text/csv;charset=utf-8' ||
+            !Number.isSafeInteger(response.data.counts?.observations) ||
+            !Number.isSafeInteger(response.data.counts?.workOrders)) {
+          throw new Error('El servidor devolvió un CSV inválido. No se descargó ningún archivo.');
+        }
+        blob = new Blob([response.data.csv], { type: response.data.mimeType });
+        counts = response.data.counts;
+      } else {
+        ({ blob, counts } = decodeFieldDocument(response?.data, format));
       }
-      const blob = new Blob([response.data.csv], { type: response.data.mimeType });
+      if (scope !== currentScope.current) return;
       const url = URL.createObjectURL(blob);
       try {
         const link = document.createElement('a');
         link.href = url;
-        link.download = `reporte-lote-${fieldId}.csv`;
+        link.download = `reporte-lote-${fieldId}.${format}`;
         document.body.appendChild(link);
         link.click();
         link.remove();
       } finally {
-        // Let the navigation consume the object URL before revocation.
         setTimeout(() => URL.revokeObjectURL(url), 0);
       }
-      setExportStatus(`Reporte descargado: ${response.data.counts.observations} observaciones y ${response.data.counts.workOrders} órdenes.`);
+      setExportStatus(`Reporte ${format.toUpperCase()} descargado: ${counts.observations} observaciones y ${counts.workOrders} órdenes.`);
     } catch (error) {
       if (scope === currentScope.current) {
-        setExportError(error?.message || 'No se pudo generar el reporte CSV.');
+        setExportError(error?.message || 'No se pudo generar el reporte.');
       }
     } finally {
+      exportLock.current = false;
       if (scope === currentScope.current) setExporting(false);
     }
   };
@@ -128,7 +140,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       {expanded && report && (
         <>
           {dataMode === 'live' && (
-            <section aria-label={`Descargar reporte CSV de ${fieldName}`}
+            <section aria-label={`Descargar reportes de ${fieldName}`}
               style={{ display: 'flex', alignItems: 'end', flexWrap: 'wrap', gap: 12, padding: '12px 0' }}>
               <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
                 Desde (opcional)
@@ -140,10 +152,14 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
                 <input type="date" value={to} min={from || undefined}
                   onChange={e => setTo(e.target.value)} disabled={exporting} />
               </label>
-              <button type="button" className="primary-action"
-                disabled={exporting} onClick={exportCsv} aria-busy={exporting}>
-                {exporting ? 'Generando CSV…' : 'Descargar CSV real'}
-              </button>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {['csv', 'pdf', 'xlsx'].map(format => (
+                  <button type="button" key={format} className="primary-action"
+                    disabled={exporting} onClick={() => exportReport(format)} aria-busy={exporting}>
+                    {exporting ? 'Generando…' : `Descargar ${format.toUpperCase()}`}
+                  </button>
+                ))}
+              </div>
               <small>Datos actuales del servidor; fechas UTC, máximo 200 registros por tipo.</small>
               {exportError && <p role="alert" style={{ width: '100%', margin: 0 }}>{exportError}</p>}
               {exportStatus && <p role="status" style={{ width: '100%', margin: 0 }}>{exportStatus}</p>}
