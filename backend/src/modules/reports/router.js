@@ -72,6 +72,7 @@ const fieldCsvQuery = z.object({
 
 reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'),
   validate(fieldCsvQuery, 'query'), asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
     if (!z.string().uuid().safeParse(req.params.fieldId).success) {
       throw new HttpError(422, 'Identificador de lote inválido.');
     }
@@ -89,7 +90,7 @@ reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'
       transaction: tx
     });
     if (!field) throw new HttpError(404, 'Lote no encontrado.');
-    const dateWhere = column => ({
+    const dateWhere = () => ({
       ...(period.start ? { [Op.gte]: period.start } : {}),
       ...(period.exclusiveEnd ? { [Op.lt]: period.exclusiveEnd } : {})
     });
@@ -97,7 +98,7 @@ reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'
       where: {
         tenant_id: req.tenantId, field_id: field.id,
         ...((period.start || period.exclusiveEnd)
-          ? { observed_at: dateWhere('observed_at') } : {})
+          ? { observed_at: dateWhere() } : {})
       },
       attributes: ['id', 'observed_at', 'observation_type', 'severity', 'notes'],
       order: [['observed_at', 'DESC'], ['id', 'DESC']],
@@ -107,7 +108,7 @@ reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'
       where: {
         tenant_id: req.tenantId, field_id: field.id,
         ...((period.start || period.exclusiveEnd)
-          ? { created_at: dateWhere('created_at') } : {})
+          ? { created_at: dateWhere() } : {})
       },
       attributes: ['id', 'created_at', 'type', 'status', 'priority', 'title'],
       order: [['created_at', 'DESC'], ['id', 'DESC']],
