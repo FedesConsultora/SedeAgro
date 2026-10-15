@@ -32,8 +32,8 @@ const templateSchema = z.object({
 
 const runSchema = z.object({
   report_template_id: z.string().uuid(),
-  period_start: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional(),
-  period_end: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional(),
+  period_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  period_end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   filters: z.object({ field_id: z.string().uuid() }).strict()
 }).strict();
 
