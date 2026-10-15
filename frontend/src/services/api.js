@@ -145,7 +145,7 @@ export function createApiClient(session, feedback) {
     scoutingRuns: () => request('/scouting/runs'),
     getScoutingRun: (id) => request(`/scouting/runs/${id}`),
     getRunEvidenceStatus: (id) => request(`/scouting/runs/${id}/evidence-status`),
-    getRunEvidencePage: (id, cursor = null) => request(`/scouting/runs/${id}/evidence-status?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+    getRunEvidencePage: (id, cursor = null, { signal } = {}) => request(`/scouting/runs/${id}/evidence-status?limit=10${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, silent: true }),
     getScoutingAudit: (id) => request(`/scouting/runs/${id}/audit`),
     createScoutingRun: (body) => request('/scouting/runs', { method: 'POST', body }),
     updateScoutingRun: (id, body) => request(`/scouting/runs/${id}`, { method: 'PATCH', body }),
