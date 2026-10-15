@@ -9,6 +9,7 @@ import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
+import { RunSyncHistory } from '../components/RunSyncHistory.jsx';
 import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
 import './scouting-workspace.css';
 
@@ -206,6 +207,9 @@ function RunDetail({ run, onChanged, onOpenSync }) {
       </div>}
       {dataMode === 'live' && !loading && !error && details && (
         <RunOfflineCaptures runId={details.id} onOpenSync={onOpenSync} />
+      )}
+      {dataMode === 'live' && !loading && !error && details && (
+        <RunSyncHistory runId={details.id} />
       )}
       {dataMode === 'live' && !loading && !error && details && (
         <ScoutingObservationGeoPanel
