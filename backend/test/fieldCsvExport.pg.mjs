@@ -153,6 +153,22 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.equal((await get(base, restricted)).status, 403);
     assert.equal((await get(base.replace(a.fieldId, b.fieldId))).status, 404);
 
+    // A report worker does not exist; no request may claim queued success.
+    const beforeRuns = (await owner.query(
+      'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
+    )).rows[0].count;
+    const queued = await fetch(`http://127.0.0.1:${server.address().port}/api/v1/reports/runs`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': tenantA,
+        'x-sedeagro-request': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ report_template_id: randomUUID(), filters: {} })
+    });
+    assert.equal(queued.status, 409);
+    assert.equal((await queued.json()).error.code, 'REPORT_WORKER_NOT_AVAILABLE');
+    const afterRuns = (await owner.query(
+      'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
+    )).rows[0].count;
+    assert.equal(afterRuns, beforeRuns, 'never persist unprocessable queued reports');
     await owner.query(`
       INSERT INTO scouting_observations
         (tenant_id,scouting_run_id,field_id,observed_by,observation_type,notes,observed_at)
