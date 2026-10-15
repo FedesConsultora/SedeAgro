@@ -227,6 +227,29 @@ try {
   assert.equal(await panel.count(), 0);
   console.log('PASS: multi-tab server logout removed previous tenant private view');
 
+  // Switch the shared browser cookie to a genuinely different tenant.
+  await secondTab.getByRole('button', { name: 'Crear cuenta nueva' }).click();
+  await secondTab.locator('#reg-org-name').fill('Other Browser Tenant');
+  await secondTab.locator('#reg-slug').fill(`other-tab-${suffix}`);
+  await secondTab.locator('#reg-full-name').fill('Different Browser User');
+  await secondTab.locator('#reg-email').fill(`other-tab-${suffix}@example.test`);
+  await secondTab.locator('#reg-password').fill(password);
+  const otherRegistrationRequest = secondTab.waitForResponse(res =>
+    res.url().endsWith('/auth/register-tenant') && res.request().method() === 'POST');
+  await secondTab.locator('#register-submit').click();
+  const otherRegistration = await otherRegistrationRequest;
+  assert.equal(otherRegistration.status(), 201, await otherRegistration.text());
+  const otherProfile = await otherRegistration.json();
+  secondTenantId = otherProfile.tenant.id;
+  secondUserId = otherProfile.user.id;
+
+  await page.getByTitle('Perfil de usuario').click();
+  await page.locator('.user-menu__tenant-name').getByText('Other Browser Tenant').waitFor();
+  assert.equal(await panel.count(), 0);
+  console.log('PASS: cross-tenant browser login adopted new authenticated identity');
+  await secondTab.getByTitle('Cerrar sesión').click();
+  await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+
   await secondTab.locator('#login-email').fill(email);
   await secondTab.locator('#login-password').fill(password);
   await secondTab.locator('#login-submit').click();
