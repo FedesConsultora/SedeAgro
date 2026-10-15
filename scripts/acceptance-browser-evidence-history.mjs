@@ -227,6 +227,12 @@ try {
   assert.equal(await panel.count(), 0);
   console.log('PASS: multi-tab server logout removed previous tenant private view');
 
+  // A transient validation failure must lock the old React view instead
+  // of claiming the user was logged out or reviving private evidence.
+  await page.route('**/api/v1/auth/me', route => route.fulfill({
+    status: 503, contentType: 'application/json',
+    body: JSON.stringify({ error: { message: 'Temporary test outage' } })
+  }), { times: 1 });
   // Switch the shared browser cookie to a genuinely different tenant.
   await secondTab.getByRole('button', { name: 'Crear cuenta nueva' }).click();
   await secondTab.locator('#reg-org-name').fill('Other Browser Tenant');
@@ -243,6 +249,9 @@ try {
   secondTenantId = otherProfile.tenant.id;
   secondUserId = otherProfile.user.id;
 
+  await page.getByRole('alert').getByText('No se pudo verificar tu sesión').waitFor();
+  assert.equal(await panel.count(), 0);
+  await page.getByRole('button', { name: 'Reintentar verificación' }).click();
   await page.getByTitle('Perfil de usuario').click();
   await page.locator('.user-menu__tenant-name').getByText('Other Browser Tenant').waitFor();
   assert.equal(await panel.count(), 0);
