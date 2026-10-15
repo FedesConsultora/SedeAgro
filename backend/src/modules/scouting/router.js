@@ -14,7 +14,8 @@ import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.j
 import { getPrivateEvidence, putPrivateEvidence,
   getPrivateEvidenceByteLength, getBoundedPrivateEvidence } from './evidenceStorage.js';
 import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from './evidenceIntegrity.js';
-import { evidenceProvenanceView, RUN_EVIDENCE_LIMIT } from './evidenceProvenance.js';
+import { evidenceProvenanceView } from './evidenceProvenance.js';
+import { encodeEvidencePageCursor, parseEvidencePageQuery } from './evidencePagination.js';
 import { recordScoutingAudit } from './audit.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { shouldNotifyRunAssignment } from '../notifications/assignmentNotificationPolicy.js';
@@ -171,29 +172,39 @@ scoutingRouter.get('/runs/:id', requireCapability('scouting.read'), asyncHandler
 // run readers can query it, with FORCE RLS still applying to both tables.
 scoutingRouter.get('/runs/:id/evidence-status', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
   const run = await findRun(req, req.params.id);
+  const page = parseEvidencePageQuery(req.query, { tenantId: req.tenantId, runId: run.id });
+  const after = page.after ? { [Op.or]: [
+    { created_at: { [Op.lt]: page.after.date } },
+    { created_at: page.after.date, id: { [Op.lt]: page.after.id } }
+  ] } : {};
   const assets = await EvidenceAsset.findAll({
     attributes: ['id', 'scouting_observation_id', 'uploaded_by', 'client_upload_id',
-      'kind', 'mime_type', 'size_bytes', 'captured_at'],
-    where: { tenant_id: req.tenantId },
+      'kind', 'mime_type', 'size_bytes', 'captured_at', 'created_at'],
+    where: { tenant_id: req.tenantId, ...after },
     include: [{
       model: ScoutingObservation, attributes: [], required: true,
       where: { tenant_id: req.tenantId, scouting_run_id: run.id }
     }],
     order: [['created_at', 'DESC'], ['id', 'DESC']],
-    limit: RUN_EVIDENCE_LIMIT + 1,
+    limit: page.limit + 1,
     transaction: req.dbTransaction
   });
-  const visible = assets.slice(0, RUN_EVIDENCE_LIMIT);
+  const visible = assets.slice(0, page.limit);
   const ids = visible.map(item => item.id);
   const blobs = ids.length ? await EvidenceBlob.findAll({
     attributes: ['evidence_id'],
     where: { tenant_id: req.tenantId, evidence_id: { [Op.in]: ids } },
     transaction: req.dbTransaction
   }) : [];
+  const nextCursor = assets.length > page.limit && visible.length
+    ? encodeEvidencePageCursor(visible[visible.length - 1], {
+      tenantId: req.tenantId, runId: run.id, limit: page.limit
+    })
+    : null;
   const result = evidenceProvenanceView(
     assets.map(item => item.get({ plain: true })),
     blobs.map(item => item.evidence_id),
-    run.id
+    run.id, { limit: page.limit, nextCursor }
   );
   res.set('Cache-Control', 'private, no-store');
   res.json({ data: result });
