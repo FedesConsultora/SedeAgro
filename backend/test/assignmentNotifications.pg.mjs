@@ -44,13 +44,14 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const sql = `SELECT count(*)::int AS total FROM ${table} WHERE ${conditions}`;
     return (await owner.query(sql, params)).rows[0].total;
   }
-  async function request(path, token, tenant, method = 'GET', body) {
+  async function request(path, token, tenant, method = 'GET', body, extraHeaders = {}) {
     const response = await fetch(base + path, {
       method,
       headers: {
         authorization: `Bearer ${token}`,
         'x-tenant-id': tenant,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' })
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...extraHeaders
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
@@ -269,7 +270,13 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(revocationOrder.status, 201);
     const revokedId = revocationOrder.body.data.id;
     assert.equal((await request(`/work-orders/${revokedId}/assignees`,
-      adminToken, tenantA, 'POST', { user_id: contractor2 })).status, 201);
+      adminToken, tenantA, 'POST', { user_id: contractor2 },
+      { 'x-request-id': 'not-a-uuid' })).status, 201);
+    const auditCorrelation = (await owner.query(`SELECT request_id FROM audit_events
+      WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.assignee_added'`,
+      [tenantA, revokedId])).rows;
+    assert.equal(auditCorrelation.length, 1);
+    assert.equal(auditCorrelation[0].request_id, null);
     for (const status of ['pending_approval', 'approved']) {
       assert.equal((await request(`/work-orders/${revokedId}/status`,
         adminToken, tenantA, 'PATCH', { status })).status, 200);
