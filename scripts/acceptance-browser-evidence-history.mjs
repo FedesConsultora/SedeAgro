@@ -39,6 +39,8 @@ const password = 'StrongEvidence-CI-2026!';
 const admin = new pg.Client({ connectionString: adminUrl });
 let tenantId;
 let userId;
+let secondTenantId;
+let secondUserId;
 let backend;
 let vite;
 let browser;
@@ -299,6 +301,8 @@ try {
   if(browser)await browser.close();
   if(vite)vite.kill();
   if(backend)backend.kill();
+  if(secondTenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[secondTenantId]).catch(()=>{});
+  if(secondUserId)await admin.query('DELETE FROM users WHERE id=$1',[secondUserId]).catch(()=>{});
   if(tenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[tenantId]).catch(()=>{});
   if(userId)await admin.query('DELETE FROM users WHERE id=$1',[userId]).catch(()=>{});
   await admin.end().catch(()=>{});
