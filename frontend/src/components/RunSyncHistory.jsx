@@ -72,13 +72,23 @@ export function RunSyncHistory({ runId }) {
   useEffect(() => {
     if (!contextKey) return undefined;
     const onReconnect = () => { void refresh(); };
+    const onDisconnect = () => {
+      // In-flight success from a different connectivity period cannot turn
+      // this screen green while offline.
+      sequence.current += 1;
+      if (currentContext.current === contextKey) {
+        setSnapshot({ key: contextKey, phase: 'offline', data: null, error: '' });
+      }
+    };
     const onResume = () => {
-      if (document.visibilityState === 'visible' && navigator.onLine !== false) void refresh();
+      if (document.visibilityState === 'visible') void refresh();
     };
     window.addEventListener('online', onReconnect);
+    window.addEventListener('offline', onDisconnect);
     document.addEventListener('visibilitychange', onResume);
     return () => {
       window.removeEventListener('online', onReconnect);
+      window.removeEventListener('offline', onDisconnect);
       document.removeEventListener('visibilitychange', onResume);
     };
   }, [contextKey, refresh]);
