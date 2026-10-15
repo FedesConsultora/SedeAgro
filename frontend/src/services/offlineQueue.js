@@ -51,7 +51,9 @@ export function createOfflineQueue({
     if (!scope || !id.startsWith(`${scope}:`)) throw new Error('Esta operación pertenece a otra sesión.');
     const item = await store.get(id);
     if (!item || item.scope !== scope) throw new Error('Operación local no encontrada.');
-    await store.delete(id);
+    if (await store.delete(id, { expected: item }) === false) {
+      throw new Error('La captura cambió en otra pestaña. Actualizá antes de eliminar.');
+    }
     notify();
   }
 
@@ -59,9 +61,12 @@ export function createOfflineQueue({
     const scope = sessionScope(session);
     const item = scope && await store.get(id);
     if (!item || item.scope !== scope) throw new Error('Operación local no encontrada.');
-    await store.put({
+    const saved = await store.put({
       ...item, state: 'pending', nextRetryAt: null, lastError: null, errorCode: null
-    });
+    }, { expected: item });
+    if (saved === false) {
+      throw new Error('Otra pestaña modificó esta captura. Actualizá antes de reintentar.');
+    }
     if (notifyChange) notify();
   }
 
@@ -83,7 +88,7 @@ export function createOfflineQueue({
         if (verified.status !== 'confirmed' || current.evidence) {
           throw new Error('No hay un recibo completo y seguro para retirar este borrador.');
         }
-        await store.delete(id);
+        if (await store.delete(id, { expected: current }) === false) return false;
         notify();
         return true;
       });
