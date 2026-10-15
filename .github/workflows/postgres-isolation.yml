@@ -37,6 +37,8 @@ jobs:
           npm run check:syntax
           bash -n scripts/verify-pilot-staging.sh
           node --check scripts/verify-frontend-headers.mjs
+          node --check scripts/verify-deployed-staging.mjs
+          node --test scripts/test/staging-remote-provenance.test.mjs
           npm --workspace backend run test
       - name: Test offline browser queue
         run: npm --workspace frontend run test
@@ -106,6 +108,11 @@ jobs:
             nginx:1.27-alpine
           trap 'docker stop sedeagro-nginx-pilot >/dev/null 2>&1 || true' EXIT
           node scripts/verify-frontend-headers.mjs http://127.0.0.1:4182
+          node scripts/staging-release-manifest.mjs create
+          node scripts/staging-release-manifest.mjs verify
+          SEDEAGRO_CI_LOOPBACK=1 node scripts/verify-deployed-staging.mjs \
+            --url http://127.0.0.1:4182 --ci-loopback \
+            --sha "$(git rev-parse HEAD)" --manifest staging-release-manifest.json
       - name: Verify reproducible staging release hashes
         run: |
           node scripts/staging-release-manifest.mjs create
