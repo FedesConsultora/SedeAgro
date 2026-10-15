@@ -205,10 +205,10 @@ try {
   // This is an event-race assertion, not a fabricated API success response.
   await page.evaluate(({tenantId,userId}) => {
     window.dispatchEvent(new CustomEvent('sedeagro:session-expired', {
-      detail: { scope: \`\${tenantId}:\${userId}\`, epoch: 0 }
+      detail: { scope: `${tenantId}:${userId}`, epoch: 0 }
     }));
     window.dispatchEvent(new CustomEvent('sedeagro:session-expired', {
-      detail: { scope: \`00000000-0000-4000-8000-000000000001:\${userId}\`, epoch: 1 }
+      detail: { scope: `00000000-0000-4000-8000-000000000001:${userId}`, epoch: 1 }
     }));
   },{tenantId,userId});
   await panel.getByText('Archivos registrados · página 1').waitFor();
