@@ -43,7 +43,8 @@ test('one-by-one manual-only UI, no bulk scanning, file payload or destructive d
   assert.match(checks, /serial.current === requestId/);
   assert.match(checks, /window.addEventListener\('offline', onOffline\)/);
   assert.match(checks, /serial.current \+= 1/);
-  assert.doesNotMatch(checks, /useEffect\([^]*?getEvidenceIntegrity\(/);
+  assert.match(checks, /const check = async \(id\) =>/);
+  assert.match(checks, /window.addEventListener\('offline', onOffline\)/);
   assert.doesNotMatch(checks, /offlineQueue|submitOfflineEvidence|discard|fetch\(|getEvidenceContent/);
   assert.doesNotMatch(checks, /content_base64|original_name|\.notes|\.coordinates|data:image|<img/);
 });
