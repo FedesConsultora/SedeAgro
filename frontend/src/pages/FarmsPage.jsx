@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { ChevronDown, ChevronRight, MapPin, Plus, Landmark } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
@@ -17,6 +17,7 @@ function StatusBadge({ status }) {
 
 function FarmCard({ farm, onFieldAdded, canEdit }) {
   const [expanded, setExpanded] = useState(false);
+  const regionId = useId();
   const [showFieldModal, setShowFieldModal] = useState(false);
   const [focusedFieldId, setFocusedFieldId] = useState(null);
   const fields = farm.Fields || [];
@@ -25,52 +26,36 @@ function FarmCard({ farm, onFieldAdded, canEdit }) {
   return (
     <div className="farm-card">
       {/* Farm Header */}
-      <div className="farm-card__header" onClick={() => setExpanded((v) => !v)} role="button" tabIndex={0}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget || !['Enter', ' '].includes(e.key)) return;
-          e.preventDefault();
-          setExpanded((value) => !value);
-        }}
-        aria-expanded={expanded}
-        aria-label={`Establecimiento ${farm.name}, ${expanded ? 'ocultar' : 'mostrar'} lotes`}>
-        <div className="farm-card__meta">
-          <div className="farm-card__icon"><Landmark size={22} /></div>
-          <div className="farm-card__info">
-            <strong>{farm.name}</strong>
-            <span>
-              {[farm.locality, farm.province, farm.country].filter(Boolean).join(' · ')}
-              {farm.Producer ? ` · ${farm.Producer.name}` : ''}
+      <div className="farm-card__header">
+        <button type="button" className="farm-card__toggle" aria-expanded={expanded}
+          aria-controls={regionId}
+          aria-label={`Establecimiento ${farm.name}, ${expanded ? 'ocultar' : 'mostrar'} lotes`}
+          onClick={() => setExpanded(value => !value)}>
+          <span className="farm-card__meta">
+            <span className="farm-card__icon"><Landmark size={22} aria-hidden="true" /></span>
+            <span className="farm-card__info">
+              <strong>{farm.name}</strong>
+              <span>{[farm.locality, farm.province, farm.country].filter(Boolean).join(' · ')}
+                {farm.Producer ? ` · ${farm.Producer.name}` : ''}</span>
             </span>
-          </div>
-        </div>
-
-        <div className="farm-card__stats">
-          <div className="stat">
-            <strong>{totalHa.toLocaleString('es-AR')}</strong>
-            <span>ha declaradas</span>
-          </div>
-          <div className="stat">
-            <strong>{fields.length}</strong>
-            <span>{fields.length === 1 ? 'lote' : 'lotes'}</span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {canEdit && <button
-            type="button"
-            className="ghost-action"
-            style={{ minHeight: 34, padding: '0 12px', fontSize: 12 }}
-            onClick={(e) => { e.stopPropagation(); setShowFieldModal(true); }}
-          >
-            <Plus size={14} /> Nuevo lote
-          </button>}
-          {expanded ? <ChevronDown size={18} style={{ color: '#64748b', flexShrink: 0 }} /> : <ChevronRight size={18} style={{ color: '#64748b', flexShrink: 0 }} />}
-        </div>
+          </span>
+          <span className="farm-card__stats">
+            <span className="stat"><strong>{totalHa.toLocaleString('es-AR')}</strong><span>ha declaradas</span></span>
+            <span className="stat"><strong>{fields.length}</strong><span>{fields.length === 1 ? 'lote' : 'lotes'}</span></span>
+          </span>
+          {expanded ? <ChevronDown size={18} aria-hidden="true" /> :
+            <ChevronRight size={18} aria-hidden="true" />}
+        </button>
+        {canEdit && <div className="farm-card__actions">
+          <button type="button" className="ghost-action" onClick={() => setShowFieldModal(true)}>
+            <Plus size={14} aria-hidden="true" /> Nuevo lote
+          </button>
+        </div>}
       </div>
 
       {/* Field List */}
       {expanded && (
-        <div className="farm-card__fields">
+        <div id={regionId} className="farm-card__fields">
           {fields.length === 0 ? (
             <div style={{ padding: '16px 24px', color: '#94a3b8', fontSize: 13 }}>
               Sin lotes registrados
