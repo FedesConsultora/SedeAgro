@@ -56,13 +56,13 @@ reportsRouter.get('/runs', requireCapability('reports.read'), asyncHandler(async
   res.json({ data: runs });
 }));
 
-reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSchema), asyncHandler(async (req, res) => {
-  const run = await ReportRun.create({
-    ...req.body,
-    requested_by: req.auth.user.id,
-    status: 'queued'
-  }, { transaction: req.dbTransaction });
-  res.status(202).json({ data: run });
+reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSchema), asyncHandler(async () => {
+  // No worker/storage pipeline exists yet. Returning 202 here formerly left
+  // durable "queued" records that could NEVER transition to completed.
+  // Fail closed rather than promising a report that will never arrive.
+  throw new HttpError(409,
+    'Los reportes programados todavía no están disponibles. Usá la descarga inmediata CSV, PDF o XLSX por lote.',
+    undefined, 'REPORT_WORKER_NOT_AVAILABLE');
 }));
 
 // Field report file downloads are synchronous and strictly bounded.
