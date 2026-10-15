@@ -120,6 +120,30 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.ok(!json.data.csv.includes('Bravo secret'));
     assert.match(json.data.filename, /^reporte-lote-[0-9a-f-]{36}\.csv$/);
 
+    for (const format of ['pdf', 'xlsx']) {
+      const url = base.replace('.csv', '.' + format);
+      const response = await get(url + '?from=2026-10-15&to=2026-10-15');
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(response.headers.get('cache-control'), 'private, no-store');
+      const doc = (await response.json()).data;
+      assert.deepEqual(doc.counts, { observations: 1, workOrders: 1 });
+      assert.equal(doc.period.from, '2026-10-15');
+      assert.equal(doc.period.to, '2026-10-15');
+      assert.ok(doc.filename.endsWith('.' + format));
+      const file = Buffer.from(doc.content_base64, 'base64');
+      assert.equal(file.length, doc.size_bytes);
+      assert.ok(file.length > 250 && file.length < 3 * 1024 * 1024);
+      const signature = format === 'pdf' ? Buffer.from([37,80,68,70]) : Buffer.from([80,75,3,4]);
+      assert.deepEqual(file.subarray(0,4), signature);
+      const bytesAsText = file.toString(format === 'pdf' ? 'latin1' : 'utf8');
+      assert.ok(bytesAsText.includes('HYPERLINK'));
+      assert.ok(!bytesAsText.includes('DO NOT LEAK BRAVO'));
+      assert.ok(!bytesAsText.includes('Bravo secret'));
+      assert.equal((await get(url, restricted)).status, 403);
+      assert.equal((await get(url.replace(a.fieldId, b.fieldId))).status, 404);
+      assert.equal((await get(url + '?from=2026-02-30')).status, 422);
+    }
+
     const empty = await get(base + '?from=2026-10-16&to=2026-10-16');
     assert.equal(empty.status, 200);
     assert.deepEqual((await empty.json()).data.counts, { observations: 0, workOrders: 0 });
@@ -129,6 +153,22 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.equal((await get(base, restricted)).status, 403);
     assert.equal((await get(base.replace(a.fieldId, b.fieldId))).status, 404);
 
+    // A report worker does not exist; no request may claim queued success.
+    const beforeRuns = (await owner.query(
+      'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
+    )).rows[0].count;
+    const queued = await fetch(`http://127.0.0.1:${server.address().port}/api/v1/reports/runs`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': tenantA,
+        'x-sedeagro-request': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ report_template_id: randomUUID(), filters: {} })
+    });
+    assert.equal(queued.status, 409);
+    assert.equal((await queued.json()).error.code, 'REPORT_WORKER_NOT_AVAILABLE');
+    const afterRuns = (await owner.query(
+      'SELECT count(*)::int AS count FROM report_runs WHERE tenant_id=$1', [tenantA]
+    )).rows[0].count;
+    assert.equal(afterRuns, beforeRuns, 'never persist unprocessable queued reports');
     await owner.query(`
       INSERT INTO scouting_observations
         (tenant_id,scouting_run_id,field_id,observed_by,observation_type,notes,observed_at)
@@ -150,3 +190,4 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     }
   }
 });
+

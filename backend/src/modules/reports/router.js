@@ -8,7 +8,10 @@ import {
 } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
-import { buildFieldCsv, fieldCsvPeriod, FIELD_CSV_MAX_ROWS_PER_KIND } from './fieldCsv.js';
+import { buildFieldCsv } from './fieldCsv.js';
+import { loadFieldReportSnapshot } from './fieldSnapshot.js';
+import { buildFieldPdf } from './fieldPdf.js';
+import { buildFieldXlsx } from './fieldXlsx.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const reportsRouter = Router();
@@ -53,88 +56,62 @@ reportsRouter.get('/runs', requireCapability('reports.read'), asyncHandler(async
   res.json({ data: runs });
 }));
 
-reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSchema), asyncHandler(async (req, res) => {
-  const run = await ReportRun.create({
-    ...req.body,
-    requested_by: req.auth.user.id,
-    status: 'queued'
-  }, { transaction: req.dbTransaction });
-  res.status(202).json({ data: run });
+reportsRouter.post('/runs', requireCapability('reports.write'), validate(runSchema), asyncHandler(async () => {
+  // No worker/storage pipeline exists yet. Returning 202 here formerly left
+  // durable "queued" records that could NEVER transition to completed.
+  // Fail closed rather than promising a report that will never arrive.
+  throw new HttpError(409,
+    'Los reportes programados todavía no están disponibles. Usá la descarga inmediata CSV, PDF o XLSX por lote.',
+    undefined, 'REPORT_WORKER_NOT_AVAILABLE');
 }));
 
-// 0T.5 — Real, read-only CSV snapshot. It never queues a fake PDF/XLSX job.
-// Bound each result before materializing private notes and forbid formula
-// execution. All queries participate in the HTTP tenant transaction (FORCE RLS).
-const fieldCsvQuery = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-}).strict();
+// Field report file downloads are synchronous and strictly bounded.
+async function exportFieldDocument(req, res, format) {
+  res.set('Cache-Control', 'private, no-store');
+  const snapshot = await loadFieldReportSnapshot(req);
+  // Reuse the existing 1 MiB source bound for every format.
+  buildFieldCsv(snapshot);
+  let buffer;
+  try {
+    buffer = format === 'pdf' ? buildFieldPdf(snapshot) : buildFieldXlsx(snapshot);
+  } catch (error) {
+    throw new HttpError(error.message.includes('caracteres no admitidos') ? 422 : 413,
+      error.message, undefined, 'REPORT_DOCUMENT_REJECTED');
+  }
+  const mimeType = format === 'pdf' ? 'application/pdf' :
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  res.json({ data: {
+    filename: `reporte-lote-${snapshot.field.id}.${format}`,
+    mimeType,
+    content_base64: buffer.toString('base64'),
+    size_bytes: buffer.length,
+    counts: { observations: snapshot.observations.length,
+      workOrders: snapshot.workOrders.length },
+    period: { from: snapshot.period.from, to: snapshot.period.to }
+  } });
+}
+
+reportsRouter.get('/field/:fieldId/export.pdf', requireCapability('reports.read'),
+  asyncHandler((req, res) => exportFieldDocument(req, res, 'pdf')));
+reportsRouter.get('/field/:fieldId/export.xlsx', requireCapability('reports.read'),
+  asyncHandler((req, res) => exportFieldDocument(req, res, 'xlsx')));
 
 reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'),
   asyncHandler(async (req, res) => {
     res.set('Cache-Control', 'private, no-store');
-    const parsedQuery = fieldCsvQuery.safeParse(req.query);
-    if (!parsedQuery.success) {
-      throw new HttpError(422, 'Parámetros de fecha inválidos.', parsedQuery.error.flatten());
-    }
-    if (!z.string().uuid().safeParse(req.params.fieldId).success) {
-      throw new HttpError(422, 'Identificador de lote inválido.');
-    }
-    let period;
-    try {
-      period = fieldCsvPeriod(parsedQuery.data.from, parsedQuery.data.to);
-    } catch (error) {
-      throw new HttpError(422, error.message);
-    }
-    const tx = req.dbTransaction;
-    const field = await Field.findOne({
-      where: { id: req.params.fieldId, tenant_id: req.tenantId },
-      attributes: ['id', 'name', 'area_hectares'],
-      include: [{ model: Farm, attributes: ['id', 'name'] }],
-      transaction: tx
-    });
-    if (!field) throw new HttpError(404, 'Lote no encontrado.');
-    const dateWhere = () => ({
-      ...(period.start ? { [Op.gte]: period.start } : {}),
-      ...(period.exclusiveEnd ? { [Op.lt]: period.exclusiveEnd } : {})
-    });
-    const observations = await ScoutingObservation.findAll({
-      where: {
-        tenant_id: req.tenantId, field_id: field.id,
-        ...((period.start || period.exclusiveEnd)
-          ? { observed_at: dateWhere() } : {})
-      },
-      attributes: ['id', 'observed_at', 'observation_type', 'severity', 'notes'],
-      order: [['observed_at', 'DESC'], ['id', 'DESC']],
-      limit: FIELD_CSV_MAX_ROWS_PER_KIND + 1, transaction: tx
-    });
-    const orders = await WorkOrder.findAll({
-      where: {
-        tenant_id: req.tenantId, field_id: field.id,
-        ...((period.start || period.exclusiveEnd)
-          ? { created_at: dateWhere() } : {})
-      },
-      attributes: ['id', 'created_at', 'type', 'status', 'priority', 'title'],
-      order: [['created_at', 'DESC'], ['id', 'DESC']],
-      limit: FIELD_CSV_MAX_ROWS_PER_KIND + 1, transaction: tx
-    });
-    if (observations.length > FIELD_CSV_MAX_ROWS_PER_KIND ||
-        orders.length > FIELD_CSV_MAX_ROWS_PER_KIND) {
-      throw new HttpError(413,
-        'Demasiados registros para exportar. Elegí un período más corto.',
-        undefined, 'REPORT_EXPORT_TOO_LARGE');
-    }
+    const snapshot = await loadFieldReportSnapshot(req);
     let csv;
     try {
-      csv = buildFieldCsv({ field, observations, workOrders: orders });
+      csv = buildFieldCsv(snapshot);
     } catch (error) {
       throw new HttpError(413, error.message, undefined, 'REPORT_EXPORT_TOO_LARGE');
     }
-    res.set('Cache-Control', 'private, no-store');
     res.json({ data: {
-      filename: `reporte-lote-${field.id}.csv`, mimeType: 'text/csv;charset=utf-8',
-      csv, counts: { observations: observations.length, workOrders: orders.length },
-      period: { from: period.from, to: period.to }
+      filename: `reporte-lote-${snapshot.field.id}.csv`,
+      mimeType: 'text/csv;charset=utf-8', csv,
+      counts: { observations: snapshot.observations.length,
+        workOrders: snapshot.workOrders.length },
+      period: { from: snapshot.period.from, to: snapshot.period.to }
     } });
   }));
 
