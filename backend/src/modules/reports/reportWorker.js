@@ -162,6 +162,17 @@ export async function processNextReport(tenantId) {
   }
 }
 
+// A heartbeat is necessary but not sufficient to guarantee completion:
+// clients also observe bounded leases/retries and explicit failures.
+export async function markReportWorkerPresent(tenantId) {
+  assertWorkerTenant(tenantId);
+  return withTenantTransaction(transaction => queryTenantTransaction(`
+    INSERT INTO report_worker_presence(tenant_id,last_seen_at)
+    VALUES (:tenant, now())
+    ON CONFLICT (tenant_id) DO UPDATE SET last_seen_at=now()
+  `, { transaction, replacements: { tenant: tenantId } }), tenantId);
+}
+
 export async function purgeExpiredReportFiles(tenantId) {
   assertWorkerTenant(tenantId);
   return withTenantTransaction(async transaction => {
