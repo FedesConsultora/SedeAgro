@@ -308,14 +308,16 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     await owner.query('UPDATE evidence_assets SET content_sha256 = $2 WHERE id = $1',
       [evidenceId, originalHash]);
 
-    await owner.query('UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
-      [evidenceId, Buffer.alloc(2 * 1024 * 1024 + 1, 0x11)]);
-    assert.equal((await request(integrityPath)).json.data.status, 'oversize',
-      'oversized persisted bytes must be rejected before transfer to Node');
-    await owner.query('UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
-      [evidenceId, png]);
+    // Existing DB constraint is a first defense: even the owner cannot
+    // store an oversized private blob. The pure integrity tests exercise the
+    // oversize fallback for schema drift/legacy imports independently.
+    await assert.rejects(owner.query(
+      'UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
+      [evidenceId, Buffer.alloc(2 * 1024 * 1024 + 1, 0x11)]
+    ), /evidence_blobs_content_check/,
+    'database itself must reject files over 2 MiB');
     assert.equal((await request(integrityPath)).json.data.status, 'verified',
-      'restoring original bytes must restore successful verification');
+      'failed oversized UPDATE leaves the original bytes intact');
 
     // 0S.12: verify that metadata presence and actual private byte storage
     // are distinct; no bytes, SHA or file names escape this read-only API.
