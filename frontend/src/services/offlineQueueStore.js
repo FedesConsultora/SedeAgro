@@ -194,7 +194,13 @@ export const indexedDbQueueStore = Object.freeze({
         });
         return item.id;
       }
-      return compareAndWrite(item.id, revision, store => store.put(encrypted));
+      const saved = await compareAndWrite(item.id, revision, store => store.put(encrypted));
+      if (saved) {
+        // Return the exact revision created by THIS successful commit, rather
+        // than relying on a later get() which might read another tab's re-seal.
+        observedVersions.set(item, sealedRevision(encrypted));
+      }
+      return saved;
     } catch (error) {
       describeWriteFailure(error);
     }
