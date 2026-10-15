@@ -57,7 +57,7 @@ export function buildFieldCsv({ field, observations, workOrders }) {
       item.observation_type, item.severity, '', item.notes || ''
     ]),
     ...workOrders.map(item => [
-      'orden', item.id, iso(item.due_at || item.created_at), name, farm,
+      'orden', item.id, iso(item.created_at), name, farm,
       item.type, item.status, item.priority, item.title
     ])
   ];
