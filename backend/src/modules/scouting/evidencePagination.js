@@ -22,7 +22,7 @@ function sign(body, secret) {
 // authorized tenant/run and requested page size. No user-controlled offset,
 // SQL identifiers, column names or arbitrary timestamps reach the query.
 export function encodeEvidencePageCursor(row, { tenantId, runId, limit, secret = process.env.JWT_SECRET }) {
-  const date = row?.created_at instanceof Date ? row.created_at : new Date(row?.created_at);
+  const date = row?.created_at == null ? new Date(NaN) : row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
   if (!UUID.test(row?.id ?? '') || !UUID.test(tenantId) || !UUID.test(runId) ||
       !Number.isInteger(limit) || limit < 1 || limit > MAX_EVIDENCE_PAGE_LIMIT ||
       !Number.isFinite(date.getTime())) throw new Error('No se puede crear un cursor de evidencia inválido.');
