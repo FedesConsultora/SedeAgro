@@ -12,7 +12,7 @@ const STATUS = {
   present: { title: 'Fotografía encontrada en PostgreSQL', detail: 'Metadatos e identidad del envío coinciden; bytes privados presentes.' },
   metadata_only: { title: 'Solo metadatos en PostgreSQL', detail: 'El archivo no tiene un blob privado disponible. No descartes tu copia local.' },
   mismatch: { title: 'Datos del envío no coinciden', detail: 'La clave existe, pero no coinciden los metadatos exactos. Requiere revisión.' },
-  outside_window: { title: 'Fuera de la ventana verificable', detail: 'Los 100 registros recientes no permiten confirmar esta foto. No es prueba de fallo.' },
+  outside_window: { title: 'Fuera de la ventana verificable', detail: 'La página consultada no permite confirmar esta foto. No es prueba de fallo.' },
   not_listed: { title: 'No figura en la consulta', detail: 'No es una confirmación de subida ni una prueba definitiva de que haya fallado.' }
 };
 const shortId = id => typeof id === 'string' ? id.slice(0, 8) + '…' : 'Sin ID';
@@ -186,7 +186,7 @@ export function RunEvidenceProvenance({ runId, onOpenSync }) {
           <span>Página {pageNumber} · {result.items.length} archivos en esta página</span>
           <div className="run-evidence__pagination-actions">
             <button type="button" className="ghost-action" onClick={previousPage}
-              disabled={!pageCursors.length}>Página más reciente</button>
+              disabled={!pageCursors.length}>Página anterior</button>
             <button type="button" className="ghost-action" onClick={nextPage}
               disabled={!result.hasMore || !result.nextCursor}>Archivos anteriores</button>
           </div>
