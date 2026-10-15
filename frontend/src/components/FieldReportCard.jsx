@@ -87,8 +87,10 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
         setExportError(error?.message || 'No se pudo generar el reporte.');
       }
     } finally {
-      exportLock.current = false;
-      if (scope === currentScope.current && requestApi === currentApiRef.current) setExporting(false);
+      if (scope === currentScope.current && requestApi === currentApiRef.current) {
+        exportLock.current = false;
+        setExporting(false);
+      }
     }
   };
 
