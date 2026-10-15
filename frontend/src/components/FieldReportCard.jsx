@@ -23,7 +23,20 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
   const [exportStatus, setExportStatus] = useState('');
   const currentScope = useRef(null);
   currentScope.current = dataMode === 'live' ? sessionScope(session) : null;
-  useEffect(() => () => { currentScope.current = null; }, []);
+  const currentApiRef = useRef(api);
+  currentApiRef.current = api;
+  useEffect(() => () => {
+    currentScope.current = null;
+    currentApiRef.current = null;
+  }, []);
+  // A same-user/tenant re-login still replaces the authoritative cookie.
+  // Do not deliver a previous authentication generation's completed report.
+  useEffect(() => {
+    exportLock.current = false;
+    setExporting(false);
+    setExportError('');
+    setExportStatus('');
+  }, [api]);
 
   const exportReport = async (format) => {
     if (exportLock.current || dataMode !== 'live' || !currentScope.current) return;
@@ -34,13 +47,14 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       return;
     }
     const scope = currentScope.current;
+    const requestApi = api;
     exportLock.current = true;
     setExporting(true);
     try {
       const response = format === 'csv'
         ? await api.exportFieldCsv(fieldId, { from, to })
         : await api.exportFieldDocument(fieldId, format, { from, to });
-      if (scope !== currentScope.current) return;
+      if (scope !== currentScope.current || requestApi !== currentApiRef.current) return;
       let blob, counts;
       if (format === 'csv') {
         if (typeof response?.data?.csv !== 'string' ||
@@ -55,7 +69,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       } else {
         ({ blob, counts } = decodeFieldDocument(response?.data, format));
       }
-      if (scope !== currentScope.current) return;
+      if (scope !== currentScope.current || requestApi !== currentApiRef.current) return;
       const url = URL.createObjectURL(blob);
       try {
         const link = document.createElement('a');
@@ -69,12 +83,12 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       }
       setExportStatus(`Reporte ${format.toUpperCase()} descargado: ${counts.observations} observaciones y ${counts.workOrders} órdenes.`);
     } catch (error) {
-      if (scope === currentScope.current) {
+      if (scope === currentScope.current && requestApi === currentApiRef.current) {
         setExportError(error?.message || 'No se pudo generar el reporte.');
       }
     } finally {
       exportLock.current = false;
-      if (scope === currentScope.current) setExporting(false);
+      if (scope === currentScope.current && requestApi === currentApiRef.current) setExporting(false);
     }
   };
 
