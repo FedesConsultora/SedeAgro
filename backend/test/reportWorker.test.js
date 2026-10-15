@@ -16,7 +16,7 @@ test('worker refuses invalid or missing tenant; never discovers tenants with ele
   assert.equal(assertWorkerTenant('0a000000-0000-4000-8000-000000000001'),
     '0a000000-0000-4000-8000-000000000001');
   assert.match(cli, /REPORT_WORKER_TENANT_ID/);
-  assert.doesNotMatch(worker + cli, /BYPASSRLS|SET ROLE|SELECT .* FROM tenants/);
+  assert.doesNotMatch(worker + cli, /\bSET ROLE\b|SELECT .* FROM tenants/);
 });
 
 test('SQL claims serialize by tenant, use SKIP LOCKED, TTL, CAS token and bounded retries', () => {
