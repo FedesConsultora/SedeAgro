@@ -75,6 +75,62 @@ export function scaledPhotoSize(width, height, longestSide) {
     height: Math.max(1, Math.round(height * ratio)) };
 }
 
+// Some mobile WebKit browsers do not expose createImageBitmap. HTMLImageElement
+// can still decode an object URL, then Canvas creates fresh JPEG pixels with
+// no original EXIF/GPS bytes. The URL is private, short-lived and revoked.
+export async function decodeMobilePhoto(file, {
+  createBitmap = typeof createImageBitmap === 'function' ? createImageBitmap : null,
+  ImageConstructor = typeof Image === 'function' ? Image : null,
+  objectUrls = typeof URL !== 'undefined' ? URL : null
+} = {}) {
+  if (typeof createBitmap === 'function') {
+    try {
+      const bitmap = await createBitmap(file, { imageOrientation: 'from-image' });
+      if (!bitmap?.width || !bitmap?.height) throw new Error('Imagen sin dimensiones válidas.');
+      return { image: bitmap, width: bitmap.width, height: bitmap.height,
+        close: () => bitmap.close?.(), decoder: 'bitmap' };
+    } catch {
+      // An unsupported bitmap path is not authority to keep the original
+      // bytes; the next decoder must still draw to a new JPEG canvas.
+    }
+  }
+  if (!ImageConstructor || typeof objectUrls?.createObjectURL !== 'function' ||
+      typeof objectUrls?.revokeObjectURL !== 'function') {
+    throw new Error('Este navegador no permite procesar fotos con privacidad. Probá otro navegador o guardá sin foto.');
+  }
+  const objectUrl = objectUrls.createObjectURL(file);
+  let image;
+  try {
+    image = new ImageConstructor();
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        image.onload = null;
+        image.onerror = null;
+        if (error) reject(error);
+        else resolve();
+      };
+      const timeoutId = setTimeout(() => finish(new Error('La foto tardó demasiado en abrirse. Volvé a seleccionarla.')), 15000);
+      image.onload = () => finish();
+      image.onerror = () => finish(new Error('No se pudo decodificar la foto. Probá otro archivo JPEG, PNG o WebP.'));
+      image.src = objectUrl;
+    });
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) throw new Error('La fotografía no tiene dimensiones válidas.');
+    return { image, width, height,
+      close: () => { image.src = ''; objectUrls.revokeObjectURL(objectUrl); },
+      decoder: 'image-element' };
+  } catch (error) {
+    if (image) image.src = '';
+    objectUrls.revokeObjectURL(objectUrl);
+    throw error;
+  }
+}
+
 async function toBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -103,20 +159,19 @@ export async function readOfflinePhoto(file) {
   // Privacy is fail closed: even a small original must be decoded and
   // re-encoded; copying it would retain embedded GPS/EXIF/IPTC metadata.
   if (plan.sanitize) {
-    if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') {
-      throw new Error('Este navegador no admite reducir fotos grandes. Elegí una de hasta 512 KiB.');
+    if (typeof document === 'undefined') {
+      throw new Error('Este navegador no permite preparar fotografías privadas.');
     }
-    let image;
+    let decoded;
     try {
-      image = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      if (!image?.width || !image?.height) throw new Error('No se pudo decodificar la fotografía.');
-      scaledPhotoSize(image.width, image.height, SIZES[0]);
+      decoded = await decodeMobilePhoto(file);
+      scaledPhotoSize(decoded.width, decoded.height, SIZES[0]);
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d', { alpha: false });
       if (!context) throw new Error('El navegador no permite preparar fotografías.');
       let found = false;
       for (const longestSide of SIZES) {
-        const size = scaledPhotoSize(image.width, image.height, longestSide);
+        const size = scaledPhotoSize(decoded.width, decoded.height, longestSide);
         canvas.width = size.width;
         canvas.height = size.height;
         // Assigning canvas dimensions resets the 2D state. Set smoothing and
@@ -125,7 +180,7 @@ export async function readOfflinePhoto(file) {
         context.imageSmoothingQuality = 'high';
         context.fillStyle = '#fff';
         context.fillRect(0, 0, size.width, size.height);
-        context.drawImage(image, 0, 0, size.width, size.height);
+        context.drawImage(decoded.image, 0, 0, size.width, size.height);
         for (const quality of QUALITIES) {
           const candidate = await encodeJpeg(canvas, quality);
           if (candidate.size > 0 && candidate.size <= MAX_OFFLINE_PHOTO_BYTES) {
@@ -147,7 +202,7 @@ export async function readOfflinePhoto(file) {
       }
       throw error;
     } finally {
-      image?.close?.();
+      decoded?.close?.();
     }
   }
 
