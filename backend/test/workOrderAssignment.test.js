@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor } from '../src/modules/workOrders/assignmentPolicy.js';
+import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from '../src/modules/workOrders/assignmentPolicy.js';
 
 test('operational assignments freeze as soon as the order becomes assigned', () => {
   for (const status of ['draft', 'pending_approval', 'approved']) {
@@ -31,4 +31,12 @@ test('work order routing keeps authorization, locks and tenant-scoped audit writ
   assert.match(source, /action: 'work_order\.status_changed'/);
   assert.match(source, /tenant_id: req\.tenantId/);
   assert.match(source, /transaction: req\.dbTransaction/);
+});
+
+test('audit does not accept malformed caller-controlled request IDs', () => {
+  const id = '123e4567-e89b-12d3-a456-426614174000';
+  assert.equal(safeAuditRequestId(id), id);
+  for (const raw of ['request-from-browser', '../../tenant', '', null, 42]) {
+    assert.equal(safeAuditRequestId(raw), null);
+  }
 });
