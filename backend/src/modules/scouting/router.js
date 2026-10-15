@@ -11,7 +11,9 @@ import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
-import { getPrivateEvidence, putPrivateEvidence } from './evidenceStorage.js';
+import { getPrivateEvidence, putPrivateEvidence,
+  getPrivateEvidenceByteLength, getBoundedPrivateEvidence } from './evidenceStorage.js';
+import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from './evidenceIntegrity.js';
 import { evidenceProvenanceView, RUN_EVIDENCE_LIMIT } from './evidenceProvenance.js';
 import { recordScoutingAudit } from './audit.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
@@ -321,6 +323,41 @@ scoutingRouter.post('/observations/:observationId/evidence', requireCapability('
     }
   });
   res.status(201).json({ data: evidence, replayed: false });
+}));
+
+// Explicit, one-asset-at-a-time verification. Its public response contains
+// only an enum; no digest, bytea, original name or observation details.
+scoutingRouter.get('/evidence/:id/integrity', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
+  const evidence = await EvidenceAsset.findOne({
+    where: { id: req.params.id, tenant_id: req.tenantId },
+    attributes: ['id', 'scouting_observation_id', 'content_sha256', 'size_bytes'],
+    transaction: req.dbTransaction
+  });
+  if (!evidence?.scouting_observation_id) throw new HttpError(404, 'Evidencia no encontrada.');
+  const observation = await ScoutingObservation.findOne({
+    where: { id: evidence.scouting_observation_id, tenant_id: req.tenantId },
+    attributes: ['scouting_run_id'],
+    transaction: req.dbTransaction
+  });
+  if (!observation) throw new HttpError(404, 'Evidencia no encontrada.');
+  await findRun(req, observation.scouting_run_id);
+
+  const blobLength = await getPrivateEvidenceByteLength({
+    tenantId: req.tenantId, evidenceId: evidence.id, transaction: req.dbTransaction
+  });
+  const bytes = shouldReadEvidenceBytes(
+    evidence.content_sha256, evidence.size_bytes, blobLength
+  ) ? await getBoundedPrivateEvidence({
+      tenantId: req.tenantId, evidenceId: evidence.id, transaction: req.dbTransaction
+    }) : undefined;
+  const status = classifyEvidenceIntegrity({
+    expectedHash: evidence.content_sha256,
+    declaredSize: evidence.size_bytes,
+    blobLength,
+    bytes
+  });
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ data: { id: evidence.id, status } });
 }));
 
 scoutingRouter.get('/evidence/:id/content', requireCapability('scouting.read'), asyncHandler(async (req, res) => {
