@@ -1,3 +1,5 @@
+import { sessionScope } from './offlineSyncModel.js';
+
 export const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 export class ApiError extends Error {
@@ -53,7 +55,7 @@ function normalizeNetworkError(error) {
   };
 }
 
-export function createApiClient(session, feedback) {
+export function createApiClient(session, feedback, authEpoch = 0) {
   async function request(path, options = {}) {
     feedback?.startLoading();
 
@@ -83,7 +85,9 @@ export function createApiClient(session, feedback) {
         // Auto-logout on stale session or deleted tenant
         if (!preserveSessionOnAuthError && (response.status === 401 ||
             (response.status === 404 && normalized.message.includes('Tenant no encontrado')))) {
-          window.dispatchEvent(new Event('sedeagro:session-expired'));
+          window.dispatchEvent(new CustomEvent('sedeagro:session-expired', {
+            detail: { scope: sessionScope(session), epoch: authEpoch }
+          }));
         }
 
         const apiError = new ApiError(normalized);
