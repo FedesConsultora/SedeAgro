@@ -23,7 +23,7 @@ test('server route validates assignment and capability before returning metadata
   assert.match(route, /EvidenceBlob\.findAll\(\{/);
   assert.match(route, /attributes: \['evidence_id'\]/);
   assert.match(route, /evidence_id: \{ \[Op.in\]: ids \}/);
-  assert.match(route, /limit: RUN_EVIDENCE_LIMIT \+ 1/);
+  assert.match(route, /limit: page\.limit \+ 1/);
   assert.match(route, /Cache-Control', 'private, no-store'/);
   assert.doesNotMatch(route.slice(route.indexOf("get('/runs/:id/evidence-status'"),
     route.indexOf("post('/runs/:runId/observations'")), /getPrivateEvidence\(|content_base64|storage_key|attributes: \['content'\]/);
@@ -31,9 +31,9 @@ test('server route validates assignment and capability before returning metadata
 
 test('only read-only scoped sources are touched; local data never cleared or resent', () => {
   assert.match(api, /getRunEvidenceStatus: \(id\) => request\(`\/scouting\/runs\/\$\{id\}\/evidence-status`\)/);
-  assert.match(panel, /api\.getRunEvidenceStatus\(runId\)/);
+  assert.match(panel, /api\.getRunEvidencePage\(runId, cursor\)/);
   assert.match(panel, /offlineQueue\.list\(session\)/);
-  assert.match(panel, /buildRunEvidenceProvenance\(response, rows, session, runId\)/);
+  assert.match(panel, /buildRunEvidenceProvenance\(response, rows, session, runId,/);
   assert.doesNotMatch(panel, /getEvidenceContent|submitOfflineEvidence|offlineQueue\.(discard|flush|recoverPhoto|confirmApplied|allowRetry)/);
   assert.match(panel, /contextRef\.current === key/);
   assert.match(panel, /requestSeq\.current === sequence/);
@@ -49,7 +49,7 @@ test('offline, malformed or revocation results cannot present previous confirmed
   assert.match(panel, /visibilitychange/);
   assert.match(panel, /No se puede afirmar que no existan archivos/);
   assert.match(panel, /result\.hasMore/);
-  assert.match(panel, /ningún resultado ausente se interpreta como un fallo/);
+  assert.match(panel, /no demuestra|No es prueba de fallo/i);
 });
 
 test('privacy and epistemic caveats: metadata presence never claims content integrity or local deletion', () => {

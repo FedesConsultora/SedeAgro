@@ -3,13 +3,14 @@
 // EvidenceAsset metadata alone. Presence is not a cryptographic hash check.
 export const RUN_EVIDENCE_LIMIT = 100;
 
-export function evidenceProvenanceView(rows, blobIds, runId) {
+export function evidenceProvenanceView(rows, blobIds, runId, { limit = RUN_EVIDENCE_LIMIT, nextCursor = null } = {}) {
   const present = new Set(blobIds);
   return {
     run_id: runId,
-    limit: RUN_EVIDENCE_LIMIT,
-    has_more: rows.length > RUN_EVIDENCE_LIMIT,
-    items: rows.slice(0, RUN_EVIDENCE_LIMIT).map(asset => ({
+    limit,
+    has_more: rows.length > limit,
+    next_cursor: rows.length > limit ? nextCursor : null,
+    items: rows.slice(0, limit).map(asset => ({
       id: asset.id,
       scouting_observation_id: asset.scouting_observation_id,
       uploaded_by: asset.uploaded_by,

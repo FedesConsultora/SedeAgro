@@ -6,11 +6,17 @@ const validUuid = value => typeof value === 'string' && UUID.test(value);
 const MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 const STATES = new Set(['pending', 'conflict', 'auth']);
 
-export function parseRunEvidenceStatus(response, runId) {
+export function parseRunEvidenceStatus(response, runId, { expectedLimit = null, paginated = false } = {}) {
   const data = response?.data;
-  if (!validUuid(runId) || data?.run_id !== runId || data?.limit !== 100 ||
+  if (!validUuid(runId) || data?.run_id !== runId ||
+      !Number.isInteger(data?.limit) || data.limit < 1 || data.limit > 100 ||
+      (expectedLimit !== null && data.limit !== expectedLimit) ||
       typeof data.has_more !== 'boolean' || !Array.isArray(data.items) ||
-      data.items.length > data.limit) {
+      data.items.length > data.limit ||
+      (paginated && (!Object.hasOwn(data, 'next_cursor') ||
+        (data.next_cursor !== null && (typeof data.next_cursor !== 'string' ||
+          data.next_cursor.length > 640 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(data.next_cursor))) ||
+        Boolean(data.next_cursor) !== data.has_more))) {
     throw new Error('El servidor no devolvió un estado verificable de evidencias de esta recorrida.');
   }
   const ids = new Set();
@@ -40,7 +46,7 @@ export function parseRunEvidenceStatus(response, runId) {
     };
   });
   return {
-    items, hasMore: data.has_more,
+    items, hasMore: data.has_more, nextCursor: data.next_cursor ?? null,
     photosWithBytes: items.filter(item => item.kind === 'photo' && item.bytesAvailable).length,
     missingBytes: items.filter(item => !item.bytesAvailable).length
   };
@@ -49,13 +55,13 @@ export function parseRunEvidenceStatus(response, runId) {
 // A server asset with the original upload UUID and actor is independent
 // evidence of storage. It does NOT authorize local cleanup, nor verify a SHA.
 // A missing row may simply have fallen outside the last-100 window.
-export function buildRunEvidenceProvenance(response, localRows, session, runId) {
+export function buildRunEvidenceProvenance(response, localRows, session, runId, options = {}) {
   const scope = sessionScope(session);
   if (!scope || !validUuid(runId) || !Array.isArray(localRows) ||
       localRows.length > MAX_PENDING_BATCHES) {
     throw new Error('No hay una cuenta o cola de campo verificable.');
   }
-  const server = parseRunEvidenceStatus(response, runId);
+  const server = parseRunEvidenceStatus(response, runId, options);
   const localIds = new Set();
   const matchedServer = new Set();
   const local = [];
@@ -97,7 +103,7 @@ export function buildRunEvidenceProvenance(response, localRows, session, runId) 
       id: row.id, createdAt: row.createdAt || null,
       status: candidates.length && !compatible ? 'mismatch' :
         asset ? (asset.bytesAvailable ? 'present' : 'metadata_only') :
-          server.hasMore ? 'outside_window' : 'not_listed',
+          (options.paginated || server.hasMore) ? 'outside_window' : 'not_listed',
       evidenceId: asset?.id || null
     });
   }
