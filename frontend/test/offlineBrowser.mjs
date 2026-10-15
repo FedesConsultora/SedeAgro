@@ -285,6 +285,102 @@ try {
   console.log('PASS: Chromium strips embedded location marker from small JPEG during re-encoding');
   await context.close();
 
+  // 0T.2: simulate an iPhone-like viewport and a browser where
+  // createImageBitmap is missing. This tests fallback behavior in Chromium,
+  // NOT actual iOS/WebKit hardware acceptance.
+  const mobile = await browser.newContext({
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 3,
+    isMobile: true, hasTouch: true
+  });
+  const mobilePage = await mobile.newPage();
+  await mobilePage.goto('http://127.0.0.1:4173/');
+  const mobileCapture = await mobilePage.evaluate(async () => {
+    const { readOfflinePhoto } = await import('/src/services/offlinePhoto.js');
+    const { offlineQueue } = await import('/src/services/offlineQueue.js');
+    const oldBitmap = Object.getOwnPropertyDescriptor(window, 'createImageBitmap');
+    Object.defineProperty(window, 'createImageBitmap', { configurable: true, value: undefined });
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = 128;
+    sourceCanvas.height = 64;
+    sourceCanvas.getContext('2d').fillRect(0, 0, 128, 64);
+    const blob = await new Promise(resolve => sourceCanvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!blob) throw new Error('Could not create mobile test photo');
+    const originalBytes = new Uint8Array(await blob.arrayBuffer());
+    const gps = new TextEncoder().encode('Exif\\0\\0GPSLatitude=PRIVATE-MOBILE-FALLBACK');
+    const tagged = new Uint8Array(originalBytes.length + 4 + gps.length);
+    tagged.set(originalBytes.slice(0, 2));
+    tagged[2] = 0xff; tagged[3] = 0xe1;
+    tagged[4] = (gps.length + 2) >>> 8;
+    tagged[5] = (gps.length + 2) & 255;
+    tagged.set(gps, 6);
+    tagged.set(originalBytes.slice(2), 6 + gps.length);
+    const file = new File([tagged], 'mobile-private-gps.jpg', { type: 'image/jpeg' });
+
+    let revoked = 0;
+    const originalRevoke = URL.revokeObjectURL.bind(URL);
+    URL.revokeObjectURL = (url) => { revoked += 1; originalRevoke(url); };
+    let prepared;
+    try {
+      prepared = await readOfflinePhoto(file);
+    } finally {
+      URL.revokeObjectURL = originalRevoke;
+      if (oldBitmap) Object.defineProperty(window, 'createImageBitmap', oldBitmap);
+      else delete window.createImageBitmap;
+    }
+    const decoded = atob(prepared.content_base64);
+    const session = {
+      token: 'test-only', tenant: { id: '0c000000-0000-4000-8000-000000000001' },
+      user: { id: '0c000000-0000-4000-8000-000000000002' }
+    };
+    const draft = await offlineQueue.queueObservation(
+      session, '0c000000-0000-4000-8000-000000000003',
+      { notes: 'MOBILE-PRIVATE-DRAFT', observation_type: 'weed',
+        severity: 'low', photo: prepared }
+    );
+    return {
+      id: draft.id, scope: draft.scope, clientUploadId: draft.evidence.client_upload_id,
+      photoMime: prepared.mime_type, size: prepared.size_bytes,
+      sanitized: prepared.sanitized, revoked,
+      exifLeaked: decoded.includes('Exif') || decoded.includes('PRIVATE-MOBILE-FALLBACK')
+    };
+  });
+  assert.equal(mobileCapture.photoMime, 'image/jpeg');
+  assert.equal(mobileCapture.sanitized, true);
+  assert.ok(mobileCapture.size > 0 && mobileCapture.size <= 512 * 1024);
+  assert.equal(mobileCapture.exifLeaked, false);
+  assert.equal(mobileCapture.revoked, 1);
+  console.log('PASS: simulated mobile WebKit fallback sanitized a fresh JPEG without createImageBitmap');
+  await mobilePage.reload();
+  const persistedMobile = await mobilePage.evaluate(async (id) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const draft = await indexedDbQueueStore.get(id);
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('sedeagro-offline-sync', 2);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const tx = db.transaction('pending-observations', 'readonly');
+      const request = tx.objectStore('pending-observations').get(id);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return {
+      encrypted: Boolean(raw?.sealed),
+      leaked: JSON.stringify(raw).includes('MOBILE-PRIVATE-DRAFT') ||
+        JSON.stringify(raw).includes('PRIVATE-MOBILE-FALLBACK'),
+      photo: Boolean(draft?.evidence?.content_base64),
+      clientUploadId: draft?.evidence?.client_upload_id
+    };
+  }, mobileCapture.id);
+  assert.deepEqual(persistedMobile, {
+    encrypted: true, leaked: false, photo: true,
+    clientUploadId: mobileCapture.clientUploadId
+  });
+  console.log('PASS: mobile fallback photo persisted encrypted and reopened on reload');
+  await mobile.close();
+
   // Exercise production service-worker shell under a real offline reload.
   server.kill();
   server = run(process.execPath, [

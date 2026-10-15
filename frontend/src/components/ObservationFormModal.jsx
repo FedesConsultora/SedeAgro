@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
@@ -6,6 +6,7 @@ import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
 import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { localObservationDateTime } from '../services/observationLocation.js';
+import { createMobileCaptureFence } from '../services/mobileCaptureSafety.js';
 
 const emptyObservation = () => ({
   observation_type: 'weed',
@@ -24,6 +25,17 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const [location, setLocation] = useState(null);
   const [locating, setLocating] = useState(false);
   const locationKey = `${dataMode}:${sessionScope(session) || 'anonymous'}:${runId}`;
+  const captureFence = useRef(null);
+  if (!captureFence.current) captureFence.current = createMobileCaptureFence();
+  // Render-time fence: asynchronous JPEG decoding can finish before an effect
+  // runs after a tenant/run change. Do not use a stale closure to persist.
+  captureFence.current.setScope(isOpen && dataMode === 'live' ? locationKey : null);
+  useEffect(() => {
+    // React StrictMode replays effects on mount. Restore the current valid
+    // scope after its development-only cleanup invalidates old tickets.
+    captureFence.current.setScope(isOpen && dataMode === 'live' ? locationKey : null);
+    return () => captureFence.current.invalidate();
+  }, [isOpen, dataMode, locationKey]);
   const selectedLocation = location?.key === locationKey ? location.fix : null;
   const [error, setError] = useState('');
 
@@ -67,6 +79,8 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const ticket = captureFence.current.ticket();
+    if (!captureFence.current.isCurrent(ticket)) return;
     setSaving(true);
     setError('');
     try {
@@ -78,16 +92,19 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
       // Persist before telling the user the operation was saved. Background
       // delivery runs through the idempotent batch API, even when online.
       const attachment = photo ? await readOfflinePhoto(photo) : null;
+      if (!captureFence.current.isCurrent(ticket)) return;
       const item = await offlineQueue.queueObservation(session, runId, {
         ...form,
         ...(selectedLocation ? { point: selectedLocation.point } : {}),
         ...(attachment ? { photo: attachment } : {})
       });
-      onQueued?.(item);
+      if (captureFence.current.isCurrent(ticket)) onQueued?.(item);
     } catch (err) {
-      setError(err?.message || 'Error al guardar');
+      if (captureFence.current.isCurrent(ticket)) {
+        setError(err?.message || 'Error al guardar');
+      }
     } finally {
-      setSaving(false);
+      if (captureFence.current.isCurrent(ticket)) setSaving(false);
     }
   };
 

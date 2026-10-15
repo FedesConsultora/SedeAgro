@@ -11,14 +11,38 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const requestId = useRef(0);
+  const pendingRef = useRef(false);
+  const callbacksRef = useRef({ onChange, onBusyChange });
+  callbacksRef.current = { onChange, onBusyChange };
 
-  useEffect(() => () => {
-    requestId.current += 1;
-    onBusyChange?.(false);
-  }, [onBusyChange]);
+  useEffect(() => {
+    const stopPending = () => {
+      if (!pendingRef.current) return;
+      // getCurrentPosition has no AbortController. Ignore its eventual late
+      // callback (including after mobile browser resumes from sleep).
+      requestId.current += 1;
+      pendingRef.current = false;
+      setLoading(false);
+      callbacksRef.current.onBusyChange?.(false);
+      callbacksRef.current.onChange(null);
+      setError('La consulta GPS se interrumpió al salir de la pantalla. Volvé a solicitarla si querés adjuntar ubicación.');
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') stopPending();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', stopPending);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', stopPending);
+      requestId.current += 1;
+      pendingRef.current = false;
+      callbacksRef.current.onBusyChange?.(false);
+    };
+  }, []);
 
   const requestLocation = () => {
-    if (disabled || loading) return;
+    if (disabled || pendingRef.current || document.visibilityState === 'hidden') return;
     setError('');
     onChange(null); // A failed refresh cannot silently keep stale GPS.
     if (typeof navigator === 'undefined' || !navigator.geolocation?.getCurrentPosition) {
@@ -26,6 +50,7 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
       return;
     }
     const current = ++requestId.current;
+    pendingRef.current = true;
     setLoading(true);
     onBusyChange?.(true);
     try {
@@ -38,6 +63,7 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
         } catch (err) {
           setError(fieldGpsErrorMessage(err));
         } finally {
+          pendingRef.current = false;
           setLoading(false);
           onBusyChange?.(false);
         }
@@ -45,6 +71,7 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
       err => {
         if (requestId.current !== current) return;
         setError(fieldGpsErrorMessage(err));
+        pendingRef.current = false;
         setLoading(false);
         onBusyChange?.(false);
       },
@@ -52,6 +79,7 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
       );
     } catch (err) {
       if (requestId.current === current) {
+        pendingRef.current = false;
         setError(fieldGpsErrorMessage(err));
         setLoading(false);
         onBusyChange?.(false);
