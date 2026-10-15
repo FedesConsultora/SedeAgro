@@ -5,7 +5,11 @@ const MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 
 function xmlSafe(value) {
   // XML 1.0 disallows NUL, C0 (except tab, lf, cr), surrogate fragments.
-  return String(value ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF]/g, '')
+  return Array.from(String(value ?? '')).filter(ch => {
+    const cp = ch.codePointAt(0);
+    return !((cp < 32 && cp !== 9 && cp !== 10 && cp !== 13) ||
+      (cp >= 0xd800 && cp <= 0xdfff));
+  }).join('')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
