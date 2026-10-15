@@ -7,6 +7,42 @@ const DB_VERSION = 2;
 const STORE = 'pending-observations';
 const KEY_STORE = 'draft-keys';
 const blockedMessage = 'Cerrá otras pestañas de SedeAgro y volvé a intentar.';
+// The AES-GCM IV is a fresh opaque revision of the encrypted record. It is
+// not a counter, encryption key, business ID or evidence of server delivery.
+// WeakMap ensures only THIS store's verified decrypt can authorize a mutation.
+const observedVersions = new WeakMap();
+
+function sealedRevision(raw) {
+  return isSealedRecord(raw) && Array.isArray(raw.sealed.iv) &&
+    raw.sealed.iv.length === 12 ? raw.sealed.iv.join(',') : null;
+}
+
+function checkedExpected(expected, id) {
+  const revision = expected && typeof expected === 'object'
+    ? observedVersions.get(expected) : null;
+  if (!revision || expected.id !== id ||
+      expected.scope !== id.slice(0, id.lastIndexOf(':'))) {
+    throw new Error('La revisión local no es verificable. Volvé a abrir la cola.');
+  }
+  return revision;
+}
+
+// Read+compare+write happens atomically in ONE IndexedDB transaction.
+// Encrypt the replacement BEFORE the transaction: WebCrypto is asynchronous.
+async function compareAndWrite(id, revision, update) {
+  return transact([STORE], 'readwrite', (tx, setValue) => {
+    const store = tx.objectStore(STORE);
+    const request = store.get(id);
+    request.onsuccess = () => {
+      if (sealedRevision(request.result) !== revision) {
+        setValue(false);
+        return;
+      }
+      update(store);
+      setValue(true);
+    };
+  });
+}
 
 function openQueueDb() {
   return new Promise((resolve, reject) => {
@@ -127,7 +163,11 @@ async function decryptRow(row, depth = 0) {
     return decryptRow(next, depth + 1);
   }
   const key = await getScopeKey(row.scope);
-  return openOfflineDraft(row, key);
+  const item = await openOfflineDraft(row, key);
+  const revision = sealedRevision(row);
+  if (!revision) throw new Error('El cifrado del borrador no tiene una revisión verificable.');
+  observedVersions.set(item, revision);
+  return item;
 }
 
 function describeWriteFailure(error) {
@@ -142,18 +182,32 @@ export const indexedDbQueueStore = Object.freeze({
   async get(id) {
     return decryptRow(await readRaw(id));
   },
-  async put(item) {
+  async put(item, { expected = null } = {}) {
     try {
       const key = await getScopeKey(item.scope);
+      const revision = expected ? checkedExpected(expected, item.id) : null;
       const encrypted = await sealOfflineDraft(item, key);
-      await transact([STORE], 'readwrite', (tx) => { tx.objectStore(STORE).put(encrypted); });
-      return item.id;
+      if (!expected) {
+        // UUID insertion must not overwrite an existing local record.
+        await transact([STORE], 'readwrite', tx => {
+          tx.objectStore(STORE).add(encrypted);
+        });
+        return item.id;
+      }
+      const saved = await compareAndWrite(item.id, revision, store => store.put(encrypted));
+      if (saved) {
+        // Return the exact revision created by THIS successful commit, rather
+        // than relying on a later get() which might read another tab's re-seal.
+        observedVersions.set(item, sealedRevision(encrypted));
+      }
+      return saved;
     } catch (error) {
       describeWriteFailure(error);
     }
   },
-  async delete(id) {
-    return transact([STORE], 'readwrite', (tx) => { tx.objectStore(STORE).delete(id); });
+  async delete(id, { expected } = {}) {
+    const revision = checkedExpected(expected, id);
+    return compareAndWrite(id, revision, store => store.delete(id));
   },
   async list(scope) {
     if (!scope) return [];

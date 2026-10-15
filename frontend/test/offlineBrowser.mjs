@@ -122,6 +122,53 @@ try {
   assert.equal(reopened.evidence.original_name, 'real-browser.png');
   console.log('PASS: Chromium restores encrypted draft after tab reload');
 
+  // 0S.10: use two independent real Chromium tabs sharing the same IndexedDB.
+  // The second tab's decrypted object is stale after the first tab updates,
+  // even when the encrypted row remains in the same DB and key store.
+  const otherTab = await context.newPage();
+  await otherTab.goto('http://127.0.0.1:4173/');
+  await otherTab.evaluate(async (draftId) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    window.__staleOfflineDraft = await indexedDbQueueStore.get(draftId);
+  }, id);
+  const firstWrite = await page.evaluate(async (draftId) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const read = await indexedDbQueueStore.get(draftId);
+    return indexedDbQueueStore.put({ ...read, lastError: 'updated from tab A' }, { expected: read });
+  }, id);
+  assert.equal(firstWrite, true);
+  const stale = await otherTab.evaluate(async (draftId) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const old = window.__staleOfflineDraft;
+    const lostDelete = await indexedDbQueueStore.delete(draftId, { expected: old });
+    const lostWrite = await indexedDbQueueStore.put({
+      ...old, lastError: 'stale tab B write'
+    }, { expected: old });
+    const current = await indexedDbQueueStore.get(draftId);
+    return {
+      lostDelete, lostWrite, lastError: current.lastError,
+      photoStillThere: Boolean(current.evidence?.content_base64),
+      revisionWasEncrypted: current.body.operations[0].payload.notes ===
+        'real-browser-sensitive-notes'
+    };
+  }, id);
+  assert.deepEqual(stale, {
+    lostDelete: false, lostWrite: false, lastError: 'updated from tab A',
+    photoStillThere: true, revisionWasEncrypted: true
+  });
+  const freshDelete = await otherTab.evaluate(async (draftId) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const current = await indexedDbQueueStore.get(draftId);
+    return indexedDbQueueStore.delete(draftId, { expected: current });
+  }, id);
+  assert.equal(freshDelete, true);
+  assert.equal(await page.evaluate(async (draftId) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    return indexedDbQueueStore.get(draftId);
+  }, id), undefined);
+  await otherTab.close();
+  console.log('PASS: Two Chromium tabs reject stale CAS write/delete while preserving encrypted draft');
+
   const storage = await page.evaluate(async () => {
     const { browserStorageStatus } = await import('/src/services/offlineStorageStatus.js');
     return browserStorageStatus();
