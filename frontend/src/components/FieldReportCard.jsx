@@ -35,8 +35,14 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
     setExporting(true);
     try {
       const response = await api.exportFieldCsv(fieldId, { from, to });
-      if (scope !== currentScope.current || !response?.data?.csv ||
-          response.data.mimeType !== 'text/csv;charset=utf-8') return;
+      if (scope !== currentScope.current) return;
+      if (typeof response?.data?.csv !== 'string' ||
+          !response.data.csv.startsWith('\uFEFF') ||
+          response.data.mimeType !== 'text/csv;charset=utf-8' ||
+          !Number.isSafeInteger(response.data.counts?.observations) ||
+          !Number.isSafeInteger(response.data.counts?.workOrders)) {
+        throw new Error('El servidor devolvió un reporte inválido. No se descargó ningún archivo.');
+      }
       const blob = new Blob([response.data.csv], { type: response.data.mimeType });
       const url = URL.createObjectURL(blob);
       try {
