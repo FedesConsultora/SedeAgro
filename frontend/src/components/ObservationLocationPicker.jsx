@@ -79,6 +79,7 @@ export function ObservationLocationPicker({ location, onChange, onBusyChange, di
       );
     } catch (err) {
       if (requestId.current === current) {
+        pendingRef.current = false;
         setError(fieldGpsErrorMessage(err));
         setLoading(false);
         onBusyChange?.(false);
