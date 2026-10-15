@@ -6,6 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "worker:reports": "node src/workers/reportWorkerCli.js",
     "dev": "nodemon --watch src --watch db src/server.js",
     "migrate": "node src/infra/db/migrate.js up",
     "migrate:down": "node src/infra/db/migrate.js down",
