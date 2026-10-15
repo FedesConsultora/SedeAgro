@@ -34,13 +34,16 @@ export function availableWorkOrderTransitions(order, roleCode, userId, live = fa
   if (!live || !order || !userId || !Object.hasOwn(EDGES, order.status)) return [];
   const edges = EDGES[order.status];
   if (roleCode === 'tenant_admin' || roleCode === 'agronomic_coordinator') {
-    // The backend requires an assignee before approving the assigned state.
-    return edges.filter(status => status !== 'assigned' ||
-      (Array.isArray(order.WorkOrderAssignees) && order.WorkOrderAssignees.length > 0));
+    // No optimistic completion: the server must return a separately reviewed
+    // execution report for this exact order before the UI offers closure.
+    return edges.filter(status => {
+      if (status === 'assigned') return Array.isArray(order.WorkOrderAssignees) && order.WorkOrderAssignees.length > 0;
+      if (status === 'completed') return Array.isArray(order.WorkOrderExecutions) &&
+        order.WorkOrderExecutions.some(report => report.review_status === 'verified');
+      return true;
+    });
   }
   if (roleCode !== 'contractor' || !Array.isArray(order.WorkOrderAssignees) ||
       !order.WorkOrderAssignees.some(item => item.user_id === userId)) return [];
-  return edges.filter(status =>
-    (order.status === 'assigned' && status === 'in_progress') ||
-    (order.status === 'in_progress' && status === 'completed'));
+  return edges.filter(status => order.status === 'assigned' && status === 'in_progress');
 }
