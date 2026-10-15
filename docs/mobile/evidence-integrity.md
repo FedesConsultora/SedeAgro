@@ -29,7 +29,7 @@ El resultado `verified` indica integridad **respecto al hash almacenado**, no au
 ## Pruebas
 
 - **Puras:** `backend/test/evidenceIntegrity.test.js` para hash correcto, corrupción mismo tamaño, tamaño distinto, legacy sin hash y límite 2 MiB; `frontend/test/evidenceIntegrityPresentation.test.js` para rechazar respuestas inválidas.
-- **PostgreSQL/PostGIS real:** en `backend/test/scoutingWorkflow.pg.mjs` comprueba subida real, reenvío idempotente, corrupción del bytea, alteración de metadatos, eliminación/restitución del hash, blob ausente, blob superior a 2 MiB y permisos cruzados con dos operadores/tenants. Todas las mutaciones de prueba ocurren en la **base descartable CI**, restauradas antes de salir del escenario.
+- **PostgreSQL/PostGIS real:** en `backend/test/scoutingWorkflow.pg.mjs` comprueba subida real, reenvío idempotente, corrupción del bytea, alteración de metadatos, eliminación/restitución del hash, blob ausente, **rechazo SQL de un UPDATE que intenta superar 2 MiB** y permisos cruzados con dos operadores/tenants. Todas las mutaciones de prueba ocurren en la **base descartable CI**, restauradas antes de salir del escenario.
 - **UI/contrato:** `frontend/test/evidenceIntegrityUI.test.js` comprueba el endpoint protegido, la lectura SQL acotada, ausencia de bytes en respuesta, acción individual, invalidación de sesión y prohibición de mutar la cola.
 - Gates: frontend, backend, build React, PostGIS RLS y Chromium offline **sobre el HEAD exacto** de la PR antes de merge.
 
