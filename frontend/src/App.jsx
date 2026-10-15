@@ -133,10 +133,23 @@ function Shell() {
 }
 
 export function App() {
-  const { isAuthenticated, restoring } = useSession();
+  const { isAuthenticated, restoring, sessionCheckError, retrySessionCheck } = useSession();
   const [authView, setAuthView] = useState('login');
 
   if (restoring) return <div role="status" className="auth-shell">Restaurando sesión segura…</div>;
+
+  if (sessionCheckError) return (
+    <div className="auth-shell" role="alert">
+      <div className="auth-card">
+        <h1>No se pudo verificar tu sesión</h1>
+        <p>La conexión o el servidor no permiten confirmar tu identidad. No se muestran
+          datos privados hasta recuperar una sesión autorizada.</p>
+        <button type="button" className="primary-action" onClick={retrySessionCheck}>
+          Reintentar verificación
+        </button>
+      </div>
+    </div>
+  );
 
   if (!isAuthenticated) {
     return authView === 'login'
