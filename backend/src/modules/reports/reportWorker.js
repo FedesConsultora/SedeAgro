@@ -2,7 +2,8 @@
 // Every invocation has ONE explicitly configured tenant, never cross-tenant discovery.
 import { createHash, randomUUID } from 'node:crypto';
 import { QueryTypes } from 'sequelize';
-import { sequelize, withTenantTransaction } from '../../core/db.js';
+import { withTenantTransaction } from '../../core/db.js';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import { loadFieldReportSnapshot } from './fieldSnapshot.js';
 import { buildFieldCsv } from './fieldCsv.js';
 import { buildFieldPdf } from './fieldPdf.js';
@@ -27,23 +28,23 @@ export function assertWorkerTenant(tenantId) {
 export async function claimNextReport(tenantId) {
   assertWorkerTenant(tenantId);
   return withTenantTransaction(async transaction => {
-    const [lock] = await sequelize.query(
-      'SELECT pg_try_advisory_xact_lock(hashtext(:tenant)) AS acquired',
+    const [lock] = await queryTenantTransaction(
+      'SELECT pg_try_advisory_xact_lock(hashtext(:tenant)) AS acquired, :tenant AS tenant_id',
       { replacements: { tenant: tenantId }, transaction, type: QueryTypes.SELECT }
     );
     if (!lock?.acquired) return null;
-    await sequelize.query(`
+    await queryTenantTransaction(`
       UPDATE report_runs SET status='failed', error_code='RETRY_EXHAUSTED',
         lease_token=NULL, lease_expires_at=NULL, updated_at=now()
       WHERE tenant_id=:tenant AND status='running'
         AND lease_expires_at<=now() AND attempt_count>=3
     `, { replacements: { tenant: tenantId }, transaction });
-    const [busy] = await sequelize.query(`
+    const [busy] = await queryTenantTransaction(`
       SELECT count(*)::integer AS active FROM report_runs
       WHERE tenant_id=:tenant AND status='running' AND lease_expires_at>now()
     `, { replacements: { tenant: tenantId }, transaction, type: QueryTypes.SELECT });
     if (busy.active >= 2) return null;
-    const [run] = await sequelize.query(`
+    const [run] = await queryTenantTransaction(`
       WITH candidate AS (
         SELECT id FROM report_runs
         WHERE tenant_id=:tenant AND attempt_count<3
@@ -75,7 +76,7 @@ export function classifyReportFailure(error) {
 
 async function renderClaimedReport(run, tenantId) {
   return withTenantTransaction(async tx => {
-    const [authority] = await sequelize.query(`
+    const [authority] = await queryTenantTransaction(`
       SELECT t.format, t.scope, t.is_active, t.tenant_id,
         m.role_code, tm.is_enabled
       FROM report_templates t
@@ -118,7 +119,7 @@ export async function processNextReport(tenantId) {
     const completed = await withTenantTransaction(async tx => {
       // Atomic update plus immutable bytes. If the request was cancelled or a
       // stalled lease was reclaimed, stale workers may NOT resurrect results.
-      const [updated] = await sequelize.query(`
+      const [updated] = await queryTenantTransaction(`
         UPDATE report_runs SET status='completed', lease_token=NULL,
           lease_expires_at=NULL, generated_at=now(), error_code=NULL,
           updated_at=now(), storage_key=NULL
@@ -128,7 +129,7 @@ export async function processNextReport(tenantId) {
       `, { transaction: tx, type: QueryTypes.SELECT,
         replacements: { tenant: tenantId, run: claim.id, token: claim.lease_token } });
       if (!updated) return false;
-      await sequelize.query(`
+      await queryTenantTransaction(`
         INSERT INTO report_run_files
           (run_id, tenant_id, format, mime_type, content, sha256, expires_at)
         VALUES (:run, :tenant, :format, :mime, decode(:content,'base64'), :hash,
@@ -143,7 +144,7 @@ export async function processNextReport(tenantId) {
     const code = classifyReportFailure(error);
     const state = await withTenantTransaction(async tx => {
       const retryable = code === 'PROCESSING_FAILED' && claim.attempt_count < 3;
-      const [updated] = await sequelize.query(`
+      const [updated] = await queryTenantTransaction(`
         UPDATE report_runs SET status=:state, error_code=:code,
           lease_token=NULL, lease_expires_at=NULL,
           next_attempt_at=CASE WHEN :retry THEN now()+interval '15 seconds' ELSE NULL END,
@@ -164,7 +165,7 @@ export async function processNextReport(tenantId) {
 export async function purgeExpiredReportFiles(tenantId) {
   assertWorkerTenant(tenantId);
   return withTenantTransaction(async transaction => {
-    const [, metadata] = await sequelize.query(`
+    const [, metadata] = await queryTenantTransaction(`
       DELETE FROM report_run_files WHERE tenant_id=:tenant AND expires_at<=now()
     `, { transaction, replacements: { tenant: tenantId } });
     return metadata?.rowCount ?? 0;
