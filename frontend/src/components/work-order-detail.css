@@ -45,3 +45,14 @@
 @media (max-width: 600px) {
   .order-detail__execution-actions button, .order-detail__execution-form .primary-action { width: 100%; }
 }
+
+.order-detail__evidence { border-top: 1px solid #e4ece7; padding-top: 14px; }
+.order-detail__evidence > p { line-height: 1.55; }
+.order-detail__attachment { display: grid; gap: 8px; padding: 10px 0; border-bottom: 1px solid #e4ece7; overflow-wrap: anywhere; }
+.order-detail__attachment:last-child { border-bottom: none; }
+.order-detail__attachment span { overflow-wrap: anywhere; }
+.order-detail__evidence a.ghost-action { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; }
+@media (max-width: 600px) {
+  .order-detail__attachment .order-detail__execution-actions > button { width: 100%; }
+  .order-detail__evidence a.ghost-action { width: 100%; }
+}
