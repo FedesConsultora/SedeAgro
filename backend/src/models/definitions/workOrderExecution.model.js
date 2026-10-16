@@ -14,6 +14,7 @@ export function defineWorkOrderExecution(sequelize, DataTypes) {
     reviewed_by: DataTypes.UUID,
     reviewed_at: DataTypes.DATE,
     review_note: DataTypes.STRING(500),
-    review_checklist: DataTypes.JSONB
+    review_checklist: DataTypes.JSONB,
+    input_declaration: DataTypes.JSONB
   }, { tableName: 'work_order_executions' });
 }
