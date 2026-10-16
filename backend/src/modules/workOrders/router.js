@@ -505,6 +505,13 @@ workOrdersRouter.post('/:id/executions/:executionId/exceptions', requireCapabili
     });
     if (!catalog) throw new HttpError(422, 'El insumo no pertenece al catálogo de esta empresa.',
       undefined, 'EXECUTION_EXCEPTION_INPUT_INVALID');
+    const sameCatalogItem = await WorkOrderExecutionException.findOne({
+      where: { tenant_id: req.tenantId, work_order_execution_id: report.id, input_id: catalog.id },
+      attributes: ['id'], transaction: req.dbTransaction
+    });
+    if (sameCatalogItem) throw new HttpError(409,
+      'El insumo no previsto ya fue informado en este parte.',
+      undefined, 'EXECUTION_EXCEPTION_DUPLICATE_INPUT');
     const count = await WorkOrderExecutionException.count({
       where: { tenant_id: req.tenantId, work_order_execution_id: report.id },
       transaction: req.dbTransaction
