@@ -546,8 +546,8 @@ workOrdersRouter.post('/:id/executions/:executionId/exceptions', requireCapabili
     res.status(created ? 201 : 200).json({ data: publicException(exception), replayed: !created });
   }));
 
-workOrdersRouter.post('/:id/executions/:executionId/exceptions/:exceptionId/review',
-  requireCapability('orders.write'), validate(unplannedReviewSchema), asyncHandler(async (req, res) => {
+workOrdersRouter.post('/:id/executions/:executionId/exceptions/:exceptionId/review', requireCapability('orders.write'),
+  validate(unplannedReviewSchema), asyncHandler(async (req, res) => {
     const order = await readableWorkOrder(req, req.params.id, true);
     if (order.status !== 'in_progress') {
       throw new HttpError(409, 'La orden ya no admite revisiones.',
