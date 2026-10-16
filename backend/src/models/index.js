@@ -30,6 +30,7 @@ import { defineEvidenceBlob } from './definitions/evidenceBlob.model.js';
 import { defineWorkOrder } from './definitions/workOrder.model.js';
 import { defineWorkOrderAssignee } from './definitions/workOrderAssignee.model.js';
 import { defineWorkOrderExecution } from './definitions/workOrderExecution.model.js';
+import { defineWorkOrderExecutionException } from './definitions/workOrderExecutionException.model.js';
 import { defineRainfallEvent } from './definitions/rainfallEvent.model.js';
 import { defineIrrigationEvent } from './definitions/irrigationEvent.model.js';
 import { defineAuditEvent } from './definitions/auditEvent.model.js';
@@ -75,6 +76,7 @@ export const EvidenceBlob = defineEvidenceBlob(sequelize, DataTypes);
 export const WorkOrder = defineWorkOrder(sequelize, DataTypes);
 export const WorkOrderAssignee = defineWorkOrderAssignee(sequelize, DataTypes);
 export const WorkOrderExecution = defineWorkOrderExecution(sequelize, DataTypes);
+export const WorkOrderExecutionException = defineWorkOrderExecutionException(sequelize, DataTypes);
 export const RainfallEvent = defineRainfallEvent(sequelize, DataTypes);
 export const IrrigationEvent = defineIrrigationEvent(sequelize, DataTypes);
 export const AuditEvent = defineAuditEvent(sequelize, DataTypes);
@@ -121,6 +123,7 @@ export const models = {
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderExecution,
+  WorkOrderExecutionException,
   RainfallEvent,
   IrrigationEvent,
   AuditEvent,
