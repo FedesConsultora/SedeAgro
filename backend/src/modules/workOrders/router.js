@@ -1,9 +1,11 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { Op } from 'sequelize';
 import {
   AgriculturalInput,
   AuditEvent,
+  EvidenceAsset,
   CampaignField,
   Field,
   Machinery,
@@ -23,6 +25,10 @@ import { canSubmitExecution, canReviewExecution, canCloseReviewedOrder, validExe
 import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { ORDER_RECIPIENT_ROLES } from '../notifications/assignmentNotificationPolicy.js';
+import { decodeEvidenceContent, safeEvidenceFileName } from '../scouting/evidenceContent.js';
+import { putPrivateEvidence, getPrivateEvidenceByteLength, getBoundedPrivateEvidence } from '../scouting/evidenceStorage.js';
+import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from '../scouting/evidenceIntegrity.js';
+import { canAttachExecutionEvidence, sameExecutionUpload, visibleExecutionEvidence, EXECUTION_EVIDENCE_LIMIT, ORDER_EVIDENCE_LIMIT } from './executionEvidencePolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -84,6 +90,36 @@ const executionReviewSchema = z.object({
       message: 'La revisión positiva no admite un motivo de rechazo.' });
   }
 });
+
+// Use the same MIME signatures and 2 MiB ceiling as private scouting files.
+const executionEvidenceSchema = z.object({
+  kind: z.enum(['photo', 'document']),
+  mime_type: z.enum(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
+  original_name: z.string().min(1).max(180),
+  client_upload_id: z.string().uuid(),
+  content_base64: z.string().min(1).max(2796204)
+}).strict();
+
+async function readableWorkOrder(req, id, lock = false) {
+  const order = await WorkOrder.findByPk(id, {
+    transaction: req.dbTransaction,
+    ...(lock ? { lock: req.dbTransaction.LOCK.UPDATE } : {})
+  });
+  if (!order || (req.auth.role.code === 'contractor' && !(await contractorAssignedToOrder(req, id)))) {
+    throw new HttpError(404, 'Orden de trabajo no encontrada.', undefined, 'WORK_ORDER_NOT_FOUND');
+  }
+  return order;
+}
+
+async function privateExecutionAsset(req, orderId, assetId) {
+  const asset = await EvidenceAsset.findOne({
+    where: { tenant_id: req.tenantId, work_order_id: orderId, id: assetId,
+      work_order_execution_id: { [Op.ne]: null } },
+    transaction: req.dbTransaction
+  });
+  if (!asset) throw new HttpError(404, 'Adjunto de ejecución no encontrado.', undefined, 'ORDER_EVIDENCE_NOT_FOUND');
+  return asset;
+}
 
 async function contractorAssignedToOrder(req, orderId) {
   return Boolean(await WorkOrderAssignee.findOne({
@@ -325,6 +361,138 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
   }, { transaction: req.dbTransaction });
   res.json({ data: report });
 }));
+
+// A single bounded metadata read avoids one request per report, and never
+// returns BYTEA, digest, location, raw storage keys, or unrelated scouting assets.
+workOrdersRouter.get('/:id/execution-evidence', requireCapability('orders.read'), asyncHandler(async (req, res) => {
+  const order = await readableWorkOrder(req, req.params.id);
+  const assets = await EvidenceAsset.findAll({
+    where: { tenant_id: req.tenantId, work_order_id: order.id,
+      work_order_execution_id: { [Op.ne]: null } },
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: ORDER_EVIDENCE_LIMIT,
+    transaction: req.dbTransaction
+  });
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ data: assets.map(visibleExecutionEvidence) });
+}));
+
+workOrdersRouter.post('/:id/executions/:executionId/evidence', requireCapability('orders.execute'),
+  validate(executionEvidenceSchema), asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id, true);
+    const report = await WorkOrderExecution.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
+      transaction: req.dbTransaction
+    });
+    if (!report) throw new HttpError(404, 'Parte de ejecución no encontrado.', undefined, 'EXECUTION_NOT_FOUND');
+    // Both the original author and the tenant membership must still be active.
+    if (report.submitted_by !== req.auth.user.id) {
+      throw new HttpError(403, 'Solo quien presentó el parte puede adjuntar sus respaldos.',
+        undefined, 'ORDER_EVIDENCE_AUTHOR_REQUIRED');
+    }
+    const bytes = decodeEvidenceContent(req.body);
+    const originalName = safeEvidenceFileName(req.body.original_name);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const where = { tenant_id: req.tenantId, uploaded_by: req.auth.user.id,
+      client_upload_id: req.body.client_upload_id };
+    // Preserve exact replay after a successful upload even if the report was
+    // reviewed or the order closed. Never let UUID reuse attach different bytes.
+    const previous = await EvidenceAsset.findOne({ where, transaction: req.dbTransaction });
+    const identity = { orderId: order.id, executionId: report.id, digest,
+      kind: req.body.kind, mimeType: req.body.mime_type, originalName };
+    if (previous) {
+      if (!sameExecutionUpload(previous, identity)) {
+        throw new HttpError(409, 'La clave de carga ya se utilizó con otro archivo.',
+          undefined, 'ORDER_EVIDENCE_UPLOAD_CONFLICT');
+      }
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ data: visibleExecutionEvidence(previous), replayed: true });
+      return;
+    }
+    const count = await EvidenceAsset.count({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, work_order_execution_id: report.id },
+      transaction: req.dbTransaction
+    });
+    if (!canAttachExecutionEvidence({ orderStatus: order.status,
+      reviewStatus: report.review_status, uploaderId: req.auth.user.id,
+      submitterId: report.submitted_by, count })) {
+      throw new HttpError(409, 'El parte debe estar pendiente de revisión y admitir nuevos adjuntos.',
+        undefined, 'ORDER_EVIDENCE_UPLOAD_CLOSED');
+    }
+    const id = randomUUID();
+    const attrs = { id, tenant_id: req.tenantId, work_order_id: order.id,
+      work_order_execution_id: report.id, uploaded_by: req.auth.user.id,
+      client_upload_id: req.body.client_upload_id, content_sha256: digest,
+      storage_key: `db:${id}`, original_name: originalName,
+      kind: req.body.kind, mime_type: req.body.mime_type, size_bytes: bytes.length };
+    // Savepoint handles concurrent/retried IDs without leaking duplicate blobs.
+    const [asset, created] = await EvidenceAsset.findOrCreate({
+      where, defaults: attrs, transaction: req.dbTransaction
+    });
+    if (!created) {
+      if (!sameExecutionUpload(asset, identity)) {
+        throw new HttpError(409, 'La clave de carga ya se utilizó con otro archivo.',
+          undefined, 'ORDER_EVIDENCE_UPLOAD_CONFLICT');
+      }
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ data: visibleExecutionEvidence(asset), replayed: true });
+      return;
+    }
+    await putPrivateEvidence({ tenantId: req.tenantId, evidenceId: asset.id,
+      bytes, transaction: req.dbTransaction });
+    await AuditEvent.create({
+      tenant_id: req.tenantId, actor_id: req.auth.user.id,
+      action: 'work_order.execution_evidence_uploaded', entity_type: 'work_order',
+      entity_id: order.id,
+      after: { execution_id: report.id, evidence_id: asset.id,
+        kind: asset.kind, size_bytes: asset.size_bytes },
+      request_id: safeAuditRequestId(req.requestId)
+    }, { transaction: req.dbTransaction });
+    res.set('Cache-Control', 'private, no-store');
+    res.status(201).json({ data: visibleExecutionEvidence(asset), replayed: false });
+  }));
+
+workOrdersRouter.get('/:id/evidence/:evidenceId/integrity', requireCapability('orders.read'),
+  asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id);
+    const asset = await privateExecutionAsset(req, order.id, req.params.evidenceId);
+    const length = await getPrivateEvidenceByteLength({ tenantId: req.tenantId,
+      evidenceId: asset.id, transaction: req.dbTransaction });
+    const bytes = shouldReadEvidenceBytes(asset.content_sha256, asset.size_bytes, length)
+      ? await getBoundedPrivateEvidence({ tenantId: req.tenantId,
+        evidenceId: asset.id, transaction: req.dbTransaction })
+      : undefined;
+    const status = classifyEvidenceIntegrity({
+      expectedHash: asset.content_sha256, declaredSize: asset.size_bytes,
+      blobLength: length, bytes
+    });
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: { id: asset.id, status } });
+  }));
+
+workOrdersRouter.get('/:id/evidence/:evidenceId/content', requireCapability('orders.read'),
+  asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id);
+    const asset = await privateExecutionAsset(req, order.id, req.params.evidenceId);
+    const length = await getPrivateEvidenceByteLength({ tenantId: req.tenantId,
+      evidenceId: asset.id, transaction: req.dbTransaction });
+    if (length === null) throw new HttpError(404, 'El archivo privado no está disponible.',
+      undefined, 'ORDER_EVIDENCE_BYTES_MISSING');
+    const bytes = shouldReadEvidenceBytes(asset.content_sha256, asset.size_bytes, length)
+      ? await getBoundedPrivateEvidence({ tenantId: req.tenantId,
+        evidenceId: asset.id, transaction: req.dbTransaction })
+      : undefined;
+    if (classifyEvidenceIntegrity({ expectedHash: asset.content_sha256,
+      declaredSize: asset.size_bytes, blobLength: length, bytes }) !== 'verified') {
+      throw new HttpError(409, 'Falló la comprobación de integridad del archivo.',
+        undefined, 'ORDER_EVIDENCE_INTEGRITY_FAILED');
+    }
+    res.set('Cache-Control', 'private, no-store');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.json({ data: { id: asset.id, original_name: asset.original_name,
+      mime_type: asset.mime_type, size_bytes: asset.size_bytes,
+      content_base64: bytes.toString('base64') } });
+  }));
 
 workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), validate(assigneeSchema), asyncHandler(async (req, res) => {
   // Serialize concurrent assignments for one order before checking membership

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
+import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import {
   executionReports, canDeclareExecution, canReviewExecutionReport,
   toExecutionTimestamp, validatedExecutionResponse
@@ -140,6 +141,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         </div>
       </div>}
     </article>)}
+    <WorkOrderExecutionEvidence order={order} reports={reports} onChanged={onChanged} />
     {reports.some(item => item.review_status === 'verified') &&
       <p role="status" className="order-detail__notice">
         Existe un parte revisado; la coordinación puede completar administrativamente la orden.
