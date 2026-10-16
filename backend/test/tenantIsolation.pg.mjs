@@ -16,7 +16,7 @@ const { Client } = pg;
 const requiredScopedTables = [
   'producers', 'farms', 'fields', 'campaigns', 'campaign_fields',
   'scouting_runs', 'scouting_observations', 'work_orders', 'work_order_executions',
-  'work_order_assignees', 'evidence_assets', 'rainfall_events',
+  'work_order_assignees', 'work_order_execution_exceptions', 'evidence_assets', 'rainfall_events',
   'irrigation_events', 'audit_events', 'teams', 'team_members',
   'machinery', 'agricultural_inputs', 'work_order_inputs',
   'work_order_machinery', 'satellite_layers', 'report_templates',

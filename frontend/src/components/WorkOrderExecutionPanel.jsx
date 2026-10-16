@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
+import { WorkOrderExecutionExceptions } from './WorkOrderExecutionExceptions.jsx';
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
@@ -196,6 +197,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       </div>}
     </article>)}
     <WorkOrderExecutionEvidence order={order} reports={reports} onChanged={onChanged} />
+    <WorkOrderExecutionExceptions order={order} reports={reports} onChanged={onChanged} />
     {reports.some(item => item.review_status === 'verified') &&
       <p role="status" className="order-detail__notice">
         Existe un parte revisado; la coordinación puede completar administrativamente la orden.
