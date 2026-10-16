@@ -56,3 +56,15 @@
   .order-detail__attachment .order-detail__execution-actions > button { width: 100%; }
   .order-detail__evidence a.ghost-action { width: 100%; }
 }
+
+/* 0T.12 — reported, never inventory-confirmed, input quantities */
+.order-detail__input-declaration { display: grid; gap: 10px; border-top: 1px solid #e4ece7; padding: 12px 0; }
+.order-detail__input-declaration h4 { margin: 0; font-size: 0.95rem; }
+.order-detail__input-declaration p { line-height: 1.5; margin: 0; }
+.order-detail__input-items { display: grid; gap: 8px; }
+.order-detail__input-line { display: grid; gap: 4px; padding: 10px; border: 1px solid #e4ece7; border-radius: 8px; overflow-wrap: anywhere; }
+.order-detail__input-line span { font-size: 0.85rem; }
+.order-detail__input-declaration input { width: 100%; min-height: 44px; }
+@media (max-width: 600px) {
+  .order-detail__input-declaration .primary-action { width: 100%; }
+}
