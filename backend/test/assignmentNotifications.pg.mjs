@@ -430,10 +430,13 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_submitted'",
       [tenantA, orderId]), 1);
     const reviewRoute = `${executionRoute}/${firstReportId}/review`;
+    const checkedReviewNoFiles = { time_checked: true, area_checked: true,
+      result_checked: true, operation_checked: true, evidence_basis: 'no_files' };
+    const checkedReviewWithFiles = { ...checkedReviewNoFiles, evidence_basis: 'reviewed_files' };
     assert.equal((await request(reviewRoute, contractorToken, tenantA,
-      'POST', { decision: 'verified' })).status, 403);
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles })).status, 403);
     assert.equal((await request(reviewRoute, adminBToken, tenantB,
-      'POST', { decision: 'verified' })).status, 404);
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles })).status, 404);
     assert.equal((await request(reviewRoute, adminToken, tenantA,
       'POST', { decision: 'rejected' })).status, 422);
     const rejected = await request(reviewRoute, adminToken, tenantA,
@@ -441,17 +444,27 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
     assert.equal(rejected.body.data.review_status, 'rejected');
     assert.equal((await request(reviewRoute, adminToken, tenantA,
-      'POST', { decision: 'verified' })).status, 409);
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles })).status, 409);
 
     const corrected = await request(executionRoute, contractor2Token, tenantA,
       'POST', { ...executionPayload, worked_area_hectares: 2.5,
         result_summary: 'Inspección corregida luego de revisar la superficie.' });
     assert.equal(corrected.status, 201, JSON.stringify(corrected.body));
     const correctedId = corrected.body.data.id;
-    const verified = await request(`${executionRoute}/${correctedId}/review`,
-      adminToken, tenantA, 'POST', { decision: 'verified' });
+    const correctedReviewUrl = `${executionRoute}/${correctedId}/review`;
+    assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
+      { decision: 'verified' })).status, 422,
+    'No positive verification without an explicit reviewer checklist');
+    assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
+      { decision: 'verified', checklist: { ...checkedReviewNoFiles, area_checked: false } })).status, 422);
+    assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewWithFiles })).status, 409,
+    'Cannot say files were reviewed if the report has none');
+    const verified = await request(correctedReviewUrl,
+      adminToken, tenantA, 'POST', { decision: 'verified', checklist: checkedReviewNoFiles });
     assert.equal(verified.status, 200, JSON.stringify(verified.body));
     assert.equal(verified.body.data.review_status, 'verified');
+    assert.deepEqual(verified.body.data.review_checklist, checkedReviewNoFiles);
     const history = await request(`/work-orders/${orderId}`, adminToken, tenantA);
     assert.equal(history.status, 200);
     assert.equal(history.body.data.WorkOrderExecutions.length, 2);
@@ -504,9 +517,64 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(selfReport.status, 201, JSON.stringify(selfReport.body));
     const selfReviewPath = `/work-orders/${selfOrderId}/executions/${selfReport.body.data.id}/review`;
     assert.equal((await request(selfReviewPath, adminToken, tenantA, 'POST',
-      { decision: 'verified' })).status, 403);
+      { decision: 'verified', checklist: checkedReviewNoFiles })).status, 403);
     assert.equal((await request(selfReviewPath, coordinatorToken, tenantA, 'POST',
-      { decision: 'verified' })).status, 200);
+      { decision: 'verified', checklist: checkedReviewNoFiles })).status, 200);
+
+    // 0T.11: an application requires an authentic bounded private file, not
+    // merely a human checkbox. Corruption must block approval before completion.
+    const treatment = await request('/work-orders', adminToken, tenantA, 'POST',
+      { field_id: fieldA, type: 'application', title: 'Application proof-gate fixture' });
+    assert.equal(treatment.status, 201);
+    const applicationId = treatment.body.data.id;
+    assert.equal((await request(`/work-orders/${applicationId}/assignees`, adminToken, tenantA,
+      'POST', { user_id: contractor2 })).status, 201);
+    for (const status of ['pending_approval', 'approved', 'assigned', 'in_progress']) {
+      const moved = await request(`/work-orders/${applicationId}/status`,
+        adminToken, tenantA, 'PATCH', { status });
+      assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    }
+    const applicationDetail = await request(`/work-orders/${applicationId}`, adminToken, tenantA);
+    const applicationStart = new Date(new Date(applicationDetail.body.data.approved_at).getTime() + 50);
+    const applicationReport = await request(`/work-orders/${applicationId}/executions`,
+      contractor2Token, tenantA, 'POST', {
+        ...executionPayload, started_at: applicationStart.toISOString(),
+        finished_at: new Date(applicationStart.getTime() + 50).toISOString(),
+        result_summary: 'Aplicación declarada; sin telemetría automática.'
+      });
+    assert.equal(applicationReport.status, 201, JSON.stringify(applicationReport.body));
+    const appReportId = applicationReport.body.data.id;
+    const applicationReview = `/work-orders/${applicationId}/executions/${appReportId}/review`;
+    const applicationEvidence = `/work-orders/${applicationId}/executions/${appReportId}/evidence`;
+    assert.equal((await request(applicationReview, adminToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewNoFiles })).status, 409,
+      'Application cannot be approved by acknowledging missing evidence');
+    assert.equal((await request(applicationReview, adminToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewWithFiles })).status, 409,
+      'A fake reviewer checkbox does not replace a stored private blob');
+    const appStored = await request(applicationEvidence, contractor2Token, tenantA,
+      'POST', { ...filePayload, client_upload_id: randomUUID(), original_name: 'tratamiento.pdf' });
+    assert.equal(appStored.status, 201, JSON.stringify(appStored.body));
+    const appEvidenceId = appStored.body.data.id;
+    await owner.query('UPDATE evidence_blobs SET content=$1 WHERE evidence_id=$2',
+      [Buffer.from('TAMPERED'), appEvidenceId]);
+    const failedReview = await request(applicationReview, adminToken, tenantA,
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
+    assert.equal(failedReview.status, 409, JSON.stringify(failedReview.body));
+    assert.equal(failedReview.body.error.code, 'EXECUTION_REVIEW_EVIDENCE_INTEGRITY_FAILED');
+    assert.equal((await request(`/work-orders/${applicationId}`, adminToken, tenantA))
+      .body.data.WorkOrderExecutions[0].review_status, 'submitted');
+    await owner.query('UPDATE evidence_blobs SET content=$1 WHERE evidence_id=$2',
+      [privatePdf, appEvidenceId]);
+    const applicationAccepted = await request(applicationReview, adminToken, tenantA,
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
+    assert.equal(applicationAccepted.status, 200, JSON.stringify(applicationAccepted.body));
+    assert.deepEqual(applicationAccepted.body.data.review_checklist, checkedReviewWithFiles);
+    assert.equal((await request(`/work-orders/${applicationId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 200);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'",
+      [tenantA, applicationId]), 1);
 
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
