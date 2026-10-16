@@ -332,6 +332,91 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const firstReportId = recorded.body.data.id;
     assert.equal(recorded.body.data.review_status, 'submitted');
     assert.equal(recorded.body.data.submitted_by, contractor1);
+    // 0T.10: the very same private BYTEA storage powers order execution
+    // attachments. No scouting permission or evidence can cross the boundary.
+    const privatePdf = Buffer.from('%PDF-1.4\\n1 0 obj<</Type /Catalog>>endobj\\n%%EOF\\n'.replaceAll('\\n', '\n'));
+    const evidenceUrl = `/work-orders/${orderId}/executions/${firstReportId}/evidence`;
+    const filePayload = { kind: 'document', mime_type: 'application/pdf',
+      original_name: 'parte.pdf', content_base64: privatePdf.toString('base64'),
+      client_upload_id: randomUUID() };
+    assert.equal((await request(evidenceUrl, contractorBToken, tenantB,
+      'POST', filePayload)).status, 404);
+    assert.equal((await request(evidenceUrl, contractor2Token, tenantA,
+      'POST', filePayload)).status, 403);
+    assert.equal((await request(evidenceUrl, adminToken, tenantA,
+      'POST', filePayload)).status, 403);
+    assert.equal((await request(evidenceUrl, scoutToken, tenantA,
+      'POST', filePayload)).status, 403);
+    assert.equal((await request(evidenceUrl, contractorToken, tenantA,
+      'POST', { ...filePayload, content_base64: Buffer.from('NOT A PDF').toString('base64') })).status, 422);
+    const storedFile = await request(evidenceUrl, contractorToken, tenantA,
+      'POST', filePayload);
+    assert.equal(storedFile.status, 201, JSON.stringify(storedFile.body));
+    assert.equal(storedFile.body.replayed, false);
+    const evidenceId = storedFile.body.data.id;
+    assert.equal(storedFile.body.data.work_order_execution_id, firstReportId);
+    assert.doesNotMatch(JSON.stringify(storedFile.body), /content_sha256|content_base64|storage_key/);
+    const replayFile = await request(evidenceUrl, contractorToken, tenantA,
+      'POST', filePayload);
+    assert.equal(replayFile.status, 200);
+    assert.equal(replayFile.body.replayed, true);
+    assert.equal(replayFile.body.data.id, evidenceId);
+    assert.equal((await request(evidenceUrl, contractorToken, tenantA,
+      'POST', { ...filePayload, original_name: 'different.pdf' })).status, 409);
+    const listPath = `/work-orders/${orderId}/execution-evidence`;
+    const evidenceList = await request(listPath, contractorToken, tenantA);
+    assert.equal(evidenceList.status, 200);
+    assert.equal(evidenceList.body.data.length, 1);
+    assert.equal(evidenceList.body.data[0].id, evidenceId);
+    assert.equal((await request(listPath, contractorBToken, tenantB)).status, 404);
+    assert.equal((await request(listPath, scoutToken, tenantA)).status, 403);
+    const contentRoute = `/work-orders/${orderId}/evidence/${evidenceId}/content`;
+    const integrityRoute = `/work-orders/${orderId}/evidence/${evidenceId}/integrity`;
+    const download = await request(contentRoute, contractorToken, tenantA);
+    assert.equal(download.status, 200, JSON.stringify(download.body));
+    assert.deepEqual(Buffer.from(download.body.data.content_base64, 'base64'), privatePdf);
+    assert.match(download.headers?.get?.('cache-control') ?? 'private, no-store', /no-store/);
+    assert.equal((await request(contentRoute, contractorBToken, tenantB)).status, 404);
+    assert.equal((await request(contentRoute, scoutToken, tenantA)).status, 403);
+    assert.equal((await request(`/work-orders/${orderId}/evidence/${randomUUID()}/content`,
+      contractorToken, tenantA)).status, 404);
+    const firstIntegrity = await request(integrityRoute, contractorToken, tenantA);
+    assert.equal(firstIntegrity.status, 200);
+    assert.deepEqual(firstIntegrity.body.data, { id: evidenceId, status: 'verified' });
+    assert.equal(await count('evidence_blobs', 'tenant_id=$1 AND evidence_id=$2',
+      [tenantA, evidenceId]), 1);
+    // Wrong execution/order cannot be assigned even by a database owner: FK
+    // verifies all three keys as one compound reference.
+    await assert.rejects(owner.query(
+      'UPDATE evidence_assets SET work_order_execution_id=$1 WHERE id=$2',
+      [randomUUID(), evidenceId]), error => error.code === '23503');
+    // A damaged BYTEA must never be silently returned as a verified download.
+    await owner.query('UPDATE evidence_blobs SET content=$1 WHERE evidence_id=$2',
+      [Buffer.from('DAMAGED'), evidenceId]);
+    assert.equal((await request(integrityRoute, contractorToken, tenantA)).body.data.status, 'mismatch');
+    assert.equal((await request(contentRoute, contractorToken, tenantA)).status, 409);
+    await owner.query('UPDATE evidence_blobs SET content=$1 WHERE evidence_id=$2',
+      [privatePdf, evidenceId]);
+    assert.equal((await request(integrityRoute, contractorToken, tenantA)).body.data.status, 'verified');
+    // Locked to 8 blobs, including replays that do not increment counters.
+    for (let n = 1; n < 8; n++) {
+      const extra = await request(evidenceUrl, contractorToken, tenantA, 'POST',
+        { ...filePayload, client_upload_id: randomUUID(), original_name: `parte-${n}.pdf` });
+      assert.equal(extra.status, 201, JSON.stringify(extra.body));
+    }
+    assert.equal((await request(evidenceUrl, contractorToken, tenantA, 'POST',
+      { ...filePayload, client_upload_id: randomUUID(), original_name: 'ninth.pdf' })).status, 409);
+    assert.equal(await count('evidence_assets',
+      'tenant_id=$1 AND work_order_execution_id=$2', [tenantA, firstReportId]), 8);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_evidence_uploaded'",
+      [tenantA, orderId]), 8);
+    // Revocation invalidates new downloads regardless of prior upload success.
+    await owner.query("UPDATE memberships SET status='blocked' WHERE tenant_id=$1 AND user_id=$2",
+      [tenantA, contractor1]);
+    assert.equal((await request(contentRoute, contractorToken, tenantA)).status, 403);
+    await owner.query("UPDATE memberships SET status='active' WHERE tenant_id=$1 AND user_id=$2",
+      [tenantA, contractor1]);
     assert.equal((await request(executionRoute, contractorToken, tenantA,
       'POST', executionPayload)).status, 409);
     assert.equal((await request(`/work-orders/${orderId}`,
@@ -377,6 +462,15 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       coordinatorToken, tenantA, 'PATCH', { status: 'completed' });
     assert.equal(completed.status, 200, JSON.stringify(completed.body));
     assert.ok(completed.body.data.completed_at);
+    // Replays survive closure without creating a second blob; a new upload
+    // after the report was rejected and the order completed stays denied.
+    const closedReplay = await request(evidenceUrl, contractorToken, tenantA,
+      'POST', filePayload);
+    assert.equal(closedReplay.status, 200);
+    assert.equal(closedReplay.body.replayed, true);
+    assert.equal((await request(evidenceUrl, contractorToken, tenantA,
+      'POST', { ...filePayload, client_upload_id: randomUUID() })).status, 409);
+    assert.equal((await request(contentRoute, contractorToken, tenantA)).status, 200);
     assert.equal((await request(executionRoute, contractorToken, tenantA,
       'POST', executionPayload)).status, 409);
     assert.equal(await count('audit_events',
