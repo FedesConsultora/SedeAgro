@@ -6,6 +6,7 @@ export function defineEvidenceAsset(sequelize, DataTypes) {
     tenant_id: { type: DataTypes.UUID, allowNull: false },
     scouting_observation_id: DataTypes.UUID,
     work_order_id: DataTypes.UUID,
+    work_order_execution_id: DataTypes.UUID,
     uploaded_by: DataTypes.UUID,
     kind: { type: DataTypes.STRING(24), allowNull: false },
     storage_key: { type: DataTypes.TEXT, allowNull: false },
