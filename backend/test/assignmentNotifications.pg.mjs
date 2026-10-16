@@ -576,6 +576,127 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'",
       [tenantA, applicationId]), 1);
 
+    // 0T.12: planning is separate from immutable operator-declared use.
+    // This is not an actual stock movement or agronomic dosage reading.
+    const catalogOne = await request('/assets/inputs', adminToken, tenantA, 'POST',
+      { name: 'Fertilizante de prueba', category: 'fertilizer', unit: 'kg' });
+    const catalogTwo = await request('/assets/inputs', adminToken, tenantA, 'POST',
+      { name: 'Adyuvante de prueba', category: 'adjuvant', unit: 'L' });
+    assert.equal(catalogOne.status, 201);
+    assert.equal(catalogTwo.status, 201);
+    const otherTenantCatalog = await request('/assets/inputs', adminBToken, tenantB, 'POST',
+      { name: 'Insumo ajeno', category: 'fertilizer', unit: 'kg' });
+    assert.equal(otherTenantCatalog.status, 201);
+    const materialOrder = await request('/work-orders', adminToken, tenantA, 'POST',
+      { field_id: fieldA, type: 'fertilization', title: 'Declaración de insumos' });
+    assert.equal(materialOrder.status, 201);
+    const materialOrderId = materialOrder.body.data.id;
+    const plannedPath = `/work-orders/${materialOrderId}/inputs`;
+    const planOne = await request(plannedPath, adminToken, tenantA, 'POST',
+      { input_id: catalogOne.body.data.id, total_quantity: 6.5 });
+    const planTwo = await request(plannedPath, adminToken, tenantA, 'POST',
+      { input_id: catalogTwo.body.data.id, total_quantity: 2 });
+    assert.equal(planOne.status, 201, JSON.stringify(planOne.body));
+    assert.equal(planTwo.status, 201, JSON.stringify(planTwo.body));
+    assert.equal((await request(plannedPath, adminToken, tenantA, 'POST',
+      { input_id: otherTenantCatalog.body.data.id, total_quantity: 100 })).status, 422);
+    assert.equal((await request(`/work-orders/${materialOrderId}/assignees`, adminToken, tenantA,
+      'POST', { user_id: contractor2 })).status, 201);
+    for (const status of ['pending_approval', 'approved', 'assigned', 'in_progress']) {
+      const moved = await request(`/work-orders/${materialOrderId}/status`,
+        adminToken, tenantA, 'PATCH', { status });
+      assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    }
+    assert.equal((await request(plannedPath, adminToken, tenantA, 'POST',
+      { input_id: catalogOne.body.data.id, total_quantity: 6.5 })).status, 409,
+      'Even identical planning replay must not mutate an approved plan');
+    const materialDetail = await request(`/work-orders/${materialOrderId}`, adminToken, tenantA);
+    assert.equal(materialDetail.body.data.WorkOrderInputs.length, 2);
+    const materialStart = new Date(new Date(materialDetail.body.data.approved_at).getTime() + 50);
+    const materialReport = await request(`/work-orders/${materialOrderId}/executions`,
+      contractor2Token, tenantA, 'POST', { ...executionPayload,
+        started_at: materialStart.toISOString(),
+        finished_at: new Date(materialStart.getTime() + 50).toISOString(),
+        result_summary: 'Declaro insumos utilizados durante el trabajo de fertilización.' });
+    assert.equal(materialReport.status, 201, JSON.stringify(materialReport.body));
+    const materialReportId = materialReport.body.data.id;
+    const materialEvidence = await request(
+      `/work-orders/${materialOrderId}/executions/${materialReportId}/evidence`,
+      contractor2Token, tenantA, 'POST',
+      { ...filePayload, client_upload_id: randomUUID(), original_name: 'fertilizacion.pdf' });
+    assert.equal(materialEvidence.status, 201);
+    const materialReview = `/work-orders/${materialOrderId}/executions/${materialReportId}/review`;
+    const prematureMaterialsReview = await request(materialReview, adminToken, tenantA,
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
+    assert.equal(prematureMaterialsReview.status, 409);
+    assert.equal(prematureMaterialsReview.body.error.code, 'EXECUTION_INPUT_DECLARATION_REQUIRED');
+    const declarePath = `/work-orders/${materialOrderId}/executions/${materialReportId}/input-declaration`;
+    const clientDeclarationId = randomUUID();
+    const quantities = {
+      client_declaration_id: clientDeclarationId,
+      notes: 'Menos líquido por cambios observados en el lote.',
+      items: [
+        { work_order_input_id: planOne.body.data.id, declared_quantity: '6.5000' },
+        { work_order_input_id: planTwo.body.data.id, declared_quantity: '0.5000' }
+      ]
+    };
+    assert.equal((await request(declarePath, adminBToken, tenantB, 'POST', quantities)).status, 404);
+    assert.equal((await request(declarePath, scoutToken, tenantA, 'POST', quantities)).status, 403);
+    assert.equal((await request(declarePath, contractorToken, tenantA, 'POST', quantities)).status, 404,
+      'Unassigned contractor must not learn that this order exists');
+    assert.equal((await request(declarePath, adminToken, tenantA, 'POST', quantities)).status, 403);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, items: quantities.items.slice(0, 1) })).status, 422);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, items: [quantities.items[0], quantities.items[0]] })).status, 422);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, notes: '' })).status, 422);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, items: quantities.items.map((x, i) => ({ ...x,
+        declared_quantity: i === 1 ? '-5' : x.declared_quantity })) })).status, 422);
+    const firstDeclaration = await request(declarePath, contractor2Token, tenantA,
+      'POST', quantities);
+    assert.equal(firstDeclaration.status, 201, JSON.stringify(firstDeclaration.body));
+    assert.equal(firstDeclaration.body.replayed, false);
+    const declared = firstDeclaration.body.data.input_declaration;
+    assert.equal(declared.declared_by, contractor2);
+    assert.equal(declared.items.length, 2);
+    const fertilizer = declared.items.find(x => x.input_id === catalogOne.body.data.id);
+    const adjuvant = declared.items.find(x => x.input_id === catalogTwo.body.data.id);
+    assert.deepEqual([fertilizer.planned_quantity, fertilizer.declared_quantity,
+      fertilizer.variance_quantity, fertilizer.unit], ['6.5', '6.5', '0', 'kg']);
+    assert.deepEqual([adjuvant.planned_quantity, adjuvant.declared_quantity,
+      adjuvant.variance_quantity, adjuvant.unit], ['2', '0.5', '-1.5', 'L']);
+    const retryDeclared = await request(declarePath, contractor2Token, tenantA, 'POST', quantities);
+    assert.equal(retryDeclared.status, 200);
+    assert.equal(retryDeclared.body.replayed, true);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, client_declaration_id: randomUUID() })).status, 409);
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, items: quantities.items.map(item => ({
+        ...item, declared_quantity: '0'
+      })) })).status, 409);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_inputs_declared'",
+      [tenantA, materialOrderId]), 1);
+    const acceptedMaterialReport = await request(materialReview, adminToken, tenantA,
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
+    assert.equal(acceptedMaterialReport.status, 200, JSON.stringify(acceptedMaterialReport.body));
+    assert.deepEqual(acceptedMaterialReport.body.data.input_declaration.items, declared.items);
+    assert.equal((await request(`/work-orders/${materialOrderId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 200);
+    assert.equal((await request(declarePath, contractor2Token, tenantA,
+      'POST', quantities)).body.replayed, true,
+      'Idempotent retry remains safe after close');
+    assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
+      { ...quantities, client_declaration_id: randomUUID() })).status, 409);
+    assert.equal((await request(`/work-orders/${materialOrderId}`,
+      adminBToken, tenantB)).status, 404,
+      'Other tenant must not read persisted declared amounts');
+    assert.equal(await count('work_order_inputs',
+      'tenant_id=$1 AND work_order_id=$2', [tenantA, materialOrderId]), 2,
+      'The declared quantities did not mutate planning');
+
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
       { field_id: fieldA, type: 'inspection', title: 'Rollback fixture' });

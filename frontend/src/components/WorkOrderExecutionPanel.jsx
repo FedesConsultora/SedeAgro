@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
+import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
+import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
@@ -137,6 +139,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       <p>Trabajo declarado: {localDate(report.started_at)} → {localDate(report.finished_at)}</p>
       <p>Superficie informada: {report.worked_area_hectares} ha</p>
       <p className="order-detail__instructions">{report.result_summary}</p>
+      <WorkOrderExecutionInputs order={order} report={report} onChanged={onChanged} />
       {report.reviewed_at && <p>Revisado por {report.reviewed_by} · {localDate(report.reviewed_at)}</p>}
       {report.review_status === 'rejected' && <p>Motivo: {report.review_note}</p>}
       {reviewChecklistOutcome(report) && <p className="order-detail__notice" role="status">
@@ -184,7 +187,8 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
             disabled={busy} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
         </label>
         <div className="order-detail__execution-actions">
-          <button className="primary-action" type="button" disabled={busy}
+          <button className="primary-action" type="button"
+            disabled={busy || hasPlannedInputsWithoutDeclaration(order, report)}
             onClick={() => void review(report, 'verified')}>Aceptar revisión</button>
           <button className="ghost-action" type="button" disabled={busy}
             onClick={() => void review(report, 'rejected')}>Rechazar parte</button>
