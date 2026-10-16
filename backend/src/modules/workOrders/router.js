@@ -30,6 +30,7 @@ import { putPrivateEvidence, getPrivateEvidenceByteLength, getBoundedPrivateEvid
 import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from '../scouting/evidenceIntegrity.js';
 import { canAttachExecutionEvidence, sameExecutionUpload, visibleExecutionEvidence, EXECUTION_EVIDENCE_LIMIT, ORDER_EVIDENCE_LIMIT } from './executionEvidencePolicy.js';
 import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
+import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -84,6 +85,15 @@ const reviewChecklistSchema = z.object({
   result_checked: z.literal(true),
   operation_checked: z.literal(true),
   evidence_basis: z.enum(['reviewed_files', 'no_files'])
+}).strict();
+
+const inputDeclarationSchema = z.object({
+  client_declaration_id: z.string().uuid(),
+  notes: z.string().trim().max(500).default(''),
+  items: z.array(z.object({
+    work_order_input_id: z.string().uuid(),
+    declared_quantity: z.string().min(1).max(20)
+  }).strict()).max(MAX_DECLARED_INPUTS)
 }).strict();
 
 const executionReviewSchema = z.object({
@@ -337,6 +347,61 @@ workOrdersRouter.post('/:id/executions', requireCapability('orders.execute'), va
   res.status(201).json({ data: report });
 }));
 
+// A single authored snapshot, atomically stored on the report. All planned
+// materials must be accounted for; "0" means declared zero use, never stock
+// deduction. No vendor/physical evidence is inferred from this record.
+workOrdersRouter.post('/:id/executions/:executionId/input-declaration', requireCapability('orders.execute'),
+  validate(inputDeclarationSchema), asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id, true);
+    const report = await WorkOrderExecution.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
+      transaction: req.dbTransaction
+    });
+    if (!report) throw new HttpError(404, 'Parte de ejecución no encontrado.',
+      undefined, 'EXECUTION_NOT_FOUND');
+    if (report.submitted_by !== req.auth.user.id) {
+      throw new HttpError(403, 'Solo quien presentó el parte puede declarar insumos utilizados.',
+        undefined, 'EXECUTION_INPUT_AUTHOR_REQUIRED');
+    }
+    if (report.input_declaration) {
+      if (!sameInputDeclaration(report.input_declaration, req.body)) {
+        throw new HttpError(409, 'Esta declaración ya existe; no puede modificarse después de presentarla.',
+          undefined, 'EXECUTION_INPUT_ALREADY_DECLARED');
+      }
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ data: report, replayed: true });
+      return;
+    }
+    if (order.status !== 'in_progress' || report.review_status !== 'submitted') {
+      throw new HttpError(409, 'Los insumos deben informarse mientras el parte aguarda revisión.',
+        undefined, 'EXECUTION_INPUT_DECLARATION_CLOSED');
+    }
+    const rows = await WorkOrderInput.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: order.id },
+      attributes: ['id', 'input_id', 'total_quantity'],
+      include: [{ model: AgriculturalInput, attributes: ['id', 'name', 'unit'], required: true }],
+      order: [['id', 'ASC']], limit: MAX_DECLARED_INPUTS + 1,
+      transaction: req.dbTransaction
+    });
+    const declaration = buildInputDeclaration({
+      rows: rows.map(item => item.toJSON()),
+      payload: req.body, userId: req.auth.user.id
+    });
+    await report.update({ input_declaration: declaration }, { transaction: req.dbTransaction });
+    await AuditEvent.create({
+      tenant_id: req.tenantId, actor_id: req.auth.user.id,
+      action: 'work_order.execution_inputs_declared', entity_type: 'work_order',
+      entity_id: order.id, after: {
+        execution_id: report.id, input_count: declaration.items.length,
+        contains_variance: declaration.items.some(item => item.variance_quantity !== null &&
+          item.variance_quantity !== '0')
+      },
+      request_id: safeAuditRequestId(req.requestId)
+    }, { transaction: req.dbTransaction });
+    res.set('Cache-Control', 'private, no-store');
+    res.status(201).json({ data: report, replayed: false });
+  }));
+
 workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('orders.write'),
   validate(executionReviewSchema), asyncHandler(async (req, res) => {
   const order = await WorkOrder.findByPk(req.params.id, {
@@ -370,6 +435,16 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
   // as the private download endpoint (not simply metadata "present").
   let attachmentCount = 0;
   if (req.body.decision === 'verified') {
+    // Planning lines are frozen after approval, so an independent reviewer
+    // cannot approve a report that omitted its planned input declarations.
+    const plannedCount = await WorkOrderInput.count({
+      where: { tenant_id: req.tenantId, work_order_id: order.id },
+      transaction: req.dbTransaction
+    });
+    if (!hasRequiredInputDeclaration(plannedCount, report)) {
+      throw new HttpError(409, 'Antes de aceptar, el responsable debe informar los insumos planificados utilizados.',
+        undefined, 'EXECUTION_INPUT_DECLARATION_REQUIRED');
+    }
     const attachments = await EvidenceAsset.findAll({
       where: { tenant_id: req.tenantId, work_order_id: order.id,
         work_order_execution_id: report.id },
@@ -615,11 +690,38 @@ workOrdersRouter.post('/:id/assignees', requireCapability('orders.write'), valid
 }));
 
 workOrdersRouter.post('/:id/inputs', requireCapability('orders.write'), validate(inputSchema), asyncHandler(async (req, res) => {
-  const input = await WorkOrderInput.create({
-    ...req.body,
-    work_order_id: req.params.id
+  // An approved plan is a baseline against which authored declarations are
+  // compared. Serialize planning with every status transition and submission.
+  const order = await readableWorkOrder(req, req.params.id, true);
+  if (!['draft', 'pending_approval'].includes(order.status)) {
+    throw new HttpError(409, 'Los insumos planificados se congelan al aprobar la orden.',
+      undefined, 'WORK_ORDER_INPUT_PLAN_FROZEN');
+  }
+  const catalog = await AgriculturalInput.findOne({
+    where: { tenant_id: req.tenantId, id: req.body.input_id },
+    attributes: ['id'], transaction: req.dbTransaction
+  });
+  if (!catalog) throw new HttpError(422, 'El insumo no pertenece al catálogo de la empresa.',
+    undefined, 'WORK_ORDER_INPUT_INVALID');
+  const where = { tenant_id: req.tenantId, work_order_id: order.id, input_id: catalog.id };
+  const [input, created] = await WorkOrderInput.findOrCreate({
+    where, defaults: req.body, transaction: req.dbTransaction
+  });
+  if (!created) {
+    const same = String(input.dose ?? '') === String(req.body.dose ?? '') &&
+      String(input.total_quantity ?? '') === String(req.body.total_quantity ?? '') &&
+      (input.dose_unit ?? '') === (req.body.dose_unit ?? '') &&
+      (input.notes ?? '') === (req.body.notes ?? '');
+    if (!same) throw new HttpError(409, 'El insumo ya fue planificado con otras cantidades.',
+      undefined, 'WORK_ORDER_INPUT_PLAN_CONFLICT');
+  }
+  if (created) await AuditEvent.create({
+    tenant_id: req.tenantId, actor_id: req.auth.user.id,
+    action: 'work_order.input_planned', entity_type: 'work_order',
+    entity_id: order.id, after: { planned_input_id: input.id, input_id: input.input_id },
+    request_id: safeAuditRequestId(req.requestId)
   }, { transaction: req.dbTransaction });
-  res.status(201).json({ data: input });
+  res.status(created ? 201 : 200).json({ data: input, replayed: !created });
 }));
 
 workOrdersRouter.post('/:id/machinery', requireCapability('orders.write'), validate(machinerySchema), asyncHandler(async (req, res) => {
