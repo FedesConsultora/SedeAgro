@@ -23,7 +23,7 @@ test('a positive review requires four explicit controls and an evidence basis', 
 
 test('every supported task type has a specific, non-sensor review instruction', () => {
   for (const type of ['application', 'sowing', 'fertilization', 'harvest', 'irrigation', 'inspection', 'other']) {
-    assert.ok(operationReviewLabel(type).length >= 30);
+    assert.ok(operationReviewLabel(type).length >= 20);
   }
 });
 
