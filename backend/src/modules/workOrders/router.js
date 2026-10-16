@@ -14,6 +14,7 @@ import {
   WorkOrder,
   WorkOrderAssignee,
   WorkOrderExecution,
+  WorkOrderExecutionException,
   WorkOrderInput,
   WorkOrderMachinery
 } from '../../models/index.js';
@@ -31,6 +32,8 @@ import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from '../scouting/
 import { canAttachExecutionEvidence, sameExecutionUpload, visibleExecutionEvidence, EXECUTION_EVIDENCE_LIMIT, ORDER_EVIDENCE_LIMIT } from './executionEvidencePolicy.js';
 import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
 import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
+import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
+  canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -116,6 +119,27 @@ const executionReviewSchema = z.object({
   if (body.decision === 'verified' && body.reason) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
       message: 'La revisión positiva no admite un motivo de rechazo.' });
+  }
+});
+
+const unplannedInputSchema = z.object({
+  client_request_id: z.string().uuid(),
+  input_id: z.string().uuid(),
+  declared_quantity: z.string().min(1).max(20),
+  reason: z.string().trim().min(10).max(500)
+}).strict();
+
+const unplannedReviewSchema = z.object({
+  decision: z.enum(['approved', 'rejected']),
+  reason: z.string().trim().min(10).max(500).optional()
+}).strict().superRefine((body, ctx) => {
+  if (body.decision === 'rejected' && !body.reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
+      message: 'El rechazo requiere una explicación.' });
+  }
+  if (body.decision === 'approved' && body.reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
+      message: 'No se adjunta explicación de rechazo a una excepción aprobada.' });
   }
 });
 
@@ -402,6 +426,161 @@ workOrdersRouter.post('/:id/executions/:executionId/input-declaration', requireC
     res.status(201).json({ data: report, replayed: false });
   }));
 
+// A contractor can choose a catalog product while assigned to this order,
+// without granting broad assets.read permissions for unrelated resources.
+workOrdersRouter.get('/:id/unplanned-input-options', requireCapability('orders.execute'),
+  asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id);
+    const assigned = req.auth.role.code === 'contractor' &&
+      await contractorAssignedToOrder(req, order.id);
+    if (!canSubmitExecution(req.auth.role.code, assigned)) {
+      throw new HttpError(403, 'No podés declarar insumos de esta orden.',
+        undefined, 'EXECUTION_EXCEPTION_AUTHOR_REQUIRED');
+    }
+    const inputs = await AgriculturalInput.findAll({
+      attributes: ['id', 'name', 'unit', 'category'],
+      order: [['name', 'ASC'], ['id', 'ASC']],
+      limit: 100,
+      transaction: req.dbTransaction
+    });
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: inputs });
+  }));
+
+workOrdersRouter.get('/:id/execution-exceptions', requireCapability('orders.read'),
+  asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id);
+    const items = await WorkOrderExecutionException.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: order.id },
+      order: [['created_at', 'ASC'], ['id', 'ASC']],
+      limit: MAX_EXECUTION_REPORTS * MAX_UNPLANNED_INPUTS,
+      transaction: req.dbTransaction
+    });
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: items.map(publicException) });
+  }));
+
+workOrdersRouter.post('/:id/executions/:executionId/exceptions', requireCapability('orders.execute'),
+  validate(unplannedInputSchema), asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id, true);
+    const report = await WorkOrderExecution.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
+      transaction: req.dbTransaction
+    });
+    if (!report) throw new HttpError(404, 'Parte de ejecución no encontrado.',
+      undefined, 'EXECUTION_NOT_FOUND');
+    if (report.submitted_by !== req.auth.user.id) {
+      throw new HttpError(403, 'Solo el autor del parte puede declarar insumos no previstos.',
+        undefined, 'EXECUTION_EXCEPTION_AUTHOR_REQUIRED');
+    }
+    const existing = await WorkOrderExecutionException.findOne({
+      where: { tenant_id: req.tenantId, submitted_by: req.auth.user.id,
+        client_request_id: req.body.client_request_id },
+      transaction: req.dbTransaction
+    });
+    const context = { orderId: order.id, executionId: report.id, actorId: req.auth.user.id };
+    if (existing) {
+      if (!sameUnplannedRequest(existing, req.body, context)) {
+        throw new HttpError(409, 'La clave de solicitud corresponde a otra excepción.',
+          undefined, 'EXECUTION_EXCEPTION_REPLAY_CONFLICT');
+      }
+      res.set('Cache-Control', 'private, no-store');
+      res.json({ data: publicException(existing), replayed: true });
+      return;
+    }
+    if (order.status !== 'in_progress' || report.review_status !== 'submitted') {
+      throw new HttpError(409, 'El parte ya no acepta insumos no previstos.',
+        undefined, 'EXECUTION_EXCEPTION_CLOSED');
+    }
+    const quantity = positiveDeclaredQuantity(req.body.declared_quantity);
+    const planned = await WorkOrderInput.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, input_id: req.body.input_id },
+      attributes: ['id'], transaction: req.dbTransaction
+    });
+    if (planned) throw new HttpError(409, 'Este insumo ya está en el plan; usá la declaración ordinaria.',
+      undefined, 'EXECUTION_EXCEPTION_ALREADY_PLANNED');
+    const catalog = await AgriculturalInput.findOne({
+      where: { tenant_id: req.tenantId, id: req.body.input_id },
+      attributes: ['id', 'name', 'unit'], transaction: req.dbTransaction
+    });
+    if (!catalog) throw new HttpError(422, 'El insumo no pertenece al catálogo de esta empresa.',
+      undefined, 'EXECUTION_EXCEPTION_INPUT_INVALID');
+    const count = await WorkOrderExecutionException.count({
+      where: { tenant_id: req.tenantId, work_order_execution_id: report.id },
+      transaction: req.dbTransaction
+    });
+    if (count >= MAX_UNPLANNED_INPUTS) throw new HttpError(409,
+      'El parte admite hasta ocho excepciones de insumos.',
+      undefined, 'EXECUTION_EXCEPTION_LIMIT');
+    const [exception, created] = await WorkOrderExecutionException.findOrCreate({
+      where: { tenant_id: req.tenantId, submitted_by: req.auth.user.id,
+        client_request_id: req.body.client_request_id },
+      defaults: {
+        tenant_id: req.tenantId, work_order_id: order.id,
+        work_order_execution_id: report.id, input_id: catalog.id,
+        client_request_id: req.body.client_request_id, submitted_by: req.auth.user.id,
+        input_name: catalog.name, unit: catalog.unit, quantity, reason: req.body.reason,
+        review_status: 'submitted'
+      },
+      transaction: req.dbTransaction
+    });
+    if (!created) {
+      if (!sameUnplannedRequest(exception, req.body, context)) {
+        throw new HttpError(409, 'La clave de solicitud corresponde a otra excepción.',
+          undefined, 'EXECUTION_EXCEPTION_REPLAY_CONFLICT');
+      }
+    } else await AuditEvent.create({
+      tenant_id: req.tenantId, actor_id: req.auth.user.id,
+      action: 'work_order.unplanned_input_submitted', entity_type: 'work_order',
+      entity_id: order.id, after: { execution_id: report.id, exception_id: exception.id },
+      request_id: safeAuditRequestId(req.requestId)
+    }, { transaction: req.dbTransaction });
+    res.set('Cache-Control', 'private, no-store');
+    res.status(created ? 201 : 200).json({ data: publicException(exception), replayed: !created });
+  }));
+
+workOrdersRouter.post('/:id/executions/:executionId/exceptions/:exceptionId/review',
+  requireCapability('orders.write'), validate(unplannedReviewSchema), asyncHandler(async (req, res) => {
+    const order = await readableWorkOrder(req, req.params.id, true);
+    if (order.status !== 'in_progress') {
+      throw new HttpError(409, 'La orden ya no admite revisiones.',
+        undefined, 'EXECUTION_EXCEPTION_REVIEW_CLOSED');
+    }
+    const report = await WorkOrderExecution.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
+      transaction: req.dbTransaction
+    });
+    if (!report) throw new HttpError(404, 'Parte de ejecución no encontrado.');
+    const exception = await WorkOrderExecutionException.findOne({
+      where: { tenant_id: req.tenantId, work_order_id: order.id,
+        work_order_execution_id: report.id, id: req.params.exceptionId },
+      transaction: req.dbTransaction
+    });
+    if (!exception) throw new HttpError(404, 'Excepción no encontrada.',
+      undefined, 'EXECUTION_EXCEPTION_NOT_FOUND');
+    if (!canReviewException(req.auth.role.code, req.auth.user.id, exception.submitted_by)) {
+      throw new HttpError(403, 'La revisión requiere un coordinador distinto del autor.',
+        undefined, 'EXECUTION_EXCEPTION_SELF_REVIEW_DENIED');
+    }
+    if (report.review_status !== 'submitted' || exception.review_status !== 'submitted') {
+      throw new HttpError(409, 'La excepción ya no está pendiente de revisión.',
+        undefined, 'EXECUTION_EXCEPTION_ALREADY_REVIEWED');
+    }
+    await exception.update({
+      review_status: req.body.decision, reviewed_by: req.auth.user.id,
+      reviewed_at: new Date(), review_note: req.body.decision === 'rejected' ? req.body.reason : null
+    }, { transaction: req.dbTransaction });
+    await AuditEvent.create({
+      tenant_id: req.tenantId, actor_id: req.auth.user.id,
+      action: 'work_order.unplanned_input_reviewed', entity_type: 'work_order',
+      entity_id: order.id,
+      after: { execution_id: report.id, exception_id: exception.id, decision: exception.review_status },
+      request_id: safeAuditRequestId(req.requestId)
+    }, { transaction: req.dbTransaction });
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: publicException(exception) });
+  }));
+
 workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('orders.write'),
   validate(executionReviewSchema), asyncHandler(async (req, res) => {
   const order = await WorkOrder.findByPk(req.params.id, {
@@ -444,6 +623,15 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
     if (!hasRequiredInputDeclaration(plannedCount, report)) {
       throw new HttpError(409, 'Antes de aceptar, el responsable debe informar los insumos planificados utilizados.',
         undefined, 'EXECUTION_INPUT_DECLARATION_REQUIRED');
+    }
+    const exceptions = await WorkOrderExecutionException.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: order.id, work_order_execution_id: report.id },
+      attributes: ['id', 'review_status'], limit: MAX_UNPLANNED_INPUTS + 1,
+      transaction: req.dbTransaction
+    });
+    if (!canApproveWithExceptions(exceptions)) {
+      throw new HttpError(409, 'Hay insumos no previstos pendientes o rechazados. Corregí el parte antes de aprobar.',
+        undefined, 'EXECUTION_UNPLANNED_INPUT_REVIEW_REQUIRED');
     }
     const attachments = await EvidenceAsset.findAll({
       where: { tenant_id: req.tenantId, work_order_id: order.id,
