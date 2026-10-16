@@ -1,0 +1,27 @@
+# 0T.13 — Insumos no previstos: solicitud inmutable y revisión humana independiente
+
+## Contrato de producto
+Un parte de ejecución puede requerir un insumo del catálogo de la organización **que no fue previsto en la orden aprobada**. El autor debe declararlo con una cantidad positiva en la unidad original y un motivo suficiente; eso **no convierte la cantidad en uso físico verificado**, no modifica el plan 0T.12 y no descuenta existencias. Un revisor distinto —coordinador o administrador de la empresa— acepta o rechaza cada excepción individual. Las aprobaciones de excepción son administrativas, sin sugerir conformidad regulatoria o agronómica automática.
+
+El backend **no permite verificar el parte** si alguna excepción sigue `submitted` o fue `rejected`. Para corregir una excepción rechazada o una declaración anterior, se rechaza el parte y se presenta uno nuevo: conservar historia sin editar registros anteriores. Los partes históricos sin excepciones permanecen inalterados y siguen la revisión 0T.11–0T.12 existente. Aplicaciones y fertilizaciones aún exigen el respaldo privado íntegro de 0T.11.
+
+## Flujo real
+1. En orden `in_progress` con un parte `submitted`, el autor consulta `GET /work-orders/:id/unplanned-input-options` (`orders.execute`; catálogo del tenant, orden visible, hasta 100 productos ordenados). Un contratista no obtiene el permiso global `assets.read`; solo conoce opciones desde su orden asignada.
+2. Selecciona un producto no previsto, cantidad decimal positiva hasta cuatro decimales (string) y motivo de 10 a 500 caracteres. `POST /work-orders/:id/executions/:executionId/exceptions` requiere UUID `client_request_id`. Hasta **ocho** productos distintos por parte, una vez por producto. 201 primera creación, 200 replay **idéntico** con el mismo UUID incluso tras el cierre, 409 otra solicitud repetida, duplicado de producto, plan ya contiene ese insumo, parte cerrado o límite agotado. No admite cantidad cero: eso corresponde a declarar el insumo planificado con 0. 422 cantidad inválida, catálogo ajeno o payload erróneo; 403 rol/autor insuficiente, 404 recurso ajeno o contratista no asignado.
+3. `GET /work-orders/:id/execution-exceptions` con `orders.read` muestra un historial privado acotado (hasta 160 excepciones, correspondientes a los 20 partes por orden). No devuelve tenant ID, client UUID de idempotencia, secretos o bytes.
+4. `POST /work-orders/:id/executions/:executionId/exceptions/:exceptionId/review` requiere `orders.write`, orden activa, parte todavía pendiente y un revisor distinto del autor. `{"decision":"approved"}` o `{"decision":"rejected","reason":"..."}`, con motivo de rechazo de al menos 10 caracteres. No se puede repetir/cambiar la decisión.
+5. El botón de aceptación del parte puede usarse únicamente si el backend confirma que **todas** sus excepciones fueron aprobadas; pendiente o rechazada devuelve `409 EXECUTION_UNPLANNED_INPUT_REVIEW_REQUIRED`. Se conservan los controles de input_declaration, integridad del adjunto y checklist 0T.11. Un error transaccional deja el parte como `submitted`.
+
+## Persistencia y seguridad
+`202610160003_execution_input_exceptions.js` crea `work_order_execution_exceptions` con tenant_id, order_id, report_id, catálogo, nombre/unidad capturados, cantidad NUMERIC(12,4), motivo, submitter, UUID retry, reviewer, estado y timestamps. FK compuesta `(tenant_id, work_order_id, work_order_execution_id)` al parte; otra al producto en el mismo tenant; submitter/reviewer ligados a memberships del tenant. Unicidad de (tenant, parte, producto) y (tenant, autor, client UUID). `ENABLE + FORCE ROW LEVEL SECURITY` y política `app.current_tenant_id()`. Ninguna FK ni capacidad autorizan escribir o ver datos de otra empresa. Bloqueo `FOR UPDATE` de orden serializa con presentación de partes, archivos, declaraciones previas, revisión y cierre. Auditoría de creación/revisión guarda IDs/decisión, no cantidades ni motivos privados; el catálogo solo se consulta con visibilidad del recurso.
+
+El `down` **aborta si hay cualquier excepción**: preservar/exportar antes de rollback. Los datos históricos no se backfillean. No se han modificado auth, assets global, sincronización offline, GIS, scouting, reporting o movimientos de inventario.
+
+## Pruebas y límites
+- Backend unitario: decimal exacto, cantidades >0, replay idéntico, autocontrol de revisión, bloqueo de aprobación por pendiente/rechazado, metadata sin UUID privado.
+- Frontend: selección de catálogo, roles, privacidad y confirmación explícita, historial y estados de reintento; responsive y táctil.
+- PostgreSQL/PostGIS A/B: opciones privadas de catálogo, 403/404, producto de otra empresa, insumo ya previsto, UUID replay, no duplicar, excepción pendiente impide aprobación del parte, revisión independiente aprobada/rechazada, FK compuesta, roles RLS, audit único, backup/restore y Chromium/offline.
+- Esto **no prueba el uso físico** ni autoriza aplicar productos, cumplir una receta, omitir trazabilidad legal de fitosanitarios ni descontar stock. No hay aceptación manual en campo, staging, QA móvil o despliegue productivo.
+
+## Próximos bloques
+Corrección de notas bajo nueva versión de parte (no edición de eventos), firma profesional/verificación regulatoria para tratamientos que lo requieran, inventario con ledger separado y confirmación de entrega física, o pruebas integrales en dispositivos reales. Cualquier automatización de stock requiere un contrato explícito de almacén, trazabilidad y autorizaciones propias.
