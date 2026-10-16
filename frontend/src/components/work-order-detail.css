@@ -68,3 +68,15 @@
 @media (max-width: 600px) {
   .order-detail__input-declaration .primary-action { width: 100%; }
 }
+
+/* 0T.13 — scoped, independently reviewed unplanned material declarations. */
+.order-detail__exceptions { border-top: 1px solid #e4ece7; padding-top: 14px; }
+.order-detail__exceptions > p { line-height: 1.55; }
+.order-detail__exceptions select,
+.order-detail__exceptions textarea,
+.order-detail__exceptions input { max-width: 100%; min-height: 42px; }
+.order-detail__exceptions article p { margin: 4px 0; overflow-wrap: anywhere; }
+.order-detail__exceptions .order-detail__input-line { gap: 6px; }
+@media (max-width: 600px) {
+  .order-detail__exceptions .order-detail__execution-actions button { width: 100%; }
+}
