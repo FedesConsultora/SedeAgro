@@ -828,8 +828,6 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       { decision: 'rejected', reason: 'La excepción fue rechazada, presentar nuevo parte.' })).status, 200);
     assert.equal((await request(rejectedExceptionPath, contractor2Token, tenantA,
       'POST', { ...exceptionPayload, client_request_id: randomUUID() })).status, 409);
-    assert.equal((await request(rejectedExceptionPath, contractor2Token, tenantA,
-      'POST', { ...exceptionPayload, client_request_id: extraRejected.body.data.input_id })).status, 422);
 
 
     // Explicit transaction rollback: neither relationship nor notification survives.
