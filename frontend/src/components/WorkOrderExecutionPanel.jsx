@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
+import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
+  ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
   executionReports, canDeclareExecution, canReviewExecutionReport,
   toExecutionTimestamp, validatedExecutionResponse
@@ -27,6 +29,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [outcome, setOutcome] = useState('');
   const [attest, setAttest] = useState(false);
   const [reviewReason, setReviewReason] = useState({});
+  const [reviewChecks, setReviewChecks] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -56,8 +59,16 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
 
   const review = async (report, decision) => {
     if (!canReviewExecutionReport(order, report, role, userId, live) || busy) return;
-    if (decision === 'verified' && !window.confirm(
-      '¿Confirmás que revisaste esta declaración? Esto no certifica automáticamente la ejecución física.')) return;
+    let checklist;
+    try {
+      if (decision === 'verified') {
+        checklist = buildVerifiedReviewChecklist(reviewChecks[report.id], order.type);
+        if (!window.confirm('¿Confirmás los controles indicados? Esto es revisión administrativa, no certificación física.')) return;
+      }
+    } catch (err) {
+      setError(err?.message || 'Faltan controles de revisión.');
+      return;
+    }
     const reason = reviewReason[report.id]?.trim();
     if (decision === 'rejected' && (!reason || reason.length < 10)) {
       setError('Para rechazar, explicá el motivo con al menos 10 caracteres.');
@@ -69,7 +80,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/review`, {
           method: 'POST', silent: true,
-          body: { decision, ...(decision === 'rejected' ? { reason } : {}) }
+          body: { decision, ...(decision === 'rejected' ? { reason } : { checklist }) }
         });
       validatedExecutionResponse(response, order.id, decision, report.id);
       onChanged?.();
@@ -128,7 +139,46 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       <p className="order-detail__instructions">{report.result_summary}</p>
       {report.reviewed_at && <p>Revisado por {report.reviewed_by} · {localDate(report.reviewed_at)}</p>}
       {report.review_status === 'rejected' && <p>Motivo: {report.review_note}</p>}
+      {reviewChecklistOutcome(report) && <p className="order-detail__notice" role="status">
+        Revisión estructurada registrada: fechas, superficie, resultado y operación contrastados.
+        {report.review_checklist.evidence_basis === 'reviewed_files'
+          ? ' La persona revisora declaró haber examinado los adjuntos.'
+          : ' Se dejó constancia expresa de ausencia de archivos.'}
+      </p>}
+      {report.review_status === 'verified' && !reviewChecklistOutcome(report) &&
+        <p className="order-detail__footnote">Revisión histórica, sin checklist estructurado; no se infieren controles retroactivos.</p>}
       {canReviewExecutionReport(order, report, role, userId, live) && <div className="order-detail__execution-review">
+        <fieldset className="order-detail__review-checklist" disabled={busy}>
+          <legend>Controles de revisión para {order.type} (solo aceptación)</legend>
+          {[
+            ['time_checked', 'Contrasté las fechas y horas declaradas.'],
+            ['area_checked', 'Contrasté la superficie declarada.'],
+            ['result_checked', 'Leí y contrasté el resultado informado.'],
+            ['operation_checked', operationReviewLabel(order.type)]
+          ].map(([key, label]) => <label key={key} className="order-detail__execution-consent">
+            <input type="checkbox" checked={reviewChecks[report.id]?.[key] === true}
+              onChange={event => setReviewChecks(current => ({
+                ...current, [report.id]: { ...current[report.id], [key]: event.target.checked }
+              }))} />
+            {label}
+          </label>)}
+          <label className="form-field">Situación del respaldo documental
+            <select value={reviewChecks[report.id]?.evidence_basis || ''} onChange={event =>
+              setReviewChecks(current => ({ ...current,
+                [report.id]: { ...current[report.id], evidence_basis: event.target.value } }))}>
+              <option value="">Seleccioná una opción</option>
+              <option value="reviewed_files">Examiné archivos adjuntos a este parte</option>
+              {!ORDER_TYPES_WITH_REQUIRED_EVIDENCE.includes(order.type) &&
+                <option value="no_files">No hay archivos; acepto dejando constancia de su ausencia</option>}
+            </select>
+          </label>
+          {ORDER_TYPES_WITH_REQUIRED_EVIDENCE.includes(order.type) && <p className="order-detail__footnote">
+            Aplicación/fertilización: el servidor exige al menos un archivo privado íntegro.
+          </p>}
+          <p className="order-detail__footnote">
+            Revisión declarada por coordinación; no acredita por sí misma la ejecución física.
+          </p>
+        </fieldset>
         <label className="form-field">Motivo de rechazo (obligatorio solo si rechazás)
           <textarea maxLength={500} rows={2} value={reviewReason[report.id] || ''}
             disabled={busy} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
