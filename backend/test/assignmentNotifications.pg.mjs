@@ -642,7 +642,8 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     };
     assert.equal((await request(declarePath, adminBToken, tenantB, 'POST', quantities)).status, 404);
     assert.equal((await request(declarePath, scoutToken, tenantA, 'POST', quantities)).status, 403);
-    assert.equal((await request(declarePath, contractorToken, tenantA, 'POST', quantities)).status, 403);
+    assert.equal((await request(declarePath, contractorToken, tenantA, 'POST', quantities)).status, 404,
+      'Unassigned contractor must not learn that this order exists');
     assert.equal((await request(declarePath, adminToken, tenantA, 'POST', quantities)).status, 403);
     assert.equal((await request(declarePath, contractor2Token, tenantA, 'POST',
       { ...quantities, items: quantities.items.slice(0, 1) })).status, 422);
