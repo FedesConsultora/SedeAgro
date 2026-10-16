@@ -55,7 +55,7 @@ test('real panel mounts private async history and writes with exact confirmation
   const panel = readFileSync(new URL('../src/components/WorkOrderExecutionPanel.jsx', import.meta.url), 'utf8');
   assert.match(ui, /execution-exceptions/);
   assert.match(ui, /unplanned-input-options/);
-  assert.match(ui, /client_request_id/); // sourced in payload helper imported
+  assert.match(ui, /makeExceptionPayload\(options, inputId, quantity, reason, requestId\)/);
   assert.match(ui, /confirmException\(response/);
   assert.match(ui, /no se descuenta stock/);
   assert.match(panel, /<WorkOrderExecutionExceptions order=\{order\} reports=\{reports\}/);
