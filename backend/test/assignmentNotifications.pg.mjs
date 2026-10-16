@@ -55,7 +55,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
     });
-    return { status: response.status, body: await response.json() };
+    return { status: response.status, body: await response.json(), headers: response.headers };
   }
   try {
     await owner.connect();
@@ -375,7 +375,8 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const download = await request(contentRoute, contractorToken, tenantA);
     assert.equal(download.status, 200, JSON.stringify(download.body));
     assert.deepEqual(Buffer.from(download.body.data.content_base64, 'base64'), privatePdf);
-    assert.match(download.headers?.get?.('cache-control') ?? 'private, no-store', /no-store/);
+    assert.match(download.headers.get('cache-control'), /no-store/);
+    assert.equal(download.headers.get('x-content-type-options'), 'nosniff');
     assert.equal((await request(contentRoute, contractorBToken, tenantB)).status, 404);
     assert.equal((await request(contentRoute, scoutToken, tenantA)).status, 403);
     assert.equal((await request(`/work-orders/${orderId}/evidence/${randomUUID()}/content`,
