@@ -587,6 +587,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const otherTenantCatalog = await request('/assets/inputs', adminBToken, tenantB, 'POST',
       { name: 'Insumo ajeno', category: 'fertilizer', unit: 'kg' });
     assert.equal(otherTenantCatalog.status, 201);
+    const exceptionCatalog = await request('/assets/inputs', adminToken, tenantA, 'POST',
+      { name: 'Insumo de contingencia', category: 'biological', unit: 'L' });
+    assert.equal(exceptionCatalog.status, 201);
     const materialOrder = await request('/work-orders', adminToken, tenantA, 'POST',
       { field_id: fieldA, type: 'fertilization', title: 'Declaración de insumos' });
     assert.equal(materialOrder.status, 201);
@@ -679,6 +682,89 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(await count('audit_events',
       "tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_inputs_declared'",
       [tenantA, materialOrderId]), 1);
+    // 0T.13: an additional unplanned catalog item is a separate, immutable,
+    // independently reviewed declaration, not a silent amendment to 0T.12.
+    const optionsPath = `/work-orders/${materialOrderId}/unplanned-input-options`;
+    const options = await request(optionsPath, contractor2Token, tenantA);
+    assert.equal(options.status, 200, JSON.stringify(options.body));
+    assert.ok(options.body.data.some(item => item.id === exceptionCatalog.body.data.id));
+    assert.equal((await request(optionsPath, contractorToken, tenantA)).status, 404);
+    assert.equal((await request(optionsPath, adminBToken, tenantB)).status, 404);
+    assert.equal((await request(optionsPath, scoutToken, tenantA)).status, 403);
+    const exceptionsPath = `/work-orders/${materialOrderId}/executions/${materialReportId}/exceptions`;
+    const listExceptions = `/work-orders/${materialOrderId}/execution-exceptions`;
+    const exceptionPayload = {
+      input_id: exceptionCatalog.body.data.id, declared_quantity: '0.7500',
+      reason: 'Insumo adicional informado por ajuste operativo en el lote.',
+      client_request_id: randomUUID()
+    };
+    assert.equal((await request(exceptionsPath, adminBToken, tenantB,
+      'POST', exceptionPayload)).status, 404);
+    assert.equal((await request(exceptionsPath, contractorToken, tenantA,
+      'POST', exceptionPayload)).status, 404);
+    assert.equal((await request(exceptionsPath, adminToken, tenantA,
+      'POST', exceptionPayload)).status, 403);
+    assert.equal((await request(exceptionsPath, scoutToken, tenantA,
+      'POST', exceptionPayload)).status, 403);
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA, 'POST',
+      { ...exceptionPayload, input_id: otherTenantCatalog.body.data.id })).status, 422);
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA, 'POST',
+      { ...exceptionPayload, input_id: catalogOne.body.data.id })).status, 409);
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA, 'POST',
+      { ...exceptionPayload, declared_quantity: '0' })).status, 422);
+    const postedException = await request(exceptionsPath, contractor2Token, tenantA,
+      'POST', exceptionPayload);
+    assert.equal(postedException.status, 201, JSON.stringify(postedException.body));
+    const exceptionId = postedException.body.data.id;
+    assert.equal(postedException.body.data.review_status, 'submitted');
+    assert.equal(postedException.body.data.input_name, 'Insumo de contingencia');
+    assert.equal(postedException.body.data.unit, 'L');
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA,
+      'POST', exceptionPayload)).body.replayed, true);
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA,
+      'POST', { ...exceptionPayload, declared_quantity: '1' })).status, 409);
+    assert.equal((await request(exceptionsPath, contractor2Token, tenantA,
+      'POST', { ...exceptionPayload, client_request_id: randomUUID() })).status, 409);
+    const exceptionHistory = await request(listExceptions, contractor2Token, tenantA);
+    assert.equal(exceptionHistory.status, 200);
+    assert.equal(exceptionHistory.body.data.length, 1);
+    assert.equal(exceptionHistory.body.data[0].id, exceptionId);
+    assert.doesNotMatch(JSON.stringify(exceptionHistory.body), /client_request_id|tenant_id/);
+    assert.equal((await request(listExceptions, contractorToken, tenantA)).status, 404);
+    assert.equal((await request(listExceptions, adminBToken, tenantB)).status, 404);
+    const pendingGate = await request(materialReview, adminToken, tenantA,
+      'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
+    assert.equal(pendingGate.status, 409);
+    assert.equal(pendingGate.body.error.code, 'EXECUTION_UNPLANNED_INPUT_REVIEW_REQUIRED');
+    const exceptionReview = `${exceptionsPath}/${exceptionId}/review`;
+    assert.equal((await request(exceptionReview, contractor2Token, tenantA,
+      'POST', { decision: 'approved' })).status, 403);
+    assert.equal((await request(exceptionReview, adminBToken, tenantB,
+      'POST', { decision: 'approved' })).status, 404);
+    assert.equal((await request(exceptionReview, adminToken, tenantA,
+      'POST', { decision: 'rejected' })).status, 422);
+    const reviewedException = await request(exceptionReview, adminToken, tenantA,
+      'POST', { decision: 'approved' });
+    assert.equal(reviewedException.status, 200, JSON.stringify(reviewedException.body));
+    assert.equal(reviewedException.body.data.review_status, 'approved');
+    assert.equal(reviewedException.body.data.reviewed_by, adminA);
+    assert.equal((await request(exceptionReview, adminToken, tenantA,
+      'POST', { decision: 'approved' })).status, 409);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.unplanned_input_submitted'",
+      [tenantA, materialOrderId]), 1);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.unplanned_input_reviewed'",
+      [tenantA, materialOrderId]), 1);
+    await assert.rejects(owner.query(
+      'UPDATE work_order_execution_exceptions SET work_order_execution_id=$1 WHERE id=$2',
+      [randomUUID(), exceptionId]), error => error.code === '23503');
+    await appClient.query('BEGIN');
+    await appClient.query("SELECT set_config('app.current_tenant', $1, true)", [tenantB]);
+    assert.equal((await appClient.query(
+      'SELECT id FROM work_order_execution_exceptions WHERE id=$1', [exceptionId])).rowCount, 0);
+    await appClient.query('COMMIT');
+
     const acceptedMaterialReport = await request(materialReview, adminToken, tenantA,
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
     assert.equal(acceptedMaterialReport.status, 200, JSON.stringify(acceptedMaterialReport.body));
@@ -696,6 +782,55 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(await count('work_order_inputs',
       'tenant_id=$1 AND work_order_id=$2', [tenantA, materialOrderId]), 2,
       'The declared quantities did not mutate planning');
+
+    // Rejection remains terminal for the exception, never authorizes the
+    // report by itself, and must not modify the immutable 0T.12 declaration.
+    const rejectedExceptionOrder = await request('/work-orders', adminToken, tenantA, 'POST',
+      { field_id: fieldA, type: 'inspection', title: 'Excepción rechazada' });
+    assert.equal(rejectedExceptionOrder.status, 201);
+    const exceptionOrderId = rejectedExceptionOrder.body.data.id;
+    assert.equal((await request(`/work-orders/${exceptionOrderId}/assignees`,
+      adminToken, tenantA, 'POST', { user_id: contractor2 })).status, 201);
+    for (const status of ['pending_approval', 'approved', 'assigned', 'in_progress']) {
+      const moved = await request(`/work-orders/${exceptionOrderId}/status`,
+        adminToken, tenantA, 'PATCH', { status });
+      assert.equal(moved.status, 200);
+    }
+    const otherOrder = await request(`/work-orders/${exceptionOrderId}`, adminToken, tenantA);
+    const otherStart = new Date(new Date(otherOrder.body.data.approved_at).getTime() + 50);
+    const otherReport = await request(`/work-orders/${exceptionOrderId}/executions`,
+      contractor2Token, tenantA, 'POST', {
+        ...executionPayload, started_at: otherStart.toISOString(),
+        finished_at: new Date(otherStart.getTime() + 50).toISOString(),
+        result_summary: 'Inspección con un insumo de contingencia declarado.'
+      });
+    assert.equal(otherReport.status, 201, JSON.stringify(otherReport.body));
+    const otherReportId = otherReport.body.data.id;
+    const rejectedExceptionPath =
+      `/work-orders/${exceptionOrderId}/executions/${otherReportId}/exceptions`;
+    const extraRejected = await request(rejectedExceptionPath, contractor2Token, tenantA,
+      'POST', { ...exceptionPayload, client_request_id: randomUUID() });
+    assert.equal(extraRejected.status, 201, JSON.stringify(extraRejected.body));
+    const rejectPath = `${rejectedExceptionPath}/${extraRejected.body.data.id}/review`;
+    const deniedException = await request(rejectPath, coordinatorToken, tenantA,
+      'POST', { decision: 'rejected', reason: 'No se justificó el uso de este producto.' });
+    assert.equal(deniedException.status, 200, JSON.stringify(deniedException.body));
+    assert.equal(deniedException.body.data.review_status, 'rejected');
+    const mayNotVerify = await request(
+      `/work-orders/${exceptionOrderId}/executions/${otherReportId}/review`,
+      coordinatorToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewNoFiles });
+    assert.equal(mayNotVerify.status, 409);
+    assert.equal(mayNotVerify.body.error.code, 'EXECUTION_UNPLANNED_INPUT_REVIEW_REQUIRED');
+    assert.equal((await request(
+      `/work-orders/${exceptionOrderId}/executions/${otherReportId}/review`,
+      coordinatorToken, tenantA, 'POST',
+      { decision: 'rejected', reason: 'La excepción fue rechazada, presentar nuevo parte.' })).status, 200);
+    assert.equal((await request(rejectedExceptionPath, contractor2Token, tenantA,
+      'POST', { ...exceptionPayload, client_request_id: randomUUID() })).status, 409);
+    assert.equal((await request(rejectedExceptionPath, contractor2Token, tenantA,
+      'POST', { ...exceptionPayload, client_request_id: extraRejected.body.data.input_id })).status, 422);
+
 
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
