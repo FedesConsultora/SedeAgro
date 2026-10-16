@@ -12,7 +12,7 @@ export async function up({ context: queryInterface }) {
     ALTER TABLE evidence_assets ADD CONSTRAINT execution_evidence_same_order_tenant_fk
       FOREIGN KEY (tenant_id, work_order_id, work_order_execution_id)
       REFERENCES work_order_executions(tenant_id, work_order_id, id)
-      ON DELETE RESTRICT;
+      ON DELETE CASCADE;
     CREATE INDEX idx_evidence_execution_history
       ON evidence_assets(tenant_id, work_order_id, work_order_execution_id, created_at DESC, id DESC)
       WHERE work_order_execution_id IS NOT NULL;
