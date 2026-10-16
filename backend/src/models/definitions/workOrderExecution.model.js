@@ -13,6 +13,7 @@ export function defineWorkOrderExecution(sequelize, DataTypes) {
     review_status: { type: DataTypes.STRING(24), allowNull: false, defaultValue: 'submitted' },
     reviewed_by: DataTypes.UUID,
     reviewed_at: DataTypes.DATE,
-    review_note: DataTypes.STRING(500)
+    review_note: DataTypes.STRING(500),
+    review_checklist: DataTypes.JSONB
   }, { tableName: 'work_order_executions' });
 }
