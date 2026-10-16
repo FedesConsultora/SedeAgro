@@ -415,7 +415,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     // Revocation invalidates new downloads regardless of prior upload success.
     await owner.query("UPDATE memberships SET status='blocked' WHERE tenant_id=$1 AND user_id=$2",
       [tenantA, contractor1]);
-    assert.equal((await request(contentRoute, contractorToken, tenantA)).status, 403);
+    assert.equal((await request(contentRoute, contractorToken, tenantA)).status, 401);
     await owner.query("UPDATE memberships SET status='active' WHERE tenant_id=$1 AND user_id=$2",
       [tenantA, contractor1]);
     assert.equal((await request(executionRoute, contractorToken, tenantA,
