@@ -29,6 +29,7 @@ import { decodeEvidenceContent, safeEvidenceFileName } from '../scouting/evidenc
 import { putPrivateEvidence, getPrivateEvidenceByteLength, getBoundedPrivateEvidence } from '../scouting/evidenceStorage.js';
 import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from '../scouting/evidenceIntegrity.js';
 import { canAttachExecutionEvidence, sameExecutionUpload, visibleExecutionEvidence, EXECUTION_EVIDENCE_LIMIT, ORDER_EVIDENCE_LIMIT } from './executionEvidencePolicy.js';
+import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -77,13 +78,30 @@ const executionSchema = z.object({
   result_summary: z.string().trim().min(10).max(2000)
 }).strict();
 
+const reviewChecklistSchema = z.object({
+  time_checked: z.literal(true),
+  area_checked: z.literal(true),
+  result_checked: z.literal(true),
+  operation_checked: z.literal(true),
+  evidence_basis: z.enum(['reviewed_files', 'no_files'])
+}).strict();
+
 const executionReviewSchema = z.object({
   decision: z.enum(['verified', 'rejected']),
-  reason: z.string().trim().min(10).max(500).optional()
+  reason: z.string().trim().min(10).max(500).optional(),
+  checklist: reviewChecklistSchema.optional()
 }).strict().superRefine((body, ctx) => {
   if (body.decision === 'rejected' && !body.reason) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
       message: 'El rechazo requiere una explicación.' });
+  }
+  if (body.decision === 'verified' && !body.checklist) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['checklist'],
+      message: 'La aceptación requiere un checklist de revisión explícito.' });
+  }
+  if (body.decision === 'rejected' && body.checklist) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['checklist'],
+      message: 'Los partes rechazados no deben registrar controles como aprobados.' });
   }
   if (body.decision === 'verified' && body.reason) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['reason'],
@@ -346,17 +364,57 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
     throw new HttpError(409, 'Esta declaración ya fue revisada.',
       undefined, 'EXECUTION_ALREADY_REVIEWED');
   }
+  // The order row is already locked, including against evidence uploads.
+  // A reviewer must distinguish files actually reviewed from acknowledged
+  // absence, and attached bytes must pass the same bounded hash verification
+  // as the private download endpoint (not simply metadata "present").
+  let attachmentCount = 0;
+  if (req.body.decision === 'verified') {
+    const attachments = await EvidenceAsset.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: order.id,
+        work_order_execution_id: report.id },
+      attributes: ['id', 'content_sha256', 'size_bytes'],
+      limit: EXECUTION_EVIDENCE_LIMIT + 1,
+      transaction: req.dbTransaction
+    });
+    attachmentCount = attachments.length;
+    if (!canAcceptReviewChecklist(order.type, req.body.checklist, attachmentCount)) {
+      throw new HttpError(409,
+        'Completá la revisión y especificá correctamente los archivos; aplicación y fertilización exigen respaldo privado.',
+        undefined, 'EXECUTION_REVIEW_CHECKLIST_REQUIRED');
+    }
+    for (const asset of attachments) {
+      const blobLength = await getPrivateEvidenceByteLength({
+        tenantId: req.tenantId, evidenceId: asset.id, transaction: req.dbTransaction
+      });
+      const bytes = shouldReadEvidenceBytes(asset.content_sha256, asset.size_bytes, blobLength)
+        ? await getBoundedPrivateEvidence({
+          tenantId: req.tenantId, evidenceId: asset.id, transaction: req.dbTransaction
+        }) : undefined;
+      const status = classifyEvidenceIntegrity({
+        expectedHash: asset.content_sha256, declaredSize: asset.size_bytes,
+        blobLength, bytes
+      });
+      if (status !== 'verified') {
+        throw new HttpError(409, 'Un archivo adjunto está ausente o no supera el control de integridad.',
+          undefined, 'EXECUTION_REVIEW_EVIDENCE_INTEGRITY_FAILED');
+      }
+    }
+  }
   await report.update({
     review_status: req.body.decision,
     reviewed_by: req.auth.user.id,
     reviewed_at: new Date(),
-    review_note: req.body.decision === 'rejected' ? req.body.reason : null
+    review_note: req.body.decision === 'rejected' ? req.body.reason : null,
+    review_checklist: req.body.decision === 'verified' ? req.body.checklist : null
   }, { transaction: req.dbTransaction });
   await AuditEvent.create({
     tenant_id: req.tenantId, actor_id: req.auth.user.id,
     action: 'work_order.execution_reviewed', entity_type: 'work_order',
     entity_id: order.id, before: { execution_id: report.id, review_status: 'submitted' },
-    after: { execution_id: report.id, review_status: report.review_status },
+    after: { execution_id: report.id, review_status: report.review_status,
+      ...(req.body.decision === 'verified' ? { checklist_recorded: true,
+        evidence_basis: req.body.checklist.evidence_basis, attachment_count: attachmentCount } : {}) },
     request_id: safeAuditRequestId(req.requestId)
   }, { transaction: req.dbTransaction });
   res.json({ data: report });
