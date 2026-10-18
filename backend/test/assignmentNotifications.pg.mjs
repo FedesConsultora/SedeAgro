@@ -312,7 +312,7 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       contractorToken, tenantA, 'PATCH', { status: 'completed' })).status, 403);
 
     // 0T.15: scoped read-only coordination inbox, without notes/tenant IDs.
-    const reviewQueue = '/work-orders/review-queue?page=0';
+    const reviewQueue = '/work-orders/review-queue';
     const earlyQueue = await request(reviewQueue, adminToken, tenantA);
     assert.equal(earlyQueue.status, 200, JSON.stringify(earlyQueue.body));
     assert.match(earlyQueue.headers.get('cache-control'), /private, no-store/);
