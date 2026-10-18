@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
-  reviewQueueUrl, validateReviewQueue } from '../services/workOrderReviewQueue.js';
+  reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
+  validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
 // order fetches a fresh authorized detail; the server owns every transition.
@@ -16,54 +17,65 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
-  const [response, setResponse] = useState(null);
-  const [loadedScope, setLoadedScope] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const headingRef = useRef(null);
+  const focusOnNavigation = useRef(false);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload);
+  const [requestState, setRequestState] = useState(null);
+  // A response can render ONLY against its own page/cursor/reload key.
+  // This avoids a frame showing the previous page during effect scheduling.
+  const current = requestState?.key === requestKey ? requestState : null;
+  const loading = !current || current.phase === 'loading';
+  const error = current?.phase === 'error' ? current.failure : null;
+  const shown = current?.phase === 'ready' ? current.result : null;
 
   useEffect(() => {
-    if (!available) {
-      setResponse(null);
-      setError('');
-      return undefined;
-    }
+    if (!available) return undefined;
     let active = true;
-    setResponse(null);
-    setLoading(true);
-    setError('');
-    setLoadedScope('');
-    api.request(reviewQueueUrl(cursor), { silent: true })
+    const controller = new AbortController();
+    setRequestState({ key: requestKey, phase: 'loading' });
+    api.request(reviewQueueUrl(cursor), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
-        if (active) { setResponse(validated); setLoadedScope(scope); }
+        if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
       })
       .catch(err => {
-        if (active) setError(err?.message || 'No se pudo consultar la bandeja de revisión.');
-      })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [api, available, cursor, page, reload, revision, tenantId, userId, scope]);
+        if (active) setRequestState({ key: requestKey, phase: 'error',
+          failure: reviewQueueFailure(err, cursor !== null) });
+      });
+    return () => { active = false; controller.abort(); };
+  }, [api, available, cursor, requestKey, tenantId, userId, scope]);
+
+  useEffect(() => {
+    if (shown && focusOnNavigation.current) {
+      focusOnNavigation.current = false;
+      headingRef.current?.focus();
+    }
+  }, [shown]);
 
   if (!available) return null;
-  const shown = loadedScope === scope ? response : null;
   const items = shown?.items ?? [];
   const changePage = direction => {
-    if (direction < 0) {
-      setPage(value => Math.max(0, value - 1));
-    } else if (shown?.hasMore && shown.nextCursor) {
+    if (loading || error || !shown) return;
+    if (direction < 0 && page > 0) {
+      focusOnNavigation.current = true;
+      setPage(value => value - 1);
+    } else if (direction > 0 && shown.hasMore && shown.nextCursor) {
+      focusOnNavigation.current = true;
       setCursors(previous => [...previous.slice(0, page + 1), shown.nextCursor]);
       setPage(page + 1);
     }
   };
   const refresh = () => {
+    focusOnNavigation.current = false;
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
   };
-  return <section className="orders-workspace__review-inbox" aria-labelledby="review-inbox-title">
+  return <section className="orders-workspace__review-inbox" aria-labelledby="review-inbox-title"
+    aria-busy={loading}>
     <div className="orders-workspace__review-heading">
       <div>
-        <h2 id="review-inbox-title">Pendientes de coordinación</h2>
+        <h2 id="review-inbox-title" ref={headingRef} tabIndex={-1}>Pendientes de coordinación</h2>
         <p>Orientación según datos actuales del servidor. La aprobación exige revisión humana,
           controles de integridad y validación nuevamente al guardar.</p>
       </div>
@@ -72,11 +84,17 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     </div>
     {loading && <p role="status">Consultando pendientes autorizados…</p>}
     {error && <div role="alert" className="orders-workspace__error">
-      <span>No se pudo cargar la bandeja. {error}</span>
-      <button type="button" className="ghost-action"
-        onClick={() => setReload(value => value + 1)}>Reintentar</button>
+      <span>{error.message}</span>
+      {error.expired
+        ? <button type="button" className="ghost-action"
+          onClick={refresh}>Iniciar nueva consulta</button>
+        : <button type="button" className="ghost-action"
+          onClick={() => setReload(value => value + 1)}>Reintentar</button>}
     </div>}
     {!loading && !error && shown && <>
+      <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
+        Página {page + 1}. {items.length} órdenes en esta página.
+      </p>
       {items.length === 0 && <p role="status">No hay órdenes en curso en esta página.</p>}
       <div className="orders-workspace__review-items">
         {items.map(item => <article key={item.id} className="orders-workspace__review-item">
@@ -93,9 +111,11 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       </div>
       <div className="orders-workspace__review-pagination">
         <span>Página {page + 1} · hasta 50 órdenes por página</span>
-        <button type="button" className="ghost-action" disabled={page === 0}
+        <button type="button" className="ghost-action" disabled={page === 0 || loading}
+          aria-label="Página anterior de pendientes"
           onClick={() => changePage(-1)}>Anterior</button>
-        <button type="button" className="ghost-action" disabled={!shown?.hasMore}
+        <button type="button" className="ghost-action" disabled={!shown?.hasMore || loading}
+          aria-label="Página siguiente de pendientes"
           onClick={() => changePage(1)}>Siguiente</button>
       </div>
     </>}
