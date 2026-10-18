@@ -5,6 +5,7 @@ import { mockData } from '../services/mockData.js';
 import { countWorkOrderFilters, filterWorkOrders } from '../services/workOrderFilters.js';
 import { WorkOrderFormModal } from '../components/WorkOrderFormModal.jsx';
 import { WorkOrderDetailDrawer } from '../components/WorkOrderDetailDrawer.jsx';
+import { WorkOrderReviewInbox } from '../components/WorkOrderReviewInbox.jsx';
 import './work-orders-workspace.css';
 
 const STATUS_ES = {
@@ -115,6 +116,7 @@ export function WorkOrdersPage({ focusOrderId = null }) {
         </section>
       )}
       {focusError && !error && <p className="orders-workspace__error" role="status">{focusError}</p>}
+      <WorkOrderReviewInbox revision={revision} onOpenOrder={setSelectedOrder} />
 
       {!error && (
         <>
