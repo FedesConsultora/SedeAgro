@@ -39,3 +39,27 @@ export function isCoordinationReviewer(role, dataMode, authenticated) {
   return dataMode === 'live' && authenticated === true &&
     (role === 'tenant_admin' || role === 'agronomic_coordinator');
 }
+
+/**
+ * A rejected cursor is not a transient request failure: sending it again
+ * cannot recover it. Never expose the signed cursor in UI messages.
+ */
+export function reviewQueueFailure(error, usedCursor) {
+  const expired = usedCursor && error?.status === 422 &&
+    error?.code === 'ORDER_REVIEW_CURSOR_INVALID';
+  if (expired) return {
+    expired: true,
+    message: 'El recorrido de pendientes venció o dejó de ser válido. Iniciá una consulta nueva.'
+  };
+  return { expired: false,
+    message: error?.message || 'No se pudo consultar la bandeja de revisión.' };
+}
+
+export function reviewQueueRequestKey(page, cursor, reload) {
+  if (!Number.isSafeInteger(page) || page < 0 ||
+      !Number.isSafeInteger(reload) || reload < 0 ||
+      (cursor !== null && typeof cursor !== 'string')) {
+    throw new Error('Navegación de revisión inválida.');
+  }
+  return JSON.stringify([page, cursor, reload]);
+}
