@@ -34,7 +34,7 @@ import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
 import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
 import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
-import { classifyReviewQueueItem, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
+import { classifyReviewQueueItem, selectReviewQueueReports, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
 import { issueReviewCursor, parseReviewCursor, ReviewCursorError } from './reviewQueueCursor.js';
 
 export const workOrdersRouter = Router();
@@ -281,13 +281,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
     throw new HttpError(409, 'El historial excede el límite de partes de la bandeja.',
       undefined, 'ORDER_REVIEW_QUEUE_REPORT_LIMIT');
   }
-  const latestReports = new Map();
-  for (const report of reports) {
-    const previous = latestReports.get(report.work_order_id);
-    if (!previous || (previous.review_status !== 'verified' && report.review_status === 'verified')) {
-      latestReports.set(report.work_order_id, report);
-    }
-  }
+  const latestReports = selectReviewQueueReports(reports);
   const selectedReportIds = [...latestReports.values()].map(report => report.id);
   const [planned, exceptions, evidence] = await Promise.all([
     WorkOrderInput.findAll({
