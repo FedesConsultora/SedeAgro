@@ -311,6 +311,26 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal((await request(`/work-orders/${orderId}/status`,
       contractorToken, tenantA, 'PATCH', { status: 'completed' })).status, 403);
 
+    // 0T.15: scoped read-only coordination inbox, without notes/tenant IDs.
+    const reviewQueue = '/work-orders/review-queue?page=0';
+    const earlyQueue = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(earlyQueue.status, 200, JSON.stringify(earlyQueue.body));
+    assert.match(earlyQueue.headers.get('cache-control'), /private, no-store/);
+    assert.equal(earlyQueue.body.pagination.page_size, 50);
+    assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
+    assert.equal((await request(reviewQueue, coordinatorToken, tenantA)).status, 200);
+    assert.equal((await request(reviewQueue, contractorToken, tenantA)).status, 403);
+    assert.equal((await request(reviewQueue, scoutToken, tenantA)).status, 403);
+    assert.equal((await request('/work-orders/review-queue?page=-1',
+      adminToken, tenantA)).status, 422);
+    assert.equal((await request('/work-orders/review-queue?page=1001',
+      adminToken, tenantA)).status, 422);
+    const otherTenantQueue = await request(reviewQueue, adminBToken, tenantB);
+    assert.equal(otherTenantQueue.status, 200);
+    assert.equal(otherTenantQueue.body.data.some(row => row.id === orderId), false);
+    assert.doesNotMatch(JSON.stringify(earlyQueue.body),
+      /PRIVATE_FIELD_NOTES|PRIVATE_INSTRUCTIONS|client_request_id|content_sha256|tenant_id/);
+
     const reportedStart = new Date(new Date(inProgress.body.data.approved_at).getTime() + 100);
     const reportedFinish = new Date(reportedStart.getTime() + 200);
     const executionPayload = {
@@ -332,6 +352,11 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const firstReportId = recorded.body.data.id;
     assert.equal(recorded.body.data.review_status, 'submitted');
     assert.equal(recorded.body.data.submitted_by, contractor1);
+    const submittedQueue = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(submittedQueue.status, 200);
+    assert.equal(submittedQueue.body.data.find(row => row.id === orderId).state, 'human_review');
+    assert.equal(submittedQueue.body.data.find(row => row.id === orderId).report_id, firstReportId);
+
     // 0T.10: the very same private BYTEA storage powers order execution
     // attachments. No scouting permission or evidence can cross the boundary.
     const privatePdf = Buffer.from('%PDF-1.4\\n1 0 obj<</Type /Catalog>>endobj\\n%%EOF\\n'.replaceAll('\\n', '\n'));
@@ -544,6 +569,11 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       });
     assert.equal(applicationReport.status, 201, JSON.stringify(applicationReport.body));
     const appReportId = applicationReport.body.data.id;
+    const missingApplicationEvidence = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(missingApplicationEvidence.status, 200);
+    assert.equal(missingApplicationEvidence.body.data.find(row => row.id === applicationId).state,
+      'awaiting_evidence');
+
     const applicationReview = `/work-orders/${applicationId}/executions/${appReportId}/review`;
     const applicationEvidence = `/work-orders/${applicationId}/executions/${appReportId}/evidence`;
     assert.equal((await request(applicationReview, adminToken, tenantA, 'POST',
@@ -629,6 +659,11 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       { ...filePayload, client_upload_id: randomUUID(), original_name: 'fertilizacion.pdf' });
     assert.equal(materialEvidence.status, 201);
     const materialReview = `/work-orders/${materialOrderId}/executions/${materialReportId}/review`;
+    const missingMaterialInputs = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(missingMaterialInputs.status, 200);
+    assert.equal(missingMaterialInputs.body.data.find(row => row.id === materialOrderId).state,
+      'awaiting_inputs');
+
     const prematureMaterialsReview = await request(materialReview, adminToken, tenantA,
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
     assert.equal(prematureMaterialsReview.status, 409);
@@ -732,6 +767,11 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.doesNotMatch(JSON.stringify(exceptionHistory.body), /client_request_id|tenant_id/);
     assert.equal((await request(listExceptions, contractorToken, tenantA)).status, 404);
     assert.equal((await request(listExceptions, adminBToken, tenantB)).status, 404);
+    const pendingExceptionQueue = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(pendingExceptionQueue.status, 200);
+    assert.equal(pendingExceptionQueue.body.data.find(row => row.id === materialOrderId).state,
+      'pending_exception');
+
     const pendingGate = await request(materialReview, adminToken, tenantA,
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
     assert.equal(pendingGate.status, 409);
@@ -765,12 +805,25 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       'SELECT id FROM work_order_execution_exceptions WHERE id=$1', [exceptionId])).rowCount, 0);
     await appClient.query('COMMIT');
 
+    const acceptedExceptionQueue = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(acceptedExceptionQueue.status, 200);
+    assert.equal(acceptedExceptionQueue.body.data.find(row => row.id === materialOrderId).state,
+      'human_review');
+
     const acceptedMaterialReport = await request(materialReview, adminToken, tenantA,
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles });
     assert.equal(acceptedMaterialReport.status, 200, JSON.stringify(acceptedMaterialReport.body));
+    const readyForClosure = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(readyForClosure.status, 200);
+    assert.equal(readyForClosure.body.data.find(row => row.id === materialOrderId).state,
+      'ready_for_closure');
     assert.deepEqual(acceptedMaterialReport.body.data.input_declaration.items, declared.items);
     assert.equal((await request(`/work-orders/${materialOrderId}/status`,
       adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 200);
+    const finishedMaterialOrder = await request(reviewQueue, adminToken, tenantA);
+    assert.equal(finishedMaterialOrder.status, 200);
+    assert.equal(finishedMaterialOrder.body.data.some(row => row.id === materialOrderId), false);
+
     assert.equal((await request(declarePath, contractor2Token, tenantA,
       'POST', quantities)).body.replayed, true,
       'Idempotent retry remains safe after close');
