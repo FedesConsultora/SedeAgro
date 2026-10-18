@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { validateReviewQueue, isCoordinationReviewer,
+import { reviewQueueUrl, validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
   state: 'human_review', reason: 'Requiere chequeo humano', report_id: 'r1' };
-const paged = { data: [entry], pagination: { page: 0, page_size: 50, has_more: false } };
+const paged = { data: [entry], pagination: { page_size: 50, has_more: false, next_cursor: null } };
 
 test('real authenticated coordination only, never mock, contractor or scout', () => {
   assert.equal(isCoordinationReviewer('tenant_admin', 'live', true), true);
@@ -18,21 +18,26 @@ test('real authenticated coordination only, never mock, contractor or scout', ()
   assert.equal(isCoordinationReviewer('tenant_admin', 'live', false), false);
 });
 
-test('server-authored state and page are validated, no local inference from order list', () => {
-  assert.equal(Object.keys(REVIEW_QUEUE_STATES).length, 8);
-  assert.deepEqual(validateReviewQueue(paged), { items: [entry], page: 0, hasMore: false });
-  assert.deepEqual(validateReviewQueue({ data: [], pagination: { page: 2,
-    page_size: 50, has_more: true } }, 2), { items: [], page: 2, hasMore: true });
+test('server-authored cursor and bounded page are validated without local offset guesses', () => {
+  const opaque = 'x'.repeat(60) + '.' + 'Y'.repeat(43);
+  assert.equal(reviewQueueUrl(), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl('a.b+/'), '/work-orders/review-queue?cursor=a.b%2B%2F');
+  assert.deepEqual(validateReviewQueue(paged),
+    { items: [entry], hasMore: false, nextCursor: null });
+  assert.deepEqual(validateReviewQueue({ data: [], pagination: {
+    page_size: 50, has_more: true, next_cursor: opaque } }),
+  { items: [], hasMore: true, nextCursor: opaque });
   assert.throws(() => validateReviewQueue({ ...paged, pagination: { ...paged.pagination,
-    page: 1 } }), /no es válida/);
-  assert.throws(() => validateReviewQueue({ ...paged, data: [{ ...entry,
-    state: 'automatically_verified' }] }), /no es válida/);
-  assert.throws(() => validateReviewQueue({ ...paged, data: [{ ...entry,
-    status: 'completed' }] }), /no es válida/);
-  assert.throws(() => validateReviewQueue({ ...paged, data: [{ ...entry,
-    reason: undefined }] }), /no es válida/);
-  assert.throws(() => validateReviewQueue({ ...paged, data: Array.from({ length: 51 }, () => entry) }),
-    /no es válida/);
+    page: 1 } }).pagination.has_more && { data: [], pagination: { page_size: 50,
+    has_more: true, next_cursor: null } }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ ...paged, data: [{
+    ...entry, state: 'automatically_verified' }] }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ ...paged, data: [{
+    ...entry, status: 'completed' }] }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ ...paged, data: [{
+    ...entry, reason: undefined }] }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ ...paged, data: Array.from({
+    length: 51 }, () => entry) }), /no es válida/);
 });
 
 test('inbox surfaces failure, clears previous data and opens authorized details only', () => {
@@ -43,7 +48,7 @@ test('inbox surfaces failure, clears previous data and opens authorized details 
   assert.match(ui, /setResponse\(null\)/);
   assert.match(ui, /if \(active\) setResponse\(validated\)/);
   assert.match(ui, /if \(active\) setError/);
-  assert.match(ui, /tenantId, userId/);
+  assert.match(ui, /tenantId, userId/);\n  assert.match(ui, /setCursors\\(\\[null\\]\\)/);\n  assert.match(ui, /WorkOrderReviewInboxSession key=\\{identity\\}/);
   assert.match(ui, /onOpenOrder\(\{ id: item.id, title: item.title \}\)/);
   assert.doesNotMatch(ui, /POST|PATCH|approve\(/);
   assert.match(page, /<WorkOrderReviewInbox revision=\{revision\} onOpenOrder=\{setSelectedOrder\}/);
