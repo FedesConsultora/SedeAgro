@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { reviewQueueUrl, validateReviewQueue, isCoordinationReviewer,
+import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
+  validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -65,4 +66,39 @@ test('inbox surfaces failure, clears previous data and opens authorized details 
   assert.match(ui, /onOpenOrder\(\{ id: item.id, title: item.title \}\)/);
   assert.doesNotMatch(ui, /POST|PATCH|approve\(/);
   assert.match(page, /<WorkOrderReviewInbox revision=\{revision\} onOpenOrder=\{setSelectedOrder\}/);
+});
+
+test('expired or transferred cursor produces a restart action, never repeated with same signed token', () => {
+  const failure = reviewQueueFailure({
+    status: 422, code: 'ORDER_REVIEW_CURSOR_INVALID', message: 'Cursor inválido'
+  }, true);
+  assert.equal(failure.expired, true);
+  assert.match(failure.message, /consulta nueva/);
+  assert.doesNotMatch(failure.message, /Cursor inválido/);
+  assert.equal(reviewQueueFailure({
+    status: 422, code: 'ORDER_REVIEW_CURSOR_INVALID'
+  }, false).expired, false,
+  'An invalid first-page payload must not be treated as an expired pagination cursor');
+  assert.equal(reviewQueueFailure({ status: 403, code: 'ORDER_REVIEW_CURSOR_INVALID',
+    message: 'Acceso denegado' }, true).expired, false,
+  'Role revocation must not be confused with cursor expiration');
+});
+
+test('network errors are retryable and never treated as valid empty inbox', () => {
+  const failure = reviewQueueFailure({ status: 0, code: 'NETWORK_ERROR' }, true);
+  assert.equal(failure.expired, false);
+  assert.match(failure.message, /No se pudo/);
+  assert.equal(reviewQueueFailure(new Error('Servidor temporalmente inaccesible'), true).expired, false);
+});
+
+test('page, cursor and retry generation fence asynchronous responses', () => {
+  const first = reviewQueueRequestKey(0, null, 0);
+  const second = reviewQueueRequestKey(1, 'signed.token', 0);
+  const retried = reviewQueueRequestKey(1, 'signed.token', 1);
+  assert.notEqual(first, second);
+  assert.notEqual(second, retried);
+  assert.equal(reviewQueueRequestKey(0, null, 0), first);
+  assert.throws(() => reviewQueueRequestKey(-1, null, 0), /inválida/);
+  assert.throws(() => reviewQueueRequestKey(0, { bogus: true }, 0), /inválida/);
+  assert.throws(() => reviewQueueRequestKey(0, null, NaN), /inválida/);
 });
