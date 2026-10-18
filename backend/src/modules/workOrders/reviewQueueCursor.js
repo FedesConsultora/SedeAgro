@@ -51,14 +51,16 @@ export function parseReviewCursor(token, { tenantId, userId }, nowMs = Date.now(
   const [body, mac] = token.split('.');
   const expected = signature(body);
   const provided = Buffer.from(mac, 'base64url');
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+  if (mac !== expected.toString('base64url') || provided.length !== expected.length ||
+      !timingSafeEqual(provided, expected)) {
     throw new ReviewCursorError();
   }
   let parsed;
   try { parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')); }
   catch { throw new ReviewCursorError(); }
   if (!parsed || !ISO.test(parsed.l) ||
-    !UUID.test(parsed.i) || Date.parse(parsed.l) > Date.parse(parsed.a) ||
+    !UUID.test(parsed.i) || !Number.isFinite(Date.parse(parsed.l)) ||
+    Date.parse(parsed.l) > Date.parse(parsed.a) ||
     Object.keys(parsed).sort().join(',') !== 'a,e,i,l,t,u,v') throw new ReviewCursorError();
   const { l, ...base } = parsed;
   validatePayload(base, tenantId, userId, nowMs);
