@@ -45,3 +45,26 @@
   .orders-workspace__review-item > button { width: 100%; min-height: 44px; }
   .orders-workspace__review-pagination button { min-height: 44px; }
 }
+
+/* 0T.17: focus restoration and screen-reader page announcements. */
+.orders-workspace__review-inbox h2:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 4px;
+  border-radius: 3px;
+}
+.orders-workspace__review-announcement {
+  font-size: .875rem;
+  color: #52665b;
+  margin: 0;
+}
+.orders-workspace__review-inbox .ghost-action:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 3px;
+}
+.orders-workspace__review-heading button,
+.orders-workspace__review-pagination button {
+  min-height: 44px;
+}
+.orders-workspace__review-inbox[aria-busy="true"] .orders-workspace__review-items {
+  pointer-events: none;
+}

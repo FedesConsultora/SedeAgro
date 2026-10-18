@@ -1,0 +1,18 @@
+# 0T.17 — Recuperación segura y accesibilidad de pendientes de coordinación
+
+## Estado de partida comprobado
+Se inspeccionó GitHub `main@f9f7f39b665701ece4f8934c0800c2be6715b13e`, sin PRs abiertos ni reservas ajenas. Desde 0T.16 la bandeja usa `next_cursor` firmado por usuario+empresa con expiración a los 15 minutos; el servidor devuelve `422 ORDER_REVIEW_CURSOR_INVALID` para tokens vencidos, ajenos o manipulados. El cliente estaba mostrando **Reintentar**, acción que reenviaba sin cambios el mismo cursor inválido. Además, entre un cambio de página y el efecto de consulta, el componente podía retener por un render el resultado de la página anterior sin asociarlo al cursor solicitado.
+
+## Entrega de producto
+- `reviewQueueFailure(error, usedCursor)` distingue específicamente el rechazo de cursor `422 ORDER_REVIEW_CURSOR_INVALID` (con cursor activo) y ofrece una explicación sin mostrar el token. No lo confunde con errores de autenticación, permisos, conexión o fallas transitorias.
+- Ante un cursor rechazado, el único camino visible es **Iniciar nueva consulta**. Esta acción vacía la pila de cursores, regresa a la primera página sin cursor y ejecuta una solicitud nueva. No hay un bucle automático de retries, ni se declara que una respuesta 422 confirmó una lista vacía.
+- Las fallas transitorias muestran **Reintentar** la página actual; los datos previos no aparecen como vigentes. No se reemplazan errores por datos demo.
+- Cada solicitud se asocia con `reviewQueueRequestKey(page,cursor,reload)`; los resultados se renderizan solo cuando el identificador coincide con el recorrido solicitado. Una consulta anterior no puede pintar una página diferente aunque complete con retraso. Además, al cambiar página/sesión/tenant se limpia el efecto y se aborta el `fetch` en curso con `AbortController`. El remount por identidad de 0T.16 se conserva.
+- Al pasar de página con teclado y completarse la lectura, el título de la bandeja recibe foco para indicar el contexto nuevo. Si la navegación falla, el foco llega a **Iniciar nueva consulta** o **Reintentar** en lugar de perderse cuando desaparece el botón anterior. Se incorporan `aria-busy`, `role=status` y `aria-live=polite` para anunciar el número de página/órdenes, foco visible y zonas táctiles mínimas de 44 px.
+- Los botones de aprobación/cierre permanecen **fuera** de la bandeja. Cada detalle se vuelve a consultar por API autorizada y todos los cambios de estado siguen bajo controles transaccionales del servidor.
+
+## Verificación y límites
+- Frontend: tests verifican respuesta cursor vs red/revocación, limpieza de tokens del recorrido, claves distintas ante cambio de página o retry, atributos accesibles, foco tras navegación/error y uso real de `AbortController`.
+- El build Vite valida JSX/CSS; los gates de GitHub Actions existentes ejecutan backend, frontend, PostgreSQL/PostGIS real, restauración con FORCE RLS, Chromium de sesión y navegador offline. **No se añade una prueba Playwright dedicada de la bandeja** ni se considera que el CI actual verifique por sí solo VoiceOver/TalkBack: hace falta QA manual y una aceptación E2E específica más adelante.
+- La incidencia transversal del modal `#86` permanece abierta para seguimiento de estabilidad Chromium; este bloque no modifica su script global ni relaja controles de accesibilidad.
+- Sin migraciones, cambios de backend/API, permisos/RLS, autenticación, inventario, scouting, GIS, offline, workers, VPS ni producción. Sin despliegue ni verificación física de campo. Retroceso de este bloque: revertir únicamente el PR de frontend; el contrato de cursor del servidor 0T.16 se mantiene.
