@@ -34,6 +34,7 @@ import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
 import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
 import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
+import { classifyReviewQueueItem, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
 
 export const workOrdersRouter = Router();
 
@@ -210,6 +211,97 @@ workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrder
     requested_by: req.auth.user.id
   }, { transaction: req.dbTransaction });
   res.status(201).json({ data: order });
+}));
+
+// Bounded, tenant-isolated advisory queue for coordinators. Do not use this
+// snapshot as an approval token: /review remains the transactional authority.
+workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHandler(async (req, res) => {
+  if (!['tenant_admin', 'agronomic_coordinator'].includes(req.auth.role.code)) {
+    throw new HttpError(403, 'Solo coordinación puede consultar pendientes de revisión.',
+      undefined, 'ORDER_REVIEW_QUEUE_FORBIDDEN');
+  }
+  const page = z.coerce.number().int().min(0).max(1000).safeParse(req.query.page ?? 0);
+  if (!page.success) throw new HttpError(422, 'Página de revisión inválida.',
+    undefined, 'ORDER_REVIEW_QUEUE_PAGE_INVALID');
+  const rows = await WorkOrder.findAll({
+    where: { tenant_id: req.tenantId, status: 'in_progress' },
+    attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: REVIEW_QUEUE_PAGE_SIZE + 1,
+    offset: page.data * REVIEW_QUEUE_PAGE_SIZE,
+    transaction: req.dbTransaction
+  });
+  const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
+  const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
+  const ids = orders.map(order => order.id);
+  if (!ids.length) {
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: [], pagination: { page: page.data, page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: false } });
+    return;
+  }
+  const reports = await WorkOrderExecution.findAll({
+    where: { tenant_id: req.tenantId, work_order_id: { [Op.in]: ids },
+      review_status: { [Op.in]: ['submitted', 'verified'] } },
+    attributes: ['id', 'work_order_id', 'review_status', 'submitted_by', 'input_declaration'],
+    transaction: req.dbTransaction
+  });
+  const latestReports = new Map();
+  for (const report of reports) {
+    const previous = latestReports.get(report.work_order_id);
+    if (!previous || (previous.review_status !== 'verified' && report.review_status === 'verified')) {
+      latestReports.set(report.work_order_id, report);
+    }
+  }
+  const selectedReportIds = [...latestReports.values()].map(report => report.id);
+  const [planned, exceptions, evidence] = await Promise.all([
+    WorkOrderInput.findAll({
+      where: { tenant_id: req.tenantId, work_order_id: { [Op.in]: ids } },
+      attributes: ['id', 'work_order_id'], transaction: req.dbTransaction
+    }),
+    selectedReportIds.length ? WorkOrderExecutionException.findAll({
+      where: { tenant_id: req.tenantId, work_order_execution_id: { [Op.in]: selectedReportIds } },
+      attributes: ['id', 'work_order_execution_id', 'review_status'],
+      limit: REVIEW_QUEUE_PAGE_SIZE * MAX_UNPLANNED_INPUTS + 1,
+      transaction: req.dbTransaction
+    }) : [],
+    selectedReportIds.length ? EvidenceAsset.findAll({
+      where: { tenant_id: req.tenantId, work_order_execution_id: { [Op.in]: selectedReportIds } },
+      attributes: ['id', 'work_order_execution_id'],
+      limit: REVIEW_QUEUE_PAGE_SIZE * EXECUTION_EVIDENCE_LIMIT + 1,
+      transaction: req.dbTransaction
+    }) : []
+  ]);
+  if (exceptions.length > REVIEW_QUEUE_PAGE_SIZE * MAX_UNPLANNED_INPUTS ||
+      evidence.length > REVIEW_QUEUE_PAGE_SIZE * EXECUTION_EVIDENCE_LIMIT) {
+    throw new HttpError(409, 'La bandeja supera los límites de evidencias del flujo.',
+      undefined, 'ORDER_REVIEW_QUEUE_DATA_LIMIT');
+  }
+  const countBy = (list, key) => list.reduce((map, item) => {
+    const value = item[key];
+    map.set(value, (map.get(value) || 0) + 1);
+    return map;
+  }, new Map());
+  const planCounts = countBy(planned, 'work_order_id');
+  const evidenceCounts = countBy(evidence, 'work_order_execution_id');
+  const exceptionsByReport = new Map();
+  for (const exception of exceptions) {
+    const current = exceptionsByReport.get(exception.work_order_execution_id) || [];
+    current.push(exception);
+    exceptionsByReport.set(exception.work_order_execution_id, current);
+  }
+  const data = orders.map(order => {
+    const report = latestReports.get(order.id);
+    return classifyReviewQueueItem({
+      order, report, plannedInputCount: planCounts.get(order.id) || 0,
+      exceptions: exceptionsByReport.get(report?.id) || [],
+      evidenceCount: evidenceCounts.get(report?.id) || 0,
+      reviewerId: req.auth.user.id
+    });
+  });
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ data, pagination: {
+    page: page.data, page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: hasMore
+  } });
 }));
 
 workOrdersRouter.get('/:id', requireCapability('orders.read'), asyncHandler(async (req, res) => {
