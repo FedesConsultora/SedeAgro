@@ -42,3 +42,17 @@ export function classifyReviewQueueItem({ order, report, plannedInputCount,
   return value('human_review',
     'Candidato a revisión humana: falta checklist y comprobar integridad de archivos al aprobar.');
 }
+
+// Report selection is deterministic across PostgreSQL execution plans.
+// A verified report permits coordination to evaluate closure; otherwise
+// prefer the newest submitted report (router loads created_at DESC, id DESC).
+export function selectReviewQueueReports(reports) {
+  const map = new Map();
+  for (const report of reports) {
+    const previous = map.get(report.work_order_id);
+    if (!previous || (report.review_status === 'verified' && previous.review_status !== 'verified')) {
+      map.set(report.work_order_id, report);
+    }
+  }
+  return map;
+}

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { Op } from 'sequelize';
+import { Op, fn, col, where } from 'sequelize';
 import {
   AgriculturalInput,
   AuditEvent,
@@ -34,7 +34,8 @@ import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
 import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
 import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
-import { classifyReviewQueueItem, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
+import { classifyReviewQueueItem, selectReviewQueueReports, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
+import { issueReviewCursor, parseReviewCursor, ReviewCursorError } from './reviewQueueCursor.js';
 
 export const workOrdersRouter = Router();
 
@@ -220,38 +221,67 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
     throw new HttpError(403, 'Solo coordinación puede consultar pendientes de revisión.',
       undefined, 'ORDER_REVIEW_QUEUE_FORBIDDEN');
   }
-  const page = z.coerce.number().int().min(0).max(1000).safeParse(req.query.page ?? 0);
-  if (!page.success) throw new HttpError(422, 'Página de revisión inválida.',
-    undefined, 'ORDER_REVIEW_QUEUE_PAGE_INVALID');
+  if (Object.keys(req.query).some(key => key !== 'cursor') ||
+      (req.query.cursor != null && typeof req.query.cursor !== 'string')) {
+    throw new HttpError(422, 'Parámetros de bandeja inválidos; usá el cursor del servidor.',
+      undefined, 'ORDER_REVIEW_CURSOR_INVALID');
+  }
+  let cursor;
+  try {
+    cursor = req.query.cursor
+      ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId, userId: req.auth.user.id })
+      : null;
+  } catch (error) {
+    if (!(error instanceof ReviewCursorError)) throw error;
+    throw new HttpError(422, error.message, undefined, error.code);
+  }
+  const anchor = cursor?.anchor || new Date();
+  // Millisecond canonicalization matches Sequelize's JS Date precision:
+  // timestamptz has microseconds and would otherwise skip rows when traversing.
+  const orderingTime = fn('date_trunc', 'milliseconds', col('created_at'));
+  const older = cursor ? {
+    [Op.or]: [
+      where(orderingTime, { [Op.lt]: cursor.lastDate }),
+      { [Op.and]: [
+        where(orderingTime, { [Op.eq]: cursor.lastDate }),
+        { id: { [Op.lt]: cursor.lastId } }
+      ] }
+    ]
+  } : {};
   const rows = await WorkOrder.findAll({
-    where: { tenant_id: req.tenantId, status: 'in_progress' },
+    where: { tenant_id: req.tenantId, status: 'in_progress',
+      created_at: { [Op.lte]: anchor }, ...older },
     attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
-    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    order: [[orderingTime, 'DESC'], ['id', 'DESC']],
     limit: REVIEW_QUEUE_PAGE_SIZE + 1,
-    offset: page.data * REVIEW_QUEUE_PAGE_SIZE,
     transaction: req.dbTransaction
   });
   const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
   const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
+  const nextCursor = hasMore ? issueReviewCursor({
+    tenantId: req.tenantId, userId: req.auth.user.id, anchor,
+    last: orders[orders.length - 1]
+  }) : null;
   const ids = orders.map(order => order.id);
   if (!ids.length) {
     res.set('Cache-Control', 'private, no-store');
-    res.json({ data: [], pagination: { page: page.data, page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: false } });
+    res.json({ data: [], pagination: { page_size: REVIEW_QUEUE_PAGE_SIZE,
+      has_more: false, next_cursor: null } });
     return;
   }
   const reports = await WorkOrderExecution.findAll({
     where: { tenant_id: req.tenantId, work_order_id: { [Op.in]: ids },
       review_status: { [Op.in]: ['submitted', 'verified'] } },
     attributes: ['id', 'work_order_id', 'review_status', 'submitted_by', 'input_declaration'],
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
+    limit: REVIEW_QUEUE_PAGE_SIZE * MAX_EXECUTION_REPORTS + 1,
     transaction: req.dbTransaction
   });
-  const latestReports = new Map();
-  for (const report of reports) {
-    const previous = latestReports.get(report.work_order_id);
-    if (!previous || (previous.review_status !== 'verified' && report.review_status === 'verified')) {
-      latestReports.set(report.work_order_id, report);
-    }
+  if (reports.length > REVIEW_QUEUE_PAGE_SIZE * MAX_EXECUTION_REPORTS) {
+    throw new HttpError(409, 'El historial excede el límite de partes de la bandeja.',
+      undefined, 'ORDER_REVIEW_QUEUE_REPORT_LIMIT');
   }
+  const latestReports = selectReviewQueueReports(reports);
   const selectedReportIds = [...latestReports.values()].map(report => report.id);
   const [planned, exceptions, evidence] = await Promise.all([
     WorkOrderInput.findAll({
@@ -300,7 +330,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   });
   res.set('Cache-Control', 'private, no-store');
   res.json({ data, pagination: {
-    page: page.data, page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: hasMore
+    page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: hasMore, next_cursor: nextCursor
   } });
 }));
 

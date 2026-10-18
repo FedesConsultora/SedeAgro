@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyReviewQueueItem, REVIEW_QUEUE_PAGE_SIZE,
-  REVIEW_QUEUE_STATES } from '../src/modules/workOrders/reviewQueuePolicy.js';
+  REVIEW_QUEUE_STATES, selectReviewQueueReports } from '../src/modules/workOrders/reviewQueuePolicy.js';
 
 const order = { id: 'o', title: 'Revisión lote', type: 'inspection',
   priority: 'normal', due_at: null, status: 'in_progress' };
@@ -55,4 +55,18 @@ test('invalid or incomplete server aggregates fail instead of fabricating readin
   assert.throws(() => classifyReviewQueueItem({ ...args, plannedInputCount: -1 }), /Incomplete/);
   assert.throws(() => classifyReviewQueueItem({ ...args, exceptions: null }), /Incomplete/);
   assert.throws(() => classifyReviewQueueItem({ ...args, order: { ...order, status: 'completed' } }), /Incomplete/);
+});
+
+test('verified report outranks pending, pending selection prefers deterministic newest ordered row', () => {
+  const sorted = [
+    { id: 'new', work_order_id: 'A', review_status: 'submitted' },
+    { id: 'older', work_order_id: 'A', review_status: 'submitted' },
+    { id: 'verified', work_order_id: 'A', review_status: 'verified' },
+    { id: 'newer', work_order_id: 'B', review_status: 'submitted' },
+    { id: 'olderB', work_order_id: 'B', review_status: 'submitted' }
+  ];
+  const selected = selectReviewQueueReports(sorted);
+  assert.equal(selected.get('A').id, 'verified');
+  assert.equal(selected.get('B').id, 'newer');
+  assert.equal(selectReviewQueueReports([]).size, 0);
 });

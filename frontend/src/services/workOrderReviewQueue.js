@@ -11,11 +11,19 @@ export const REVIEW_QUEUE_STATES = Object.freeze({
   ready_for_closure: 'Parte verificado; evaluar cierre'
 });
 
-export function validateReviewQueue(response, expectedPage = 0) {
+export function reviewQueueUrl(cursor = null) {
+  return '/work-orders/review-queue' +
+    (cursor == null ? '' : `?cursor=${encodeURIComponent(cursor)}`);
+}
+
+export function validateReviewQueue(response) {
   const { data, pagination } = response || {};
   if (!Array.isArray(data) || data.length > 50 || !pagination ||
-    pagination.page !== expectedPage || pagination.page_size !== 50 ||
+    pagination.page_size !== 50 ||
     typeof pagination.has_more !== 'boolean' ||
+    (pagination.has_more && (typeof pagination.next_cursor !== 'string' ||
+      pagination.next_cursor.length < 40 || pagination.next_cursor.length > 1024)) ||
+    (!pagination.has_more && pagination.next_cursor !== null) ||
     !data.every(item => item && typeof item.id === 'string' &&
       typeof item.title === 'string' && typeof item.type === 'string' &&
       item.status === 'in_progress' && typeof item.reason === 'string' &&
@@ -23,7 +31,8 @@ export function validateReviewQueue(response, expectedPage = 0) {
       (item.report_id === null || typeof item.report_id === 'string'))) {
     throw new Error('La respuesta de pendientes de coordinación no es válida.');
   }
-  return { items: data, page: pagination.page, hasMore: pagination.has_more };
+  return { items: data, hasMore: pagination.has_more,
+    nextCursor: pagination.next_cursor };
 }
 
 export function isCoordinationReviewer(role, dataMode, authenticated) {
