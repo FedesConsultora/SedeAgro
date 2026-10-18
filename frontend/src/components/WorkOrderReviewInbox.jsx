@@ -18,6 +18,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
   const headingRef = useRef(null);
+  const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
   const requestKey = reviewQueueRequestKey(page, cursor, reload);
   const [requestState, setRequestState] = useState(null);
@@ -51,6 +52,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       headingRef.current?.focus();
     }
   }, [shown]);
+
+  useEffect(() => {
+    // The page controls unmount on an error. Preserve the keyboard user's
+    // position by focusing the recovery action instead of dropping to body.
+    if (error && focusOnNavigation.current) {
+      focusOnNavigation.current = false;
+      errorActionRef.current?.focus();
+    }
+  }, [error]);
 
   if (!available) return null;
   const items = shown?.items ?? [];
@@ -86,9 +96,9 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     {error && <div role="alert" className="orders-workspace__error">
       <span>{error.message}</span>
       {error.expired
-        ? <button type="button" className="ghost-action"
+        ? <button type="button" ref={errorActionRef} className="ghost-action"
           onClick={refresh}>Iniciar nueva consulta</button>
-        : <button type="button" className="ghost-action"
+        : <button type="button" ref={errorActionRef} className="ghost-action"
           onClick={() => setReload(value => value + 1)}>Reintentar</button>}
     </div>}
     {!loading && !error && shown && <>
