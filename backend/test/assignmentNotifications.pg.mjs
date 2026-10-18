@@ -818,11 +818,12 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(readyForClosure.body.data.find(row => row.id === materialOrderId).state,
       'ready_for_closure');
     assert.deepEqual(acceptedMaterialReport.body.data.input_declaration.items, declared.items);
+    assert.equal((await request(`/work-orders/${materialOrderId}/status`,
+      adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 200);
     const finishedMaterialOrder = await request(reviewQueue, adminToken, tenantA);
     assert.equal(finishedMaterialOrder.status, 200);
     assert.equal(finishedMaterialOrder.body.data.some(row => row.id === materialOrderId), false);
-    assert.equal((await request(`/work-orders/${materialOrderId}/status`,
-      adminToken, tenantA, 'PATCH', { status: 'completed' })).status, 200);
+
     assert.equal((await request(declarePath, contractor2Token, tenantA,
       'POST', quantities)).body.replayed, true,
       'Idempotent retry remains safe after close');
