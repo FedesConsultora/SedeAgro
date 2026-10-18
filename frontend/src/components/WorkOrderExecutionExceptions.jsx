@@ -92,6 +92,9 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged, onRead
     if (busy || !activeReportId || !loaded) return;
     setBusy(true);
     setError('');
+    // A pending write may already have committed after a network timeout.
+    // Do not let coordination approve from an old, previously valid snapshot.
+    onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'loading', items: [] });
     try {
       const body = makeExceptionPayload(options, inputId, quantity, reason, requestId);
       const response = await api.request(
@@ -104,6 +107,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged, onRead
     } catch (err) {
       // The same UUID and inputs remain for a network-ambiguous retry.
       setError(err?.message || 'No se confirmó la excepción. Podés reintentar.');
+      onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'error', items: [] });
     } finally { setBusy(false); }
   };
 
@@ -118,6 +122,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged, onRead
       '¿Aprobás administrativamente esta excepción de insumo no previsto? Esto no acredita consumo físico.')) return;
     setBusy(true);
     setError('');
+    onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'loading', items: [] });
     try {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/exceptions/${encodeURIComponent(item.id)}/review`,
@@ -131,6 +136,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged, onRead
       onChanged?.();
     } catch (err) {
       setError(err?.message || 'No se confirmó la revisión.');
+      onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'error', items: [] });
     } finally { setBusy(false); }
   };
 
