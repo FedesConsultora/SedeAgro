@@ -27,3 +27,21 @@
   .orders-workspace__search { flex-basis: 100%; }
   .orders-workspace__row { min-width: 650px; }
 }
+
+/* 0T.15: advisory coordination inbox; the detail and server own approval. */
+.orders-workspace__review-inbox { padding: 16px; border: 1px solid #d6e4dc; border-radius: 12px; display: grid; gap: 12px; }
+.orders-workspace__review-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.orders-workspace__review-heading h2 { margin: 0 0 6px; font-size: 1.1rem; }
+.orders-workspace__review-heading p { margin: 0; max-width: 68ch; line-height: 1.5; }
+.orders-workspace__review-items { display: grid; gap: 8px; }
+.orders-workspace__review-item { border: 1px solid #dce8e2; border-radius: 10px; padding: 12px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.orders-workspace__review-item-copy { display: grid; gap: 4px; min-width: 0; }
+.orders-workspace__review-item-copy span { font-weight: 600; font-size: .9rem; }
+.orders-workspace__review-item-copy p { margin: 0; font-size: .88rem; line-height: 1.4; overflow-wrap: anywhere; }
+.orders-workspace__review-pagination { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.orders-workspace__review-pagination span { margin-right: auto; }
+@media (max-width: 600px) {
+  .orders-workspace__review-inbox { padding: 12px; }
+  .orders-workspace__review-item > button { width: 100%; min-height: 44px; }
+  .orders-workspace__review-pagination button { min-height: 44px; }
+}
