@@ -94,7 +94,20 @@ try {
   await farmOpener.click();
   const farmDialog = page1.getByRole('dialog', { name: 'Nuevo establecimiento' });
   await farmDialog.waitFor();
-  assert.equal(await farmDialog.evaluate(el => el === document.activeElement), true);
+  // The final tab stop (Crear) is intentionally disabled while the real
+  // producer lookup loads. Wait for that observable state, not a fixed sleep:
+  // otherwise Shift+Tab correctly lands on a different enabled control and
+  // an accessibility assertion becomes timing-dependent.
+  await page1.waitForFunction(() => {
+    const dialog = [...document.querySelectorAll('[role="dialog"]')]
+      .find(node => node.getAttribute('aria-labelledby') &&
+        node.textContent.includes('Nuevo establecimiento'));
+    const create = dialog && [...dialog.querySelectorAll('button')]
+      .find(node => node.textContent.trim() === 'Crear');
+    return Boolean(create && !create.disabled);
+  }, null, { timeout: 10000 });
+  assert.equal(await farmDialog.evaluate(el => el === document.activeElement), true,
+    'Dialog focus must remain trapped while loading form dependencies');
   await page1.keyboard.press('Shift+Tab');
   assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true })
     .evaluate(el => el === document.activeElement), true);

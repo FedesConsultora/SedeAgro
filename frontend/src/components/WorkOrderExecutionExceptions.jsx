@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { reportSignature } from '../services/executionReviewReadiness.js';
 import { useSession } from '../context/SessionContext.jsx';
 import {
   exceptionsForReport, canProposeException, canReviewExceptionUI,
@@ -11,7 +12,7 @@ const LABELS = {
   rejected: 'Excepción rechazada — corresponde presentar un nuevo parte'
 };
 
-export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
+export function WorkOrderExecutionExceptions({ order, reports, onChanged, onReadinessChanged }) {
   const { api, dataMode, session } = useSession();
   const live = dataMode === 'live' && session?.authenticated === true;
   const userId = session?.user?.id;
@@ -29,6 +30,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
   const [reviewReasons, setReviewReasons] = useState({});
   const [busy, setBusy] = useState(false);
   const canOffer = reports.some(report => canProposeException(order, report, userId, live));
+  const signature = reportSignature(reports);
 
   useEffect(() => {
     if (!live || reports.length === 0) return undefined;
@@ -36,6 +38,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
     setItems([]);
     setLoaded(false);
     setError('');
+    onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'loading', items: [] });
     api.request(`/work-orders/${encodeURIComponent(order.id)}/execution-exceptions`, { silent: true })
       .then(response => {
         if (!Array.isArray(response?.data) || !response.data.every(item =>
@@ -43,12 +46,21 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
           reports.some(report => report.id === item.work_order_execution_id))) {
           throw new Error('El servidor devolvió excepciones inválidas para esta orden.');
         }
-        if (active) setItems(response.data);
+        if (active) {
+          setItems(response.data);
+          onReadinessChanged?.({ orderId: order.id, reportSignature: signature,
+            phase: 'ready', items: response.data });
+        }
       })
-      .catch(err => { if (active) setError(err?.message || 'No se pudieron consultar las excepciones.'); })
+      .catch(err => {
+        if (active) {
+          setError(err?.message || 'No se pudieron consultar las excepciones.');
+          onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'error', items: [] });
+        }
+      })
       .finally(() => { if (active) setLoaded(true); });
     return () => { active = false; };
-  }, [api, live, order.id, reports, revision, userId]);
+  }, [api, live, order.id, reports, signature, revision, userId, onReadinessChanged]);
 
   useEffect(() => {
     if (!canOffer || !live) return undefined;
@@ -80,6 +92,9 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
     if (busy || !activeReportId || !loaded) return;
     setBusy(true);
     setError('');
+    // A pending write may already have committed after a network timeout.
+    // Do not let coordination approve from an old, previously valid snapshot.
+    onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'loading', items: [] });
     try {
       const body = makeExceptionPayload(options, inputId, quantity, reason, requestId);
       const response = await api.request(
@@ -92,6 +107,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
     } catch (err) {
       // The same UUID and inputs remain for a network-ambiguous retry.
       setError(err?.message || 'No se confirmó la excepción. Podés reintentar.');
+      onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'error', items: [] });
     } finally { setBusy(false); }
   };
 
@@ -106,6 +122,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
       '¿Aprobás administrativamente esta excepción de insumo no previsto? Esto no acredita consumo físico.')) return;
     setBusy(true);
     setError('');
+    onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'loading', items: [] });
     try {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/exceptions/${encodeURIComponent(item.id)}/review`,
@@ -119,6 +136,7 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
       onChanged?.();
     } catch (err) {
       setError(err?.message || 'No se confirmó la revisión.');
+      onReadinessChanged?.({ orderId: order.id, reportSignature: signature, phase: 'error', items: [] });
     } finally { setBusy(false); }
   };
 
@@ -134,14 +152,14 @@ export function WorkOrderExecutionExceptions({ order, reports, onChanged }) {
     </div>}
     {reports.map(report => {
       const linked = exceptionsForReport(items, report.id);
-      const canAdd = loaded && canProposeException(order, report, userId, live, linked.length) &&
+      const canAdd = loaded && !error && canProposeException(order, report, userId, live, linked.length) &&
         options.length > 0;
       const plannedIds = new Set((order.WorkOrderInputs || []).map(line => line.input_id));
       const takenIds = new Set(linked.map(item => item.input_id));
       const available = options.filter(option => !plannedIds.has(option.id) && !takenIds.has(option.id));
       return <div key={report.id} className="order-detail__execution-record">
         <strong>Parte {report.id.slice(0, 8)}… — excepciones: {linked.length}/{MAX_UNPLANNED_INPUTS}</strong>
-        {loaded && linked.length === 0 && <p>Sin insumos no previstos declarados.</p>}
+        {loaded && !error && linked.length === 0 && <p>Sin insumos no previstos declarados.</p>}
         {linked.map(item => <article key={item.id} className="order-detail__input-line">
           <strong>{item.input_name}</strong>
           <span>Informado: {item.quantity} {item.unit}</span>
