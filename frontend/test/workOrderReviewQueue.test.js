@@ -27,9 +27,10 @@ test('server-authored cursor and bounded page are validated without local offset
   assert.deepEqual(validateReviewQueue({ data: [], pagination: {
     page_size: 50, has_more: true, next_cursor: opaque } }),
   { items: [], hasMore: true, nextCursor: opaque });
-  assert.throws(() => validateReviewQueue({ ...paged, pagination: { ...paged.pagination,
-    page: 1 } }).pagination.has_more && { data: [], pagination: { page_size: 50,
-    has_more: true, next_cursor: null } }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ data: [], pagination: {
+    page_size: 50, has_more: true, next_cursor: null } }), /no es válida/);
+  assert.throws(() => validateReviewQueue({ data: [], pagination: {
+    page_size: 50, has_more: false, next_cursor: opaque } }), /no es válida/);
   assert.throws(() => validateReviewQueue({ ...paged, data: [{
     ...entry, state: 'automatically_verified' }] }), /no es válida/);
   assert.throws(() => validateReviewQueue({ ...paged, data: [{
