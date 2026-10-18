@@ -830,6 +830,85 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       'POST', { ...exceptionPayload, client_request_id: randomUUID() })).status, 409);
 
 
+    // 0T.14: integrated correction chain. A rejected exception + rejected
+    // original report remain immutable; a new report can be independently
+    // reviewed and completed, with no rewrite of the rejected history.
+    const correctedStart = new Date(otherStart.getTime() + 300);
+    const correctedReport = await request(
+      `/work-orders/${exceptionOrderId}/executions`, contractor2Token, tenantA, 'POST', {
+        ...executionPayload,
+        started_at: correctedStart.toISOString(),
+        finished_at: new Date(correctedStart.getTime() + 100).toISOString(),
+        result_summary: 'Presentación corregida luego de revisión de insumo imprevisto.'
+      });
+    assert.equal(correctedReport.status, 201, JSON.stringify(correctedReport.body));
+    const correctedReportId = correctedReport.body.data.id;
+    assert.notEqual(correctedReportId, otherReportId,
+      'A correction must be a new report, never overwrite the original');
+    const correctedExceptionRoute =
+      `/work-orders/${exceptionOrderId}/executions/${correctedReportId}/exceptions`;
+    const correctedRequestId = randomUUID();
+    const correctedInputs = { ...exceptionPayload, client_request_id: correctedRequestId,
+      declared_quantity: '0.25',
+      reason: 'Se documentó el uso excepcional y se solicita su autorización.' };
+    const correctedException = await request(correctedExceptionRoute, contractor2Token,
+      tenantA, 'POST', correctedInputs);
+    assert.equal(correctedException.status, 201, JSON.stringify(correctedException.body));
+    const correctedExceptionId = correctedException.body.data.id;
+    const [firstRetry, secondRetry] = await Promise.all([
+      request(correctedExceptionRoute, contractor2Token, tenantA, 'POST', correctedInputs),
+      request(correctedExceptionRoute, contractor2Token, tenantA, 'POST', correctedInputs)
+    ]);
+    assert.equal(firstRetry.status, 200, JSON.stringify(firstRetry.body));
+    assert.equal(secondRetry.status, 200, JSON.stringify(secondRetry.body));
+    assert.equal(firstRetry.body.data.id, correctedExceptionId);
+    assert.equal(secondRetry.body.data.id, correctedExceptionId);
+    const blockedCorrectedReview = await request(
+      `/work-orders/${exceptionOrderId}/executions/${correctedReportId}/review`,
+      coordinatorToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewNoFiles });
+    assert.equal(blockedCorrectedReview.status, 409);
+    assert.equal(blockedCorrectedReview.body.error.code,
+      'EXECUTION_UNPLANNED_INPUT_REVIEW_REQUIRED');
+    const approvedCorrection = await request(
+      `${correctedExceptionRoute}/${correctedExceptionId}/review`,
+      adminToken, tenantA, 'POST', { decision: 'approved' });
+    assert.equal(approvedCorrection.status, 200, JSON.stringify(approvedCorrection.body));
+    assert.equal(approvedCorrection.body.data.reviewed_by, adminA);
+    const acceptedCorrection = await request(
+      `/work-orders/${exceptionOrderId}/executions/${correctedReportId}/review`,
+      coordinatorToken, tenantA, 'POST',
+      { decision: 'verified', checklist: checkedReviewNoFiles });
+    assert.equal(acceptedCorrection.status, 200, JSON.stringify(acceptedCorrection.body));
+    assert.equal(acceptedCorrection.body.data.review_status, 'verified');
+    const closure = await request(`/work-orders/${exceptionOrderId}/status`,
+      coordinatorToken, tenantA, 'PATCH', { status: 'completed' });
+    assert.equal(closure.status, 200, JSON.stringify(closure.body));
+    const correctedHistory = await request(`/work-orders/${exceptionOrderId}`,
+      coordinatorToken, tenantA);
+    assert.equal(correctedHistory.status, 200);
+    const pastReport = correctedHistory.body.data.WorkOrderExecutions.find(x => x.id === otherReportId);
+    const latestReport = correctedHistory.body.data.WorkOrderExecutions.find(x => x.id === correctedReportId);
+    assert.equal(pastReport.review_status, 'rejected');
+    assert.equal(latestReport.review_status, 'verified');
+    const allExceptions = await request(
+      `/work-orders/${exceptionOrderId}/execution-exceptions`, coordinatorToken, tenantA);
+    assert.equal(allExceptions.status, 200);
+    assert.deepEqual(allExceptions.body.data.map(x => x.review_status).sort(),
+      ['approved', 'rejected']);
+    assert.equal(allExceptions.body.data.find(x => x.work_order_execution_id === otherReportId).id,
+      extraRejected.body.data.id);
+    assert.equal(allExceptions.body.data.find(x => x.work_order_execution_id === correctedReportId).id,
+      correctedExceptionId);
+    assert.equal((await request(
+      `/work-orders/${exceptionOrderId}/execution-exceptions`, adminBToken, tenantB)).status, 404);
+    assert.equal((await request(correctedExceptionRoute, contractor2Token, tenantA,
+      'POST', { ...correctedInputs, client_request_id: randomUUID() })).status, 409);
+    assert.equal(await count('audit_events',
+      "tenant_id=$1 AND entity_id=$2 AND action='work_order.unplanned_input_submitted'",
+      [tenantA, exceptionOrderId]), 2,
+      'Repeated retries must not create extra unplanned-input records or audit writes');
+
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
       { field_id: fieldA, type: 'inspection', title: 'Rollback fixture' });
