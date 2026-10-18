@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
 import { WorkOrderExecutionExceptions } from './WorkOrderExecutionExceptions.jsx';
+import { exceptionReadinessForReview } from '../services/executionReviewReadiness.js';
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
@@ -33,6 +34,8 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [attest, setAttest] = useState(false);
   const [reviewReason, setReviewReason] = useState({});
   const [reviewChecks, setReviewChecks] = useState({});
+  const [exceptionReadiness, setExceptionReadiness] = useState(null);
+  const onReadinessChanged = useCallback(next => setExceptionReadiness(next), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -62,6 +65,13 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
 
   const review = async (report, decision) => {
     if (!canReviewExecutionReport(order, report, role, userId, live) || busy) return;
+    if (decision === 'verified') {
+      const readiness = exceptionReadinessForReview(order, report, exceptionReadiness);
+      if (!readiness.allowed) {
+        setError(readiness.reason);
+        return;
+      }
+    }
     let checklist;
     try {
       if (decision === 'verified') {
@@ -187,9 +197,14 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
           <textarea maxLength={500} rows={2} value={reviewReason[report.id] || ''}
             disabled={busy} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
         </label>
+        {!exceptionReadinessForReview(order, report, exceptionReadiness).allowed &&
+          <p className="order-detail__footnote" role="status">
+            {exceptionReadinessForReview(order, report, exceptionReadiness).reason}
+          </p>}
         <div className="order-detail__execution-actions">
           <button className="primary-action" type="button"
-            disabled={busy || hasPlannedInputsWithoutDeclaration(order, report)}
+            disabled={busy || hasPlannedInputsWithoutDeclaration(order, report) ||
+              !exceptionReadinessForReview(order, report, exceptionReadiness).allowed}
             onClick={() => void review(report, 'verified')}>Aceptar revisión</button>
           <button className="ghost-action" type="button" disabled={busy}
             onClick={() => void review(report, 'rejected')}>Rechazar parte</button>
@@ -197,7 +212,8 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       </div>}
     </article>)}
     <WorkOrderExecutionEvidence order={order} reports={reports} onChanged={onChanged} />
-    <WorkOrderExecutionExceptions order={order} reports={reports} onChanged={onChanged} />
+    <WorkOrderExecutionExceptions order={order} reports={reports}
+      onChanged={onChanged} onReadinessChanged={onReadinessChanged} />
     {reports.some(item => item.review_status === 'verified') &&
       <p role="status" className="order-detail__notice">
         Existe un parte revisado; la coordinación puede completar administrativamente la orden.
