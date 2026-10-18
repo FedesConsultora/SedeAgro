@@ -317,13 +317,16 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(earlyQueue.status, 200, JSON.stringify(earlyQueue.body));
     assert.match(earlyQueue.headers.get('cache-control'), /private, no-store/);
     assert.equal(earlyQueue.body.pagination.page_size, 50);
+    assert.equal(earlyQueue.body.pagination.has_more, false);
+    assert.equal(earlyQueue.body.pagination.next_cursor, null);
     assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
     assert.equal((await request(reviewQueue, coordinatorToken, tenantA)).status, 200);
     assert.equal((await request(reviewQueue, contractorToken, tenantA)).status, 403);
     assert.equal((await request(reviewQueue, scoutToken, tenantA)).status, 403);
-    assert.equal((await request('/work-orders/review-queue?page=-1',
-      adminToken, tenantA)).status, 422);
-    assert.equal((await request('/work-orders/review-queue?page=1001',
+    assert.equal((await request('/work-orders/review-queue?page=1',
+      adminToken, tenantA)).status, 422,
+    'Offset pagination is deliberately unsupported after 0T.16');
+    assert.equal((await request('/work-orders/review-queue?cursor=bad-signature',
       adminToken, tenantA)).status, 422);
     const otherTenantQueue = await request(reviewQueue, adminBToken, tenantB);
     assert.equal(otherTenantQueue.status, 200);
@@ -961,6 +964,64 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       "tenant_id=$1 AND entity_id=$2 AND action='work_order.unplanned_input_submitted'",
       [tenantA, exceptionOrderId]), 2,
       'Repeated retries must not create extra unplanned-input records or audit writes');
+
+    // 0T.16: keyset paging in the same tenant: added orders must not shift
+    // existing pages, even if a previously displayed order leaves the inbox.
+    const cursorFixtures = (await owner.query(`
+      INSERT INTO work_orders
+        (tenant_id, field_id, type, status, title, requested_by, created_at, updated_at)
+      SELECT $1, $2, 'inspection', 'in_progress', 'Cursor fixture ' || g, $3,
+        clock_timestamp() - interval '5 minutes' + (g || ' milliseconds')::interval,
+        clock_timestamp()
+      FROM generate_series(1,60) g RETURNING id
+    `, [tenantA, fieldA, adminA])).rows.map(row => row.id);
+    assert.equal(cursorFixtures.length, 60);
+    const cursorPageOne = await request('/work-orders/review-queue', adminToken, tenantA);
+    assert.equal(cursorPageOne.status, 200, JSON.stringify(cursorPageOne.body));
+    assert.equal(cursorPageOne.body.data.length, 50);
+    assert.equal(cursorPageOne.body.pagination.has_more, true);
+    const reviewCursor = cursorPageOne.body.pagination.next_cursor;
+    assert.equal(typeof reviewCursor, 'string');
+    assert.ok(reviewCursor.length > 40 && reviewCursor.length < 1024);
+    const firstIds = new Set(cursorPageOne.body.data.map(item => item.id));
+    assert.equal(firstIds.size, 50);
+    const afterFirstPage = await insert(
+      `INSERT INTO work_orders
+        (tenant_id, field_id, type, status, title, requested_by, created_at)
+       VALUES ($1,$2,'inspection','in_progress','New order after snapshot',$3,
+         clock_timestamp() + interval '1 second') RETURNING id`,
+      [tenantA, fieldA, adminA]);
+    const pathNext = `/work-orders/review-queue?cursor=${encodeURIComponent(reviewCursor)}`;
+    const cursorPageTwo = await request(pathNext, adminToken, tenantA);
+    assert.equal(cursorPageTwo.status, 200, JSON.stringify(cursorPageTwo.body));
+    const secondIds = cursorPageTwo.body.data.map(item => item.id);
+    assert.ok(secondIds.length >= 10);
+    assert.ok(secondIds.every(id => !firstIds.has(id)));
+    assert.ok(!secondIds.includes(afterFirstPage));
+    assert.equal(cursorPageTwo.body.pagination.has_more, false);
+    assert.equal(cursorPageTwo.body.pagination.next_cursor, null);
+    assert.equal((await request(pathNext, coordinatorToken, tenantA)).status, 422,
+      'Even a member of the same tenant cannot replay a different reviewer cursor');
+    assert.equal((await request(pathNext, adminBToken, tenantB)).status, 422,
+      'A cursor cannot be transferred to another tenant');
+    const tampered = reviewCursor.slice(0, -1) + (reviewCursor.endsWith('a') ? 'b' : 'a');
+    assert.equal((await request(
+      `/work-orders/review-queue?cursor=${encodeURIComponent(tampered)}`,
+      adminToken, tenantA)).status, 422);
+    const repeatSecond = await request(pathNext, adminToken, tenantA);
+    assert.equal(repeatSecond.status, 200);
+    assert.deepEqual(repeatSecond.body.data.map(item => item.id), secondIds,
+      'Cursor must be deterministic for unchanged rows');
+    // A deleted/moved status before the cursor must not shift the next page.
+    const firstFixtureId = cursorPageOne.body.data.find(item => cursorFixtures.includes(item.id))?.id;
+    assert.ok(firstFixtureId);
+    await owner.query(`UPDATE work_orders SET status='completed' WHERE id=$1`, [firstFixtureId]);
+    const afterChangeSecond = await request(pathNext, adminToken, tenantA);
+    assert.equal(afterChangeSecond.status, 200);
+    assert.deepEqual(afterChangeSecond.body.data.map(item => item.id), secondIds,
+      'A status change on an earlier page must not shift keyset results');
+    assert.equal((await request('/work-orders/review-queue', adminBToken, tenantB)).body.data
+      .some(item => cursorFixtures.includes(item.id)), false);
 
     // Explicit transaction rollback: neither relationship nor notification survives.
     const rollbackOrder = await request('/work-orders', adminToken, tenantA, 'POST',
