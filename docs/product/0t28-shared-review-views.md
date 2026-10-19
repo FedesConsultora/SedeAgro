@@ -1,0 +1,23 @@
+# 0T.28 — Vistas de coordinación compartidas dentro de una empresa
+
+## Contrato
+Una vista guardada es un nombre y exactamente seis criterios de consulta, **no una copia de órdenes ni una concesión de acceso**. Cada usuario de coordinación conserva hasta 10 vistas propias. Por defecto siguen siendo **privadas**. Un usuario con rol vigente `tenant_admin`, `orders.write`, sesión válida y módulo `work_orders` habilitado puede compartir o revocar la visibilidad de **sus propias** vistas. Las vistas compartidas aparecen además en la lista de coordinadores y otros administradores de esa misma empresa, en modalidad **solo lectura**. No habilita ver información, órdenes, notas, partes ni evidencias que la API de bandeja ya no autorice.
+
+## Persistencia y autorización
+La migración `202610190002_review_queue_shared_views.js` añade `visibility varchar(16) NOT NULL DEFAULT 'private' CHECK ('private','shared')` a `work_order_review_views`. Conserva la FK `(tenant_id,user_id)` a membresía, `ENABLE/FORCE ROW LEVEL SECURITY` y la política por tenant de 0T.27. Añade índice único **por empresa** para `lower(name)` solo cuando `visibility='shared'`, y un índice parcial de lectura. No se exporta ni guarda ningún cursor HMAC.
+
+- `GET /api/v1/work-orders/review-queue/views`: 10 vistas propias como máximo + hasta 20 de otros administradores **activos** y del mismo tenant. Devuelve solo `id,name,filters,created_at,updated_at,visibility,source` con `source=mine|shared`. Las propias, aun cuando estén compartidas, se presentan una sola vez. No devuelve identidades del creador, tenant IDs ni metadatos privados. Un administrador degradado o suspendido deja de ser fuente visible de vistas compartidas.
+- `POST .../views`: crea **privada** como antes, con 10 máximo de propiedad del miembro. La solicitud nunca admite `visibility` inicial ni `source`, ni campos adicionales.
+- `PATCH .../views/:viewId/visibility` cuerpo estricto `{ "visibility":"shared"|"private" }`: **solo administrador, solo su propia fila** y sin query params. Compartir una fila toma un bloqueo advisory **transaccional por tenant**, cuenta todas las compartidas, impide exceder 20 y devuelve 409 ante cupo o nombre compartido duplicado. Revocar conserva la fila privada, nombre, filtros y su propietario. Repetir una misma transición es idempotente.
+- `DELETE .../views/:viewId`: solo propietario, para vistas privadas o publicadas, sin privilegio derivado para lectores. Un usuario de otra empresa o propietario distinto recibe 404; coordinador no puede PATCH (403).
+
+Los endpoints corren bajo transacción con RLS activa, exigen `orders.write` y rol coordinación y usan SQL parametrizado con `tenant_id` explícito. Los datos compartidos son criterios de búsqueda (incluido texto del título); al compartir el administrador acepta hacer pública esa frase a la coordinación de **su empresa**. El listado devuelve `Cache-Control: private, no-store`.
+
+## Interfaz
+El control **Mis vistas guardadas** muestra separadas *Mis vistas* y *Compartidas con coordinación*. Cuenta solo vistas propias para el límite de diez. Un administrador puede pulsar *Compartir con coordinación* o *Dejar de compartir* sobre su vista seleccionada. Las ajenas se pueden **Aplicar**, pero no eliminar, editar ni publicar; el botón de eliminar está deshabilitado. Guardar sigue siendo explícito. Aplicar recupera los seis filtros e inicia una nueva petición autorizada: página 1, nuevos cursores HMAC, sin reusar el cursor del creador. Hay avisos de éxito/error y controles táctiles/foco visible.
+
+## Aceptación y límites
+Pruebas unitarias para visibilidad, fuente y datos permitidos. PostgreSQL real: RLS, roles, propiedad, aislamiento entre tenants y usuarios, revocación, degradación del autor, límite 20 frente a varios administradores, transición idempotente y cambios inválidos. Chromium real: guardar, compartir, recargar, dejar de compartir, aplicar, borrar solo propia, cambiar de tenant, sin resultados viejos. Ambos gates `tenant-rls` y `browser-offline` deben aprobar sobre el SHA exacto del PR; merge normal y CI push main independiente. Esto **no** incluye despliegue de la migración en VPS/producción, prueba de volumen, monitoreo de conectividad rural ni aceptación física.
+
+## Coordinación
+Reservas de archivos y handoffs en [issue #18](https://github.com/FedesConsultora/SedeAgro/issues/18). Carril de benchmarking independiente [#105](https://github.com/FedesConsultora/SedeAgro/issues/105), solo scripts y documentación **nuevos** sobre PostgreSQL descartable. Issue [#86](https://github.com/FedesConsultora/SedeAgro/issues/86) conserva el QA de foco/lector manual. Si se revierte, despublicar antes de revertir migración; `down` es fail-closed mientras existan vistas compartidas.
