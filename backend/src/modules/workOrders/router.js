@@ -35,7 +35,8 @@ import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaratio
 import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
 import { classifyReviewQueueItem, selectReviewQueueReports, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
-import { issueReviewCursor, parseReviewCursor, ReviewCursorError } from './reviewQueueCursor.js';
+import { issueReviewCursor, parseReviewCursor, ReviewCursorError,
+  REVIEW_QUEUE_WORK_TYPES } from './reviewQueueCursor.js';
 
 export const workOrdersRouter = Router();
 
@@ -221,15 +222,18 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
     throw new HttpError(403, 'Solo coordinación puede consultar pendientes de revisión.',
       undefined, 'ORDER_REVIEW_QUEUE_FORBIDDEN');
   }
-  if (Object.keys(req.query).some(key => key !== 'cursor') ||
-      (req.query.cursor != null && typeof req.query.cursor !== 'string')) {
-    throw new HttpError(422, 'Parámetros de bandeja inválidos; usá el cursor del servidor.',
+  const workType = req.query.type ?? 'all';
+  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type') ||
+      (req.query.cursor != null && (typeof req.query.cursor !== 'string' || !req.query.cursor)) ||
+      typeof workType !== 'string' || !REVIEW_QUEUE_WORK_TYPES.includes(workType)) {
+    throw new HttpError(422, 'Filtro o cursor de bandeja inválidos.',
       undefined, 'ORDER_REVIEW_CURSOR_INVALID');
   }
   let cursor;
   try {
     cursor = req.query.cursor
-      ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId, userId: req.auth.user.id })
+      ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId,
+        userId: req.auth.user.id, workType })
       : null;
   } catch (error) {
     if (!(error instanceof ReviewCursorError)) throw error;
@@ -250,6 +254,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   } : {};
   const rows = await WorkOrder.findAll({
     where: { tenant_id: req.tenantId, status: 'in_progress',
+      ...(workType === 'all' ? {} : { type: workType }),
       created_at: { [Op.lte]: anchor }, ...older },
     attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
     order: [[orderingTime, 'DESC'], ['id', 'DESC']],
@@ -259,7 +264,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
   const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
   const nextCursor = hasMore ? issueReviewCursor({
-    tenantId: req.tenantId, userId: req.auth.user.id, anchor,
+    tenantId: req.tenantId, userId: req.auth.user.id, workType, anchor,
     last: orders[orders.length - 1]
   }) : null;
   const ids = orders.map(order => order.id);

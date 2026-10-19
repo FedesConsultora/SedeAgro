@@ -321,6 +321,25 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(earlyQueue.body.pagination.next_cursor, null);
     assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
     assert.equal((await request(reviewQueue, coordinatorToken, tenantA)).status, 200);
+    const scopedByType = await request(reviewQueue + '?type=inspection', adminToken, tenantA);
+    assert.equal(scopedByType.status, 200, JSON.stringify(scopedByType.body));
+    assert.equal(scopedByType.body.data.some(item => item.id === orderId), true);
+    assert.equal(scopedByType.body.data.every(item => item.type === 'inspection'), true);
+    const emptyWorkType = await request(reviewQueue + '?type=application', adminToken, tenantA);
+    assert.equal(emptyWorkType.status, 200, JSON.stringify(emptyWorkType.body));
+    assert.equal(emptyWorkType.body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?type=all', adminToken, tenantA)).status, 200);
+    for (const invalid of [
+      '?type=not-a-real-labor', '?type=inspection&type=application',
+      '?type=', '?cursor=', '?type[]=inspection', '?type=application&page=0'
+    ]) {
+      assert.equal((await request(reviewQueue + invalid, adminToken, tenantA)).status, 422,
+        'Invalid global filter or cursor must be rejected: ' + invalid);
+    }
+    assert.equal((await request(reviewQueue + '?type=inspection',
+      adminBToken, tenantB)).body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?type=inspection',
+      contractorToken, tenantA)).status, 403);
     assert.equal((await request(reviewQueue, contractorToken, tenantA)).status, 403);
     assert.equal((await request(reviewQueue, scoutToken, tenantA)).status, 403);
     assert.equal((await request('/work-orders/review-queue?page=1',

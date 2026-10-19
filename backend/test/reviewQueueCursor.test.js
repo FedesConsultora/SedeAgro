@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { issueReviewCursor, parseReviewCursor, REVIEW_CURSOR_TTL_MS,
-  ReviewCursorError } from '../src/modules/workOrders/reviewQueueCursor.js';
+  ReviewCursorError, REVIEW_QUEUE_WORK_TYPES } from '../src/modules/workOrders/reviewQueueCursor.js';
 
 const tenantId = randomUUID(), userId = randomUUID(), otherTenant = randomUUID(),
   otherUser = randomUUID(), lastId = randomUUID();
@@ -42,4 +42,24 @@ test('cursor has finite lifetime and no future anchor or reverse ordering', () =
   assert.throws(() => parseReviewCursor(cursor, context, now + REVIEW_CURSOR_TTL_MS), ReviewCursorError);
   assert.throws(() => issueReviewCursor({ tenantId, userId, anchor, last: {
     id: lastId, created_at: new Date(now + 20000) } }, now), ReviewCursorError);
+});
+
+test('v2 cursor binds allowed global work type before keyset pagination', () => {
+  const make = workType => issueReviewCursor({ tenantId, userId, workType, anchor,
+    last: { id: lastId, created_at: new Date(now - 18000) } }, now);
+  assert.deepEqual(REVIEW_QUEUE_WORK_TYPES,
+    ['all', 'application', 'sowing', 'fertilization', 'harvest',
+      'irrigation', 'inspection', 'other']);
+  for (const workType of REVIEW_QUEUE_WORK_TYPES) {
+    const cursor = make(workType);
+    assert.equal(parseReviewCursor(cursor, { tenantId, userId, workType }, now).workType,
+      workType);
+    for (const wrongType of REVIEW_QUEUE_WORK_TYPES.filter(t => t !== workType)) {
+      assert.throws(() => parseReviewCursor(cursor, { tenantId, userId,
+        workType: wrongType }, now), ReviewCursorError);
+    }
+  }
+  assert.throws(() => make('unrestricted'), ReviewCursorError);
+  assert.throws(() => parseReviewCursor(issued(), { tenantId, userId,
+    workType: 'unrestricted' }, now), ReviewCursorError);
 });

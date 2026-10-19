@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
-  REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage
+  REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
+  REVIEW_QUEUE_WORK_TYPES
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -129,4 +130,36 @@ test('page-only filter UI never masquerades as a server-wide search', () => {
     'visibleItems.map(', "setFilter('all')", 'El filtro no busca en otras páginas',
     'Sin coincidencias en esta página'
   ]) assert.ok(ui.includes(contract), 'Missing current-page filter contract: ' + contract);
+});
+
+test('global SQL work-type query is distinct from the current-page state filter', () => {
+  const keys = Object.keys(REVIEW_QUEUE_WORK_TYPES);
+  assert.deepEqual(keys, ['all', 'application', 'sowing', 'fertilization',
+    'harvest', 'irrigation', 'inspection', 'other']);
+  assert.equal(reviewQueueUrl(null, 'all'), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null, 'application'),
+    '/work-orders/review-queue?type=application');
+  assert.equal(reviewQueueUrl('a.b+/', 'application'),
+    '/work-orders/review-queue?cursor=a.b%2B%2F&type=application');
+  assert.throws(() => reviewQueueUrl(null, 'other-company'), /inválido/);
+  const all = reviewQueueRequestKey(0, null, 0);
+  const typed = reviewQueueRequestKey(0, null, 0, 'application');
+  assert.notEqual(all, typed, 'Type change must fence previous async responses');
+  assert.notEqual(reviewQueueRequestKey(1, 'signed', 0, 'application'),
+    reviewQueueRequestKey(1, 'signed', 0, 'inspection'),
+    'Signed cursor must be request-bound to selected work type');
+  assert.throws(() => reviewQueueRequestKey(0, null, 0, 'bad'), /inválida/);
+});
+
+test('global selector resets signed cursors, page-local state and old response generation', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
+  for (const expected of [
+    'Tipo de labor (todas las páginas)',
+    'reviewQueueRequestKey(page, cursor, reload, workType)',
+    'reviewQueueUrl(cursor, workType)',
+    'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
+    "setFilter('all')", 'REVIEW_QUEUE_WORK_TYPES'
+  ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
+  assert.ok(ui.includes('disabled={loading}'), 'Selector should not act during in-flight queries');
+  assert.ok(ui.includes('onChange={event => changeWorkType(event.target.value)}'));
 });

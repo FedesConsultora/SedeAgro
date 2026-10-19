@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
-  reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
+  REVIEW_QUEUE_WORK_TYPES, reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
@@ -16,13 +16,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [cursors, setCursors] = useState([null]);
   const [page, setPage] = useState(0);
   const [filter, setFilter] = useState('all');
+  const [workType, setWorkType] = useState('all');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -36,7 +37,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -46,7 +47,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -81,6 +82,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       setPage(page + 1);
     }
   };
+  const changeWorkType = nextType => {
+    if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, nextType) || nextType === workType) return;
+    focusOnNavigation.current = false;
+    setWorkType(nextType);
+    setPage(0);
+    setCursors([null]);
+    setFilter('all');
+    setReload(value => value + 1);
+  };
   const refresh = () => {
     focusOnNavigation.current = false;
     setFilter('all');
@@ -108,6 +118,16 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         : <button type="button" ref={errorActionRef} className="ghost-action"
           onClick={() => setReload(value => value + 1)}>Reintentar</button>}
     </div>}
+    <div className="orders-workspace__review-global-filter">
+      <label htmlFor="review-queue-work-type">Tipo de labor (todas las páginas)</label>
+      <select id="review-queue-work-type" value={workType}
+        disabled={loading} onChange={event => changeWorkType(event.target.value)}>
+        {Object.entries(REVIEW_QUEUE_WORK_TYPES).map(([code, label]) =>
+          <option key={code} value={code}>{label}</option>)}
+      </select>
+      <p>Este filtro consulta el servidor en todas las páginas. Los filtros por
+        estado se aplican únicamente a la página que estás viendo.</p>
+    </div>
     {!loading && !error && shown && <>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
         Página {page + 1}. {items.length} órdenes en esta página.

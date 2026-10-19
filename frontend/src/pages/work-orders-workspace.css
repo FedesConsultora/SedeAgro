@@ -80,3 +80,17 @@
   background: #e8f7ed; color: #14532d; border-color: #16a34a;
   font-weight: 700;
 }
+
+/* 0T.21: database-wide type selector, distinct from the page-only chips. */
+.orders-workspace__review-global-filter { display: grid; justify-items: start; gap: 6px; }
+.orders-workspace__review-global-filter label { font-weight: 700; font-size: .875rem; }
+.orders-workspace__review-global-filter select {
+  border: 1px solid #b9cfc2; border-radius: 8px; background: #fff;
+  min-height: 44px; max-width: 100%; padding: 7px 10px; color: #1f362a;
+}
+.orders-workspace__review-global-filter select:focus-visible {
+  outline: 3px solid #15803d; outline-offset: 3px;
+}
+.orders-workspace__review-global-filter p {
+  margin: 0; color: #52665b; font-size: .875rem; line-height: 1.4;
+}
