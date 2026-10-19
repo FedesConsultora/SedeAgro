@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { Op, fn, col, where, literal } from 'sequelize';
+import { Op, fn, col, where, literal, QueryTypes } from 'sequelize';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import {
   AgriculturalInput,
   AuditEvent,
@@ -42,6 +43,8 @@ import { REVIEW_QUEUE_DUE_WINDOWS, reviewQueueDueWhere } from './reviewQueueDueW
 import { normalizeReviewTitleQuery, reviewQueueTitleWhere } from './reviewQueueTitleSearch.js';
 import { REVIEW_QUEUE_SORT_MODES, reviewQueueSortOrder,
   reviewQueueOlderWhere } from './reviewQueueSorting.js';
+import { REVIEW_VIEW_LIMIT, parseReviewView, isValidSavedReviewView
+} from './reviewQueueSavedViews.js';
 
 export const workOrdersRouter = Router();
 
@@ -222,6 +225,95 @@ workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrder
 
 // Bounded, tenant-isolated advisory queue for coordinators. Do not use this
 // snapshot as an approval token: /review remains the transactional authority.
+// Persistent named queries contain criteria only, never tenant data or signed
+// cursors. Ownership is checked in SQL and tenant FORCE RLS on every request.
+function requireReviewViewOwner(req) {
+  if (!['tenant_admin', 'agronomic_coordinator'].includes(req.auth.role.code)) {
+    throw new HttpError(403, 'Solo coordinación puede administrar vistas guardadas.',
+      undefined, 'ORDER_REVIEW_QUEUE_FORBIDDEN');
+  }
+}
+const reviewViewUuid = z.string().uuid();
+
+workOrdersRouter.get('/review-queue/views', requireCapability('orders.write'),
+  asyncHandler(async (req, res) => {
+    requireReviewViewOwner(req);
+    if (Object.keys(req.query).length) throw new HttpError(422, 'Consulta de vistas inválida.');
+    const views = await queryTenantTransaction(`
+      SELECT id, name, filters, created_at, updated_at
+      FROM work_order_review_views
+      WHERE tenant_id = :tenant AND user_id = :user
+      ORDER BY created_at DESC, id DESC LIMIT 11
+    `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id}});
+    if (views.length > REVIEW_VIEW_LIMIT || views.some(view=>!isValidSavedReviewView(view))) {
+      throw new HttpError(409, 'Las vistas guardadas requieren revisión.',
+        undefined, 'ORDER_REVIEW_VIEW_INVALID');
+    }
+    res.set('Cache-Control','private, no-store');
+    res.json({data:views});
+  }));
+
+workOrdersRouter.post('/review-queue/views', requireCapability('orders.write'),
+  asyncHandler(async (req, res) => {
+    requireReviewViewOwner(req);
+    let submitted;
+    try { submitted = parseReviewView(req.body); }
+    catch { throw new HttpError(422,'Nombre o filtros de vista inválidos.'); }
+    // Lock the *member's* row so concurrent requests cannot exceed the
+    // maximum (or race duplicate names) across independent API workers.
+    const membership = await queryTenantTransaction(`
+      SELECT user_id FROM memberships
+      WHERE tenant_id = :tenant AND user_id = :user AND status = 'active'
+      FOR UPDATE
+    `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id}});
+    if (membership.length !== 1) throw new HttpError(403,'Membresía no disponible.');
+    const count = await queryTenantTransaction(`
+      SELECT count(*)::int AS count FROM work_order_review_views
+      WHERE tenant_id = :tenant AND user_id = :user
+    `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id}});
+    if (count[0].count >= REVIEW_VIEW_LIMIT) {
+      throw new HttpError(409,'Alcanzaste el máximo de diez vistas guardadas.',
+        undefined,'ORDER_REVIEW_VIEW_LIMIT');
+    }
+    let rows;
+    try {
+      rows = await queryTenantTransaction(`
+        INSERT INTO work_order_review_views (tenant_id,user_id,name,filters)
+        VALUES (:tenant,:user,:name,CAST(:filters AS jsonb))
+        RETURNING id,name,filters,created_at,updated_at
+      `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+        replacements:{tenant:req.tenantId,user:req.auth.user.id,
+          name:submitted.name,filters:JSON.stringify(submitted.filters)}});
+    } catch(error) {
+      if (error?.parent?.code === '23505' || error?.original?.code === '23505') {
+        throw new HttpError(409,'Ya guardaste una vista con ese nombre.',
+          undefined,'ORDER_REVIEW_VIEW_DUPLICATE');
+      }
+      throw error;
+    }
+    res.set('Cache-Control','private, no-store');
+    res.status(201).json({data:rows[0]});
+  }));
+
+workOrdersRouter.delete('/review-queue/views/:viewId', requireCapability('orders.write'),
+  asyncHandler(async (req, res) => {
+    requireReviewViewOwner(req);
+    if (!reviewViewUuid.safeParse(req.params.viewId).success ||
+        Object.keys(req.query).length) throw new HttpError(422,'Vista inválida.');
+    const rows = await queryTenantTransaction(`
+      DELETE FROM work_order_review_views
+      WHERE tenant_id = :tenant AND user_id = :user AND id = :id
+      RETURNING id
+    `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id,id:req.params.viewId}});
+    if (!rows.length) throw new HttpError(404,'Vista no encontrada.');
+    res.set('Cache-Control','private, no-store');
+    res.json({data:{id:rows[0].id}});
+  }));
+
 workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHandler(async (req, res) => {
   if (!['tenant_admin', 'agronomic_coordinator'].includes(req.auth.role.code)) {
     throw new HttpError(403, 'Solo coordinación puede consultar pendientes de revisión.',

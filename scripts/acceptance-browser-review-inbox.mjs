@@ -612,6 +612,66 @@ try {
   assert.equal((await rowTitles()).every(title=>title.startsWith('Global application')),true);
   console.log('PASS: sort + title compose; changing sort resets cursors; newest remains backward compatible');
 
+
+  // Persist an authorized saved view via the real API, then reload the app
+  // to prove it does not depend on volatile React state or browser storage.
+  await workType.selectOption('inspection');
+  await pageCount(region,50,1);
+  await priorityFilter.selectOption('normal');
+  await pageCount(region,50,1);
+  await dueFilter.selectOption('overdue');
+  await pageCount(region,50,1);
+  await sortSelector.selectOption('due_first');
+  await pageCount(region,50,1);
+  await filters.getByRole('button',{name:'Sin parte'}).click();
+  await pageCount(region,50,1);
+  await titleBox.fill('Real review browser');
+  await submitTitle.click();
+  await pageCount(region,50,1);
+  await region.getByLabel('Nombre de la nueva vista').fill('  Mis   inspecciones vencidas  ');
+  await region.getByRole('button',{name:'Guardar filtros actuales'}).click();
+  await region.getByText('Vista guardada. Podés recuperarla en tu próxima sesión.').waitFor();
+  const savedSelector=region.getByLabel('Elegir vista guardada');
+  assert.equal(await savedSelector.locator('option').count(),2);
+  const savedId=await savedSelector.inputValue();
+  assert.ok(savedId,'Successful save automatically selects the new view');
+  await page.reload();
+  await openInbox(page);
+  await region.getByText('1 de 10 vistas guardadas.').waitFor();
+  await savedSelector.selectOption(savedId);
+  await pageCount(region,50,1);
+  // Deliberately change the current criteria, then restore the saved query.
+  await workType.selectOption('all');
+  await pageCount(region,50,1);
+  await dueFilter.selectOption('all');
+  await pageCount(region,50,1);
+  await titleBox.fill('%_');
+  await submitTitle.click();
+  await pageCount(region,0,1);
+  await region.getByRole('button',{name:'Aplicar vista'}).click();
+  await pageCount(region,50,1);
+  assert.equal(await workType.inputValue(),'inspection');
+  assert.equal(await priorityFilter.inputValue(),'normal');
+  assert.equal(await dueFilter.inputValue(),'overdue');
+  assert.equal(await sortSelector.inputValue(),'due_first');
+  assert.equal(await titleBox.inputValue(),'Real review browser');
+  assert.equal(await filters.getByRole('button',{name:'Sin parte'})
+    .getAttribute('aria-pressed'),'true');
+  await next.click();
+  // The due-sort fixture intentionally made one of the 61 inspections NULL,
+  // so overdue finds 60 orders and the second page has 10, not 11.
+  await pageCount(region,10,2);
+  await region.getByRole('button',{name:'Eliminar vista…'}).click();
+  await region.getByText('¿Eliminar esta vista guardada?').waitFor();
+  await region.getByRole('button',{name:'Cancelar'}).click();
+  assert.equal(await savedSelector.locator('option').count(),2);
+  await region.getByRole('button',{name:'Eliminar vista…'}).click();
+  await region.getByRole('button',{name:'Confirmar eliminación'}).click();
+  await region.getByText('Vista eliminada. Los filtros actuales no cambiaron.').waitFor();
+  assert.equal(await savedSelector.locator('option').count(),1);
+  assert.equal(await region.getByLabel('Vencimiento (todas las páginas)').inputValue(),'overdue');
+  console.log('PASS: member-owned saved view survives reload, restores six filters/cursor, delete requires confirmation');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })

@@ -123,3 +123,43 @@
   gap: 8px;
 }
 .orders-workspace__review-search-actions button { min-height: 44px; }
+
+/* 0T.27 — private saved-query views; keyboard and touch friendly. */
+.orders-workspace__review-saved-views {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 20px;
+  padding: 16px;
+  border: 1px solid #b9cfc2;
+  border-radius: 10px;
+}
+.orders-workspace__review-save-form {
+  display: grid;
+  gap: 8px;
+  max-width: 34rem;
+}
+.orders-workspace__review-saved-views input,
+.orders-workspace__review-saved-views select {
+  width: min(100%, 34rem);
+  box-sizing: border-box;
+  padding: 8px 12px;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid #b9cfc2;
+  background: #fff;
+  color: #1f362a;
+}
+.orders-workspace__review-saved-views input:focus-visible,
+.orders-workspace__review-saved-views select:focus-visible,
+.orders-workspace__review-saved-views button:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 3px;
+}
+.orders-workspace__review-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.orders-workspace__review-save-actions button,
+.orders-workspace__review-save-form button { min-height: 44px; }

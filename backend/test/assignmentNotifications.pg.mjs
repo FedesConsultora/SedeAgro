@@ -320,6 +320,57 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(earlyQueue.body.pagination.has_more, false);
     assert.equal(earlyQueue.body.pagination.next_cursor, null);
     assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
+    // Durable 0T.27 views: company and member isolation, strict schema,
+    // case-insensitive names, bounded count and tenant RLS enforced.
+    const viewPath = '/work-orders/review-queue/views';
+    const filters = {workType:'inspection',reviewState:'no_report',priority:'normal',
+      dueWindow:'unscheduled',titleQuery:'Check gate',sortMode:'due_first'};
+    const ownerViewsBefore = await request(viewPath,adminToken,tenantA);
+    assert.equal(ownerViewsBefore.status,200,JSON.stringify(ownerViewsBefore.body));
+    assert.deepEqual(ownerViewsBefore.body.data,[]);
+    assert.match(ownerViewsBefore.headers.get('cache-control'),/private, no-store/);
+    const saved = await request(viewPath,adminToken,tenantA,'POST',
+      {name:'  Mis   inspecciones ',filters});
+    assert.equal(saved.status,201,JSON.stringify(saved.body));
+    assert.equal(saved.body.data.name,'Mis inspecciones');
+    assert.deepEqual(saved.body.data.filters,filters);
+    const savedId=saved.body.data.id;
+    assert.equal((await request(viewPath,adminToken,tenantA))
+      .body.data[0].id,savedId,'Database record survives separate requests');
+    assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
+    assert.deepEqual((await request(viewPath,adminBToken,tenantB)).body.data,[]);
+    assert.equal((await request(viewPath,contractorToken,tenantA)).status,403);
+    assert.equal((await request(viewPath,contractorToken,tenantA,'POST',
+      {name:'Other',filters})).status,403);
+    assert.equal((await request(viewPath+'/'+savedId,adminBToken,tenantB,'DELETE')).status,404);
+    assert.equal((await request(viewPath+'/'+savedId,coordinatorToken,tenantA,'DELETE')).status,404);
+    assert.equal((await request(viewPath,adminToken,tenantA,'POST',
+      {name:'mis INSPECCIONES',filters})).status,409);
+    for(const invalid of [
+      {name:'A',filters},{name:'Danger',filters:{...filters,cursor:'forged'}},
+      {name:'Danger',filters:{...filters,workType:'private'}},
+      {name:'Danger',filters:{...filters,titleQuery:'  unclean '}},
+      {name:'Danger',filters:{...filters,tenantId:tenantB}}
+    ]) assert.equal((await request(viewPath,adminToken,tenantA,'POST',invalid)).status,422);
+    assert.equal((await request(viewPath+'?cursor=not-allowed',adminToken,tenantA)).status,422);
+    const [{relrowsecurity,relforcerowsecurity}]=(await owner.query(`
+      SELECT relrowsecurity,relforcerowsecurity FROM pg_class
+      WHERE oid='public.work_order_review_views'::regclass
+    `)).rows;
+    assert.ok(relrowsecurity && relforcerowsecurity,'Saved views must FORCE RLS');
+    for(let i=1;i<10;i++) {
+      const result=await request(viewPath,adminToken,tenantA,'POST',
+        {name:'Vista '+i,filters:{...filters,sortMode:i%2?'newest':'priority_first'}});
+      assert.equal(result.status,201,JSON.stringify(result.body));
+    }
+    assert.equal((await request(viewPath,adminToken,tenantA)).body.data.length,10);
+    const overflow=await request(viewPath,adminToken,tenantA,'POST',
+      {name:'Once',filters});
+    assert.equal(overflow.status,409,JSON.stringify(overflow.body));
+    assert.equal((await request(viewPath+'/'+savedId,adminToken,tenantA,'DELETE')).status,200);
+    assert.equal((await request(viewPath+'/'+savedId,adminToken,tenantA,'DELETE')).status,404);
+    assert.equal((await request(viewPath,adminToken,tenantA)).body.data.length,9);
+
     for (const sort of ['newest','due_first','priority_first']) {
       const ordered=await request(reviewQueue+'?sort='+sort,adminToken,tenantA);
       assert.equal(ordered.status,200,JSON.stringify(ordered.body));
