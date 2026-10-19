@@ -6,6 +6,8 @@ import { REVIEW_QUEUE_SORT_MODES } from './reviewQueueSorting.js';
 import { normalizeReviewTitleQuery } from './reviewQueueTitleSearch.js';
 
 export const REVIEW_VIEW_LIMIT = 10;
+export const SHARED_REVIEW_VIEW_LIMIT = 20;
+export const REVIEW_VIEW_VISIBILITIES = Object.freeze(['private','shared']);
 const exactEnum = values => z.enum([...values]);
 const titleQuery = z.string().max(128).refine(
   value => {
@@ -38,9 +40,17 @@ export function parseReviewView(input) {
   return parsed.data;
 }
 
+export function publicReviewView(value, userId) {
+  return {
+    id:value.id, name:value.name, filters:value.filters,
+    created_at:value.created_at, updated_at:value.updated_at,
+    visibility:value.visibility, source:value.user_id === userId ? 'mine' : 'shared'
+  };
+}
+
 export function isValidSavedReviewView(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const data = reviewViewFiltersSchema.safeParse(value.filters);
   return typeof value.id === 'string' && typeof value.name === 'string' &&
-    data.success;
+    REVIEW_VIEW_VISIBILITIES.includes(value.visibility) && data.success;
 }
