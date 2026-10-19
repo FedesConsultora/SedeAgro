@@ -319,3 +319,22 @@ test('operational sort selector resets cursor and keeps all global filter criter
   assert.ok(!method.includes('setTitleQuery('));
   assert.ok(source.includes('value={sortMode} disabled={loading}'));
 });
+
+test('saved view UI never retains or restores cursor, and is identity remounted', () => {
+  const component=readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx',import.meta.url),'utf8');
+  for(const marker of [
+    'Mis vistas guardadas','Guardar filtros actuales','Elegir vista guardada',
+    'Aplicar vista','Eliminar vista…','Confirmar eliminación',
+    'REVIEW_VIEWS_PATH','validateSavedViews(response)','validateSavedView(await api.request',
+    'reviewViewFilters(selected.filters)','setWorkType(filters.workType)',
+    'setReviewState(filters.reviewState)','setPriority(filters.priority)',
+    'setDueWindow(filters.dueWindow)','setTitleQuery(filters.titleQuery)',
+    'setSortMode(filters.sortMode)','setPage(0)','setCursors([null])',
+    'WorkOrderReviewInboxSession key={identity}'
+  ]) assert.ok(component.includes(marker),'Missing saved-view integration: '+marker);
+  const apply=component.slice(component.indexOf('const applyView ='),
+    component.indexOf('const removeView ='));
+  assert.ok(!apply.includes('setCursors(previous =>'), 'Never replay saved cursor');
+  assert.ok(component.includes('setDeleteArmed(true)'));
+  assert.ok(component.includes('controller.abort()'));
+});
