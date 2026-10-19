@@ -682,6 +682,75 @@ try {
   assert.equal(await region.getByLabel('Vencimiento (todas las páginas)').inputValue(),'overdue');
   console.log('PASS: member-owned saved view survives reload, restores six filters/cursor, delete requires confirmation');
 
+  // Seed a DIFFERENT active admin in the same disposable tenant. Browser
+  // remains logged in as ownerA and must never gain ownership over this view.
+  const extraAuthor=(await admin.query(`
+    INSERT INTO users(full_name,email,password_hash,status)
+    VALUES($1,$2,'browser-test-only','active') RETURNING id
+  `,['Review Moderation Publisher','review-mod-'+token+'@example.test'])).rows[0].id;
+  created.push({tenantId:ownerA.tenant.id,userId:extraAuthor});
+  await admin.query(`
+    INSERT INTO memberships(tenant_id,user_id,role_code,status)
+    VALUES($1,$2,'tenant_admin','active')
+  `,[ownerA.tenant.id,extraAuthor]);
+  const anotherAdminView=(await admin.query(`
+    INSERT INTO work_order_review_views
+      (tenant_id,user_id,name,filters,visibility)
+    VALUES($1,$2,$3,$4::jsonb,'shared') RETURNING id
+  `,[ownerA.tenant.id,extraAuthor,'Moderación navegador '+token,
+    JSON.stringify({workType:'inspection',reviewState:'no_report',
+      priority:'normal',dueWindow:'all',titleQuery:'',sortMode:'newest'})]))
+    .rows[0].id;
+  const moderatorPanel=region.getByRole('region',{name:'Moderación de vistas compartidas'});
+  await moderatorPanel.getByRole('button',
+    {name:'Actualizar publicaciones y auditoría'}).click();
+  await moderatorPanel.getByText('1 publicaciones ajenas visibles para moderación.').waitFor();
+  const moderatorTarget=moderatorPanel.getByLabel('Publicación a revisar');
+  await moderatorTarget.selectOption(anotherAdminView);
+  const moderatorReason=moderatorPanel.getByLabel('Motivo de revocación');
+  await moderatorReason.fill('corta');
+  await moderatorPanel.getByRole('button',{name:'Revisar revocación'}).click();
+  await moderatorPanel.getByRole('alert').waitFor();
+  assert.equal(await moderatorPanel.getByRole('button',
+    {name:'Confirmar revocación'}).count(),0,
+    'A short invalid reason must not arm a mutation');
+  await moderatorReason.fill('  Publicación  obsoleta  en esta campaña  ');
+  await moderatorPanel.getByRole('button',{name:'Revisar revocación'}).click();
+  await moderatorPanel.getByRole('button',{name:'Cancelar revocación'}).click();
+  assert.equal(await moderatorPanel.getByRole('button',
+    {name:'Confirmar revocación'}).count(),0,'Cancel must disarm the revocation');
+  await moderatorPanel.getByRole('button',{name:'Revisar revocación'}).click();
+  await moderatorPanel.getByRole('button',{name:'Confirmar revocación'}).click();
+  await moderatorPanel.getByText(
+    'Publicación revocada y auditoría registrada. La vista sigue siendo privada de su autor.'
+  ).waitFor();
+  await moderatorPanel.getByText('0 publicaciones ajenas visibles para moderación.').waitFor();
+  const afterModeration=(await admin.query(`
+    SELECT visibility, user_id, filters FROM work_order_review_views
+    WHERE tenant_id=$1 AND id=$2
+  `,[ownerA.tenant.id,anotherAdminView])).rows;
+  assert.equal(afterModeration.length,1);
+  assert.equal(afterModeration[0].visibility,'private');
+  assert.equal(afterModeration[0].user_id,extraAuthor);
+  assert.equal(afterModeration[0].filters.workType,'inspection');
+  const durableAudit=(await admin.query(`
+    SELECT reason,action,actor_user_id,view_owner_id
+    FROM work_order_review_view_moderation_audit
+    WHERE tenant_id=$1 AND view_id=$2
+  `,[ownerA.tenant.id,anotherAdminView])).rows;
+  assert.equal(durableAudit.length,1,'Exactly one audit event must be committed');
+  assert.equal(durableAudit[0].reason,'Publicación obsoleta en esta campaña');
+  assert.equal(durableAudit[0].actor_user_id,ownerA.user.id);
+  assert.equal(durableAudit[0].view_owner_id,extraAuthor);
+  await page.reload();
+  await openInbox(page);
+  await moderatorPanel.getByText('0 publicaciones ajenas visibles para moderación.').waitFor();
+  // Audit is intentionally collapsed by default; open the disclosure before
+  // asserting its persisted contents after a real application reload.
+  await moderatorPanel.getByText('Historial de revocaciones (últimas 50)').click();
+  await moderatorPanel.getByText('Publicación obsoleta en esta campaña').waitFor();
+  console.log('PASS: real Chromium admin revokes another publisher only after confirmation; audit survives reload and view stays private with owner');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })

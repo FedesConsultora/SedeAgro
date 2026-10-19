@@ -45,6 +45,9 @@ import { REVIEW_QUEUE_SORT_MODES, reviewQueueSortOrder,
   reviewQueueOlderWhere } from './reviewQueueSorting.js';
 import { REVIEW_VIEW_LIMIT, SHARED_REVIEW_VIEW_LIMIT, parseReviewView,
   publicReviewView, isValidSavedReviewView } from './reviewQueueSavedViews.js';
+import { parseRevokeSharedView, REVIEW_VIEW_MODERATION_AUDIT_PAGE_SIZE,
+  publicModeratedSharedView, publicModerationEvent
+} from './reviewQueueViewModeration.js';
 
 export const workOrdersRouter = Router();
 
@@ -372,6 +375,106 @@ workOrdersRouter.patch('/review-queue/views/:viewId/visibility', requireCapabili
     }
     res.set('Cache-Control','private, no-store');
     res.json({data:publicReviewView(updated,req.auth.user.id)});
+  }));
+
+// Administrative inventory deliberately contains only CURRENTLY shared
+// criteria names/IDs. Hidden or inactive authors are included so obsolete
+// shares can be revoked; their filters and identities are not exposed here.
+function requireReviewViewModerator(req) {
+  requireReviewViewOwner(req);
+  if (req.auth.role.code !== 'tenant_admin') {
+    throw new HttpError(403, 'Solo administración puede moderar vistas.');
+  }
+}
+workOrdersRouter.get('/review-queue/views/moderation', requireCapability('orders.write'),
+  asyncHandler(async (req,res) => {
+    requireReviewViewModerator(req);
+    if (Object.keys(req.query).length) throw new HttpError(422,'Consulta inválida.');
+    const rows=await queryTenantTransaction(`
+      SELECT v.id, v.name, v.created_at,
+        (m.status = 'active' AND m.role_code = 'tenant_admin') AS publisher_active
+      FROM work_order_review_views v
+      LEFT JOIN memberships m
+        ON m.tenant_id = v.tenant_id AND m.user_id = v.user_id
+      WHERE v.tenant_id=:tenant AND v.visibility='shared' AND v.user_id<>:actor
+      ORDER BY v.created_at DESC,v.id DESC LIMIT 21
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,actor:req.auth.user.id}});
+    if(rows.length>SHARED_REVIEW_VIEW_LIMIT) {
+      throw new HttpError(409,'Inventario de vistas compartidas requiere revisión.');
+    }
+    res.set('Cache-Control','private, no-store');
+    res.json({data:rows.map(publicModeratedSharedView)});
+  }));
+
+workOrdersRouter.get('/review-queue/views/moderation/audit', requireCapability('orders.write'),
+  asyncHandler(async(req,res) => {
+    requireReviewViewModerator(req);
+    if(Object.keys(req.query).length) throw new HttpError(422,'Consulta inválida.');
+    const rows=await queryTenantTransaction(`
+      SELECT id,view_id,view_name,actor_user_id,view_owner_id,reason,
+        action,created_at
+      FROM work_order_review_view_moderation_audit
+      WHERE tenant_id=:tenant
+      ORDER BY created_at DESC,id DESC
+      LIMIT 50
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId}});
+    res.set('Cache-Control','private, no-store');
+    res.json({data:rows.map(publicModerationEvent),
+      page_size:REVIEW_VIEW_MODERATION_AUDIT_PAGE_SIZE});
+  }));
+
+// Exceptional moderation is revoke-only: the author retains the private
+// record, all six filters, and deletion authority. Nothing is copied to the
+// actor. UPDATE and audit INSERT must commit or roll back together.
+workOrdersRouter.post('/review-queue/views/moderation/:viewId/revoke', requireCapability('orders.write'),
+  asyncHandler(async(req,res) => {
+    requireReviewViewModerator(req);
+    if (!reviewViewUuid.safeParse(req.params.viewId).success ||
+        Object.keys(req.query).length) throw new HttpError(422,'Vista inválida.');
+    let reason;
+    try { reason = parseRevokeSharedView(req.body).reason; }
+    catch { throw new HttpError(422,'Motivo de revocación inválido.'); }
+    // Same tenant advisory lock as owner publish/unpublish to serialize
+    // moderation against a concurrent share/rename/capacity change.
+    await queryTenantTransaction(`
+      SELECT pg_advisory_xact_lock(hashtext(:tenant)) AS locked,
+             :tenant AS tenant_id
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId}});
+    const ownedByAnother=await queryTenantTransaction(`
+      SELECT id,user_id,name FROM work_order_review_views
+      WHERE tenant_id=:tenant AND id=:id AND user_id<>:actor
+        AND visibility='shared'
+      FOR UPDATE
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:req.params.viewId,
+        actor:req.auth.user.id}});
+    if (ownedByAnother.length !== 1) {
+      throw new HttpError(404,'Vista compartida no encontrada.');
+    }
+    const target=ownedByAnother[0];
+    const updated=await queryTenantTransaction(`
+      UPDATE work_order_review_views
+      SET visibility='private',updated_at=now()
+      WHERE tenant_id=:tenant AND id=:id AND user_id=:owner
+        AND visibility='shared'
+      RETURNING id
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:target.id,owner:target.user_id}});
+    if(updated.length!==1) throw new HttpError(409,'La vista cambió durante la moderación.');
+    const [event]=await queryTenantTransaction(`
+      INSERT INTO work_order_review_view_moderation_audit
+        (tenant_id,view_id,view_owner_id,actor_user_id,view_name,reason)
+      VALUES (:tenant,:id,:owner,:actor,:name,:reason)
+      RETURNING id,view_id,view_name,actor_user_id,view_owner_id,
+        reason,action,created_at
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:target.id,owner:target.user_id,
+        actor:req.auth.user.id,name:target.name,reason}});
+    res.set('Cache-Control','private, no-store');
+    res.json({data:publicModerationEvent(event)});
   }));
 
 workOrdersRouter.delete('/review-queue/views/:viewId', requireCapability('orders.write'),

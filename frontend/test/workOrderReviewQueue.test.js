@@ -356,3 +356,26 @@ test('shared view UI limits private writes and exposes admin-only visibility tog
   ]) assert.ok(source.includes(token),'Missing view-share safety: '+token);
   assert.ok(!source.includes("localStorage"));
 });
+
+test('admin moderation is role restricted, two-stage and never edits the author filter',()=>{
+  const source=readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx',import.meta.url),'utf8');
+  for(const marker of [
+    "role === 'tenant_admin' && <section",
+    "REVIEW_MODERATION_PATH",
+    "validateModerationInventory", "validateModerationAudit",
+    "normalizeModerationReason(moderationReason)",
+    "setModerationArmed(true)", "setModerationArmed(false)",
+    "Confirmar revocación", "Cancelar revocación",
+    "Historial de revocaciones (últimas 50)",
+    "method:'POST',silent:true,body:{reason}",
+    "setSavedViews(previous=>previous.filter(view=>view.id!==moderationTargetId))",
+    "setModerationRevision(previous=>previous+1)",
+    "controller.abort()"
+  ]) assert.ok(source.includes(marker), 'Moderation UI missing '+marker);
+  const moderator=source.slice(source.indexOf('const chooseModeration ='),
+    source.indexOf('const changeReviewState ='));
+  for(const forbidden of ['setWorkType(', 'setReviewState(', 'setPriority(',
+    'setDueWindow(', 'setTitleQuery(', 'setSortMode(']) {
+    assert.ok(!moderator.includes(forbidden), 'Moderator cannot mutate view filters');
+  }
+});
