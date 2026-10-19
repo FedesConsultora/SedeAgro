@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
-  REVIEW_QUEUE_WORK_TYPES
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -178,4 +178,20 @@ test('global state scope prevents cross-filter response/cursor reuse', () => {
   assert.notEqual(reviewQueueRequestKey(1,'cursor',2,'application','no_report'),
     reviewQueueRequestKey(1,'cursor',2,'application','closure'));
   assert.throws(() => reviewQueueRequestKey(0,null,0,'all','bad'), /inválida/);
+});
+
+test('priority is a SQL-global filter and is part of every request generation', () => {
+  assert.deepEqual(Object.keys(REVIEW_QUEUE_PRIORITIES),
+    ['all', 'urgent', 'high', 'normal', 'low']);
+  assert.equal(reviewQueueUrl(null,'all','all','all'), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null,'all','all','urgent'),
+    '/work-orders/review-queue?priority=urgent');
+  assert.equal(reviewQueueUrl('a.b','application','blocked','normal'),
+    '/work-orders/review-queue?cursor=a.b&type=application&state=blocked&priority=normal');
+  assert.throws(()=>reviewQueueUrl(null,'all','all','critical'),/inválido/);
+  assert.notEqual(
+    reviewQueueRequestKey(1,'signed',0,'inspection','no_report','normal'),
+    reviewQueueRequestKey(1,'signed',0,'inspection','no_report','urgent')
+  );
+  assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','critical'),/inválida/);
 });
