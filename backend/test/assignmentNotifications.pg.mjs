@@ -329,9 +329,24 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(emptyWorkType.status, 200, JSON.stringify(emptyWorkType.body));
     assert.equal(emptyWorkType.body.data.some(item => item.id === orderId), false);
     assert.equal((await request(reviewQueue + '?type=all', adminToken, tenantA)).status, 200);
+    const normalQueue = await request(reviewQueue + '?priority=normal', adminToken, tenantA);
+    assert.equal(normalQueue.status, 200, JSON.stringify(normalQueue.body));
+    assert.equal(normalQueue.body.data.some(item => item.id === orderId), true);
+    assert.equal(normalQueue.body.data.every(item => item.priority === 'normal'), true);
+    const emptyUrgent = await request(reviewQueue + '?priority=urgent', adminToken, tenantA);
+    assert.equal(emptyUrgent.status, 200, JSON.stringify(emptyUrgent.body));
+    assert.equal(emptyUrgent.body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?priority=normal&type=inspection&state=no_report',
+      adminToken, tenantA)).body.data.some(item => item.id === orderId), true);
+    assert.equal((await request(reviewQueue + '?priority=normal',
+      adminBToken, tenantB)).body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?priority=normal',
+      contractorToken, tenantA)).status, 403);
     for (const invalid of [
       '?type=not-a-real-labor', '?type=inspection&type=application',
-      '?type=', '?cursor=', '?type[]=inspection', '?type=application&page=0'
+      '?type=', '?cursor=', '?type[]=inspection', '?type=application&page=0',
+      '?priority=', '?priority=critical', '?priority=normal&priority=urgent',
+      '?priority[]=urgent', '?priority=urgent&page=1'
     ]) {
       assert.equal((await request(reviewQueue + invalid, adminToken, tenantA)).status, 422,
         'Invalid global filter or cursor must be rejected: ' + invalid);
