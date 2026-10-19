@@ -3,6 +3,7 @@ import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_PAGE_FILTERS,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
+  REVIEW_QUEUE_SORT_MODES,
   reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, normalizeReviewTitleQuery } from '../services/workOrderReviewQueue.js';
 
@@ -20,6 +21,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [workType, setWorkType] = useState('all');
   const [priority, setPriority] = useState('all');
   const [dueWindow, setDueWindow] = useState('all');
+  const [sortMode, setSortMode] = useState('newest');
   const [draftTitle, setDraftTitle] = useState('');
   const [titleQuery, setTitleQuery] = useState('');
   const [titleError, setTitleError] = useState('');
@@ -29,7 +31,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -43,7 +45,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -53,7 +55,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, titleQuery, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, titleQuery, sortMode, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -109,6 +111,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
     setReviewState(nextState);
+    setPage(0);
+    setCursors([null]);
+    setReload(value => value + 1);
+  };
+  const changeSortMode = nextSort => {
+    if (!Object.hasOwn(REVIEW_QUEUE_SORT_MODES, nextSort) ||
+        nextSort === sortMode || loading) return;
+    focusOnNavigation.current = false;
+    setSortMode(nextSort);
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
@@ -185,6 +196,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         {titleError && <p role="alert">{titleError}</p>}
         {titleQuery && <p role="status">Búsqueda activa por título: {titleQuery}</p>}
       </form>
+      <label htmlFor="review-queue-sort">Ordenar resultados (todas las páginas)</label>
+      <select id="review-queue-sort" value={sortMode} disabled={loading}
+        onChange={event => changeSortMode(event.target.value)}>
+        {Object.entries(REVIEW_QUEUE_SORT_MODES).map(([code, label]) =>
+          <option key={code} value={code}>{label}</option>)}
+      </select>
+      <p>Orden global real: vencimientos sin fecha al final y desempate por
+        creación y código. Cambiar el orden inicia una consulta nueva.</p>
       <label htmlFor="review-queue-work-type">Tipo de labor (todas las páginas)</label>
       <select id="review-queue-work-type" value={workType}
         disabled={loading} onChange={event => changeWorkType(event.target.value)}>
