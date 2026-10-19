@@ -11,8 +11,7 @@ export const REVIEW_QUEUE_STATES = Object.freeze({
   ready_for_closure: 'Parte verificado; evaluar cierre'
 });
 
-// Client-only grouping of the ALREADY AUTHORIZED current page. This is not
-// a backend search and must never hide or modify the server pagination cursor.
+// Global review-state group vocabulary; the backend filters before SQL LIMIT.
 export const REVIEW_QUEUE_PAGE_FILTERS = Object.freeze({
   all: Object.freeze({ label: 'Todas', states: null }),
   no_report: Object.freeze({ label: 'Sin parte', states: ['awaiting_report'] }),
@@ -45,13 +44,15 @@ export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
   other: 'Otra labor'
 });
 
-export function reviewQueueUrl(cursor = null, workType = 'all') {
-  if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType)) {
+export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'all') {
+  if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
+      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState)) {
     throw new Error('Filtro global de labor inválido.');
   }
   const query = new URLSearchParams();
   if (cursor !== null) query.set('cursor', cursor);
   if (workType !== 'all') query.set('type', workType);
+  if (reviewState !== 'all') query.set('state', reviewState);
   return '/work-orders/review-queue' +
     (query.size ? '?' + query.toString() : '');
 }
@@ -95,12 +96,13 @@ export function reviewQueueFailure(error, usedCursor) {
     message: error?.message || 'No se pudo consultar la bandeja de revisión.' };
 }
 
-export function reviewQueueRequestKey(page, cursor, reload, workType = 'all') {
+export function reviewQueueRequestKey(page, cursor, reload, workType = 'all', reviewState = 'all') {
   if (!Number.isSafeInteger(page) || page < 0 ||
       !Number.isSafeInteger(reload) || reload < 0 ||
       (cursor !== null && typeof cursor !== 'string') ||
-      !Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType)) {
+      !Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
+      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState)) {
     throw new Error('Navegación de revisión inválida.');
   }
-  return JSON.stringify([page, cursor, reload, workType]);
+  return JSON.stringify([page, cursor, reload, workType, reviewState]);
 }
