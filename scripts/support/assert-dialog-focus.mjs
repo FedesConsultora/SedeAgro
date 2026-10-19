@@ -56,8 +56,11 @@ export async function pressReverseTabAtDialogRoot(page, dialog, checkpoint) {
   }
   await dialog.evaluate(root => {
     window.__sedeagroTabProbe = { expected: null, captured: false, focusableCount: 0 };
-    document.addEventListener('keydown', event => {
+    window.__sedeagroTabListener = event => {
+      // keyboard.press('Shift+Tab') dispatches Shift BEFORE Tab. A once:true
+      // listener would consume Shift and never see the boundary key event.
       if (event.key !== 'Tab' || !event.shiftKey) return;
+      document.removeEventListener('keydown', window.__sedeagroTabListener, true);
       const focusable = Array.from(root.querySelectorAll([
         'a[href]', 'button:not([disabled])', 'input:not([disabled])',
         'select:not([disabled])', 'textarea:not([disabled])',
@@ -70,7 +73,8 @@ export async function pressReverseTabAtDialogRoot(page, dialog, checkpoint) {
         expected: focusable.at(-1) ?? root,
         captured: true, focusableCount: focusable.length
       };
-    }, { capture: true, once: true });
+    };
+    document.addEventListener('keydown', window.__sedeagroTabListener, true);
   });
   try {
     await page.keyboard.press('Shift+Tab');
@@ -96,6 +100,12 @@ export async function pressReverseTabAtDialogRoot(page, dialog, checkpoint) {
     throw new Error('Dialog actual-keydown boundary mismatch [' + checkpoint + '] ' +
       JSON.stringify(snapshot));
   } finally {
-    await page.evaluate(() => { delete window.__sedeagroTabProbe; });
+    await page.evaluate(() => {
+      if (window.__sedeagroTabListener) {
+        document.removeEventListener('keydown', window.__sedeagroTabListener, true);
+        delete window.__sedeagroTabListener;
+      }
+      delete window.__sedeagroTabProbe;
+    });
   }
 }
