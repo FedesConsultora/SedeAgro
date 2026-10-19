@@ -363,6 +363,17 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(sharedForCoordinator.body.data[0].source,'shared');
     assert.equal(sharedForCoordinator.body.data[0].visibility,'shared');
     assert.deepEqual(sharedForCoordinator.body.data[0].filters,filters);
+    // If an author loses administrator status, shared visibility fails closed.
+    await owner.query(`
+      UPDATE memberships SET role_code='agronomic_coordinator'
+      WHERE tenant_id=$1 AND user_id=$2
+    `,[tenantA,adminA]);
+    assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
+    await owner.query(`
+      UPDATE memberships SET role_code='tenant_admin'
+      WHERE tenant_id=$1 AND user_id=$2
+    `,[tenantA,adminA]);
+    assert.equal((await request(viewPath,coordinatorToken,tenantA)).body.data.length,1);
     assert.deepEqual((await request(viewPath,adminBToken,tenantB)).body.data,[]);
     assert.equal((await request(viewPath,contractorToken,tenantA)).status,403);
     assert.equal((await request(viewPath+'/'+savedId,coordinatorToken,tenantA,'DELETE')).status,404);
@@ -409,6 +420,43 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal((await request(viewPath+'/'+savedId,adminToken,tenantA,'DELETE')).status,200);
     assert.equal((await request(viewPath+'/'+savedId,adminToken,tenantA,'DELETE')).status,404);
     assert.equal((await request(viewPath,adminToken,tenantA)).body.data.length,9);
+    // Real company-wide cap across independent tenant admins.
+    // Each account has at most ten personal rows, but the tenant can share
+    // at most twenty. Existing personal rows may remain private.
+    const secondId=await addUser('shared admin two','tenant_admin',tenantA);
+    const thirdId=await addUser('shared admin three','tenant_admin',tenantA);
+    const secondToken=token(secondId,'tenant_admin',tenantA);
+    const thirdToken=token(thirdId,'tenant_admin',tenantA);
+    const publishedIds=[];
+    for (const [identity,prefix] of [[secondToken,'Public A'],[thirdToken,'Public B']]) {
+      for(let i=0;i<10;i++) {
+        const made=await request(viewPath,identity,tenantA,'POST',
+          {name:prefix+' '+i,filters});
+        assert.equal(made.status,201,JSON.stringify(made.body));
+        const id=made.body.data.id;
+        publishedIds.push(id);
+        const publishedAgain=await request(viewPath+'/'+id+'/visibility',identity,tenantA,
+          'PATCH',{visibility:'shared'});
+        assert.equal(publishedAgain.status,200,JSON.stringify(publishedAgain.body));
+      }
+    }
+    assert.equal((await request(viewPath,coordinatorToken,tenantA)).body.data.length,20);
+    const [ownCandidate]=(await request(viewPath,adminToken,tenantA)).body.data;
+    assert.equal((await request(viewPath+'/'+ownCandidate.id+'/visibility',adminToken,tenantA,
+      'PATCH',{visibility:'shared'})).status,409,'The 21st published view is denied');
+    const released=await request(viewPath+'/'+publishedIds[0]+'/visibility',
+      secondToken,tenantA,'PATCH',{visibility:'private'});
+    assert.equal(released.status,200);
+    assert.equal((await request(viewPath+'/'+ownCandidate.id+'/visibility',adminToken,tenantA,
+      'PATCH',{visibility:'shared'})).status,200,'Capacity released atomically');
+    assert.equal((await request(viewPath,coordinatorToken,tenantA)).body.data.length,20);
+    assert.deepEqual((await request(viewPath,adminBToken,tenantB)).body.data,[]);
+    await owner.query(`
+      DELETE FROM work_order_review_views
+      WHERE tenant_id=$1 AND id = ANY($2::uuid[])
+    `,[tenantA,[...publishedIds,ownCandidate.id]]);
+    assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
+
 
     for (const sort of ['newest','due_first','priority_first']) {
       const ordered=await request(reviewQueue+'?sort='+sort,adminToken,tenantA);
