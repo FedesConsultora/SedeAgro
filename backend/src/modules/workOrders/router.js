@@ -324,11 +324,13 @@ workOrdersRouter.patch('/review-queue/views/:viewId/visibility',
         Object.keys(req.query).length) throw new HttpError(422,'Vista inválida.');
     const parsed=reviewViewVisibility.safeParse(req.body);
     if (!parsed.success) throw new HttpError(422,'Visibilidad inválida.');
-    const lock=await queryTenantTransaction(`
-      SELECT id FROM tenants WHERE id = :tenant FOR UPDATE
+    // Serialize all publishers in the same tenant across application workers.
+    // Our scoped raw-SQL helper requires an explicit tenant_id marker.
+    await queryTenantTransaction(`
+      SELECT pg_advisory_xact_lock(hashtext(:tenant)) AS locked,
+             :tenant AS tenant_id
     `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
       replacements:{tenant:req.tenantId}});
-    if (lock.length !== 1) throw new HttpError(403,'Empresa no disponible.');
     const owned=await queryTenantTransaction(`
       SELECT id, user_id, name, filters, visibility, created_at, updated_at
       FROM work_order_review_views
