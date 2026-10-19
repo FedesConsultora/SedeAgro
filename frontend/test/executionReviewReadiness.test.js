@@ -62,10 +62,19 @@ test('real React component blocks positive review in UI and action while preserv
 test('Chromium modal acceptance waits for enabled state, still asserts real focus/escape', () => {
   const acceptance = readFileSync(new URL('../../scripts/acceptance-browser-cookie.mjs', import.meta.url), 'utf8');
   const section = acceptance.slice(acceptance.indexOf('// 0T.1: real authenticated portal;'),
-    acceptance.indexOf('PASS: Chromium modal focus'));
+    acceptance.indexOf('// An actual live lookup failure'));
+  const helper = readFileSync(new URL('../../scripts/support/assert-dialog-focus.mjs', import.meta.url), 'utf8');
   assert.match(section, /waitForFunction\(/);
   assert.match(section, /create && !create.disabled/);
-  assert.match(section, /await page1.keyboard.press\('Shift\+Tab'\)/);
+  assert.match(section, /for \(let cycle = 1; cycle <= 4; cycle \+= 1\)/);
+  assert.match(section, /assertDialogFocus\(/);
+  assert.match(section, /pressReverseTabAtDialogRoot\(/);
+  assert.match(helper, /event.key !== 'Tab'/);
+  assert.match(helper, /probe\?\.captured/);
+  assert.match(helper, /await page.keyboard.press\('Shift\+Tab'\)/);
   assert.match(section, /await page1.keyboard.press\('Escape'\)/);
-  assert.match(section, /document.activeElement/);
+  assert.match(helper, /document.activeElement === expected/);
+  assert.match(helper, /timeout: 750/);
+  assert.match(helper, /activeInsideDialog/);
+  assert.doesNotMatch(helper, /innerHTML|outerHTML|innerText|\.value\b/);
 });

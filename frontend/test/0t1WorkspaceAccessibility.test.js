@@ -58,7 +58,15 @@ test('live farm and work order forms reject fabricated lookup choices', () => {
 });
 
 test('actual Chromium flow proves focus cycle and blocked live lookups', () => {
-  assert.match(browser, /PASS: Chromium modal focus, Escape and return to opener/);
+  assert.match(browser, /for \(let cycle = 1; cycle <= 4; cycle \+= 1\)/);
+  assert.match(browser, /PASS: Chromium farm modal focus loop /);
+  assert.match(browser, /'farm-ready-root-' \+ cycle/);
+  assert.match(browser, /'farm-ready-last-' \+ cycle/);
+  assert.match(browser, /'farm-ready-first-' \+ cycle/);
+  assert.match(browser, /'farm-ready-return-' \+ cycle/);
+  assert.match(browser, /'farm-error-last-enabled'/);
+  assert.match(browser, /'order-error-last-enabled'/);
+  assert.match(browser, /await page1.keyboard.press\('Escape'\)/);
   assert.match(browser, /PASS: live farm form never falls back to mock producer list/);
   assert.match(browser, /PASS: live order form blocks creation when field lookup fails/);
 });
