@@ -126,8 +126,8 @@ test('page-only categories cover every server state without inventing global cou
 test('state filter now queries the server before pagination instead of slicing loaded page', () => {
   const component = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const contract of [
-    'reviewQueueUrl(cursor, workType, reviewState)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)',
     'aria-pressed={reviewState === key}',
     'changeReviewState(key)', 'items.map(', 'Estado de revisión (todas las páginas)',
     'setCursors([null])'
@@ -160,8 +160,8 @@ test('global selector resets signed cursors, page-local state and old response g
   const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const expected of [
     'Tipo de labor (todas las páginas)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState)',
-    'reviewQueueUrl(cursor, workType, reviewState)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority)',
     'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
     "setReviewState('all')", 'REVIEW_QUEUE_WORK_TYPES'
   ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
@@ -194,4 +194,20 @@ test('priority is a SQL-global filter and is part of every request generation', 
     reviewQueueRequestKey(1,'signed',0,'inspection','no_report','urgent')
   );
   assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','critical'),/inválida/);
+});
+
+test('priority selector is accessible, global and resets cursors without dropping work type/state', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url),'utf8');
+  for (const phrase of [
+    'Prioridad (todas las páginas)', 'review-queue-priority',
+    'REVIEW_QUEUE_PRIORITIES', 'changePriority(event.target.value)',
+    'setPriority(nextPriority)', 'setCursors([null])', 'setPage(0)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)'
+  ]) assert.ok(ui.includes(phrase), 'Missing global priority UI contract: '+phrase);
+  const fn = ui.slice(ui.indexOf('const changePriority ='),ui.indexOf('const changeWorkType ='));
+  assert.ok(!fn.includes("setWorkType("));
+  assert.ok(!fn.includes("setReviewState("));
+  assert.ok(fn.includes("setPriority(nextPriority)"));
+  assert.ok(ui.includes('value={priority} disabled={loading}'));
 });
