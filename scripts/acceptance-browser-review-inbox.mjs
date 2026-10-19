@@ -631,6 +631,11 @@ try {
   await region.getByLabel('Nombre de la nueva vista').fill('  Mis   inspecciones vencidas  ');
   await region.getByRole('button',{name:'Guardar filtros actuales'}).click();
   await region.getByText('Vista guardada. Podés recuperarla en tu próxima sesión.').waitFor();
+  // Only the tenant admin can publish or unpublish a personally owned view.
+  await region.getByRole('button',{name:'Compartir con coordinación'}).click();
+  await region.getByText('Vista compartida con coordinación de esta empresa.').waitFor();
+  assert.equal(await region.getByRole('button',{name:'Dejar de compartir'}).count(),1);
+
   const savedSelector=region.getByLabel('Elegir vista guardada');
   assert.equal(await savedSelector.locator('option').count(),2);
   const savedId=await savedSelector.inputValue();
@@ -640,6 +645,8 @@ try {
   await region.getByText('1 de 10 vistas guardadas.').waitFor();
   await savedSelector.selectOption(savedId);
   await pageCount(region,50,1);
+  assert.equal(await region.getByRole('button',{name:'Dejar de compartir'}).count(),1);
+
   // Deliberately change the current criteria, then restore the saved query.
   await workType.selectOption('all');
   await pageCount(region,50,1);
@@ -661,7 +668,10 @@ try {
   // The due-sort fixture intentionally made one of the 61 inspections NULL,
   // so overdue finds 60 orders and the second page has 10, not 11.
   await pageCount(region,10,2);
-  await region.getByRole('button',{name:'Eliminar vista…'}).click();
+  await region.getByRole('button',{name:'Dejar de compartir'}).click();
+  await region.getByText('Vista nuevamente privada para tu usuario.').waitFor();
+  assert.equal(await region.getByRole('button',{name:'Compartir con coordinación'}).count(),1);
+    await region.getByRole('button',{name:'Eliminar vista…'}).click();
   await region.getByText('¿Eliminar esta vista guardada?').waitFor();
   await region.getByRole('button',{name:'Cancelar'}).click();
   assert.equal(await savedSelector.locator('option').count(),2);

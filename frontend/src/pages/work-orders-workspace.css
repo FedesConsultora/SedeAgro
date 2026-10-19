@@ -163,3 +163,17 @@
 }
 .orders-workspace__review-save-actions button,
 .orders-workspace__review-save-form button { min-height: 44px; }
+
+/* 0T.28 — bounded, admin-only share controls. */
+.orders-workspace__review-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.orders-workspace__review-share-actions button {
+  min-height: 44px;
+}
+.orders-workspace__review-share-actions button:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 3px;
+}

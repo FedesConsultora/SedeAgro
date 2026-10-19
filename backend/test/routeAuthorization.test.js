@@ -23,7 +23,7 @@ test('all business route declarations have an explicit capability guard', () => 
       count += 1;
     }
   }
-  assert.equal(count, 80, 'update the reviewed endpoint count when changing the API');
+  assert.equal(count, 81, 'update the reviewed endpoint count when changing the API');
 });
 
 test('tenant member listing is guarded, and personal notifications require ownership', () => {

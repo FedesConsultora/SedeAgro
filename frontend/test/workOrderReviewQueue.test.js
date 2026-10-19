@@ -342,3 +342,17 @@ test('saved view UI never retains or restores cursor, and is identity remounted'
   assert.ok(component.includes('setDeleteArmed(true)'));
   assert.ok(component.includes('controller.abort()'));
 });
+
+test('shared view UI limits private writes and exposes admin-only visibility toggle',()=>{
+  const source=readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx',import.meta.url),'utf8');
+  for(const token of [
+    "view.source === 'mine'", "view.source === 'shared'",
+    "selectedView?.source === 'mine'", "role === 'tenant_admin'",
+    "changeViewVisibility('shared')", "changeViewVisibility('private')",
+    "Compartir con coordinación", "Dejar de compartir",
+    "Compartidas con coordinación", "Esta vista es de solo lectura",
+    "if (viewBusy || viewLoading || !deleteArmed || !selectedViewId || !canManageSelected)",
+    "setCursors([null])", "setPage(0)"
+  ]) assert.ok(source.includes(token),'Missing view-share safety: '+token);
+  assert.ok(!source.includes("localStorage"));
+});
