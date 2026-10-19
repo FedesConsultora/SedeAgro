@@ -123,13 +123,18 @@ test('page-only categories cover every server state without inventing global cou
   assert.throws(() => filterReviewQueuePage(null, 'all'), /inválido/);
 });
 
-test('page-only filter UI never masquerades as a server-wide search', () => {
-  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
+test('state filter now queries the server before pagination instead of slicing loaded page', () => {
+  const component = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const contract of [
-    'filterReviewQueuePage(items, filter)', 'aria-pressed={filter === key}',
-    'visibleItems.map(', "setFilter('all')", 'El filtro no busca en otras páginas',
-    'Sin coincidencias en esta página'
-  ]) assert.ok(ui.includes(contract), 'Missing current-page filter contract: ' + contract);
+    'reviewQueueUrl(cursor, workType, reviewState)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState)',
+    'aria-pressed={reviewState === key}',
+    'changeReviewState(key)', 'items.map(', 'Estado de revisión (todas las páginas)',
+    'setCursors([null])'
+  ]) assert.ok(component.includes(contract), 'Missing server review state filter: '+contract);
+  assert.ok(!component.includes('filterReviewQueuePage(items, filter)'));
+  assert.ok(!component.includes('El filtro no busca en otras páginas'));
+  assert.ok(!component.includes('visibleItems.map('));
 });
 
 test('global SQL work-type query is distinct from the current-page state filter', () => {
@@ -155,11 +160,22 @@ test('global selector resets signed cursors, page-local state and old response g
   const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const expected of [
     'Tipo de labor (todas las páginas)',
-    'reviewQueueRequestKey(page, cursor, reload, workType)',
-    'reviewQueueUrl(cursor, workType)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState)',
+    'reviewQueueUrl(cursor, workType, reviewState)',
     'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
-    "setFilter('all')", 'REVIEW_QUEUE_WORK_TYPES'
+    "setReviewState('all')", 'REVIEW_QUEUE_WORK_TYPES'
   ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
   assert.ok(ui.includes('disabled={loading}'), 'Selector should not act during in-flight queries');
   assert.ok(ui.includes('onChange={event => changeWorkType(event.target.value)}'));
+});
+
+test('global state scope prevents cross-filter response/cursor reuse', () => {
+  assert.equal(reviewQueueUrl(null, 'all', 'no_report'),
+    '/work-orders/review-queue?state=no_report');
+  assert.equal(reviewQueueUrl('abc.def', 'application', 'closure'),
+    '/work-orders/review-queue?cursor=abc.def&type=application&state=closure');
+  assert.throws(() => reviewQueueUrl(null, 'all', 'bogus'), /inválido/);
+  assert.notEqual(reviewQueueRequestKey(1,'cursor',2,'application','no_report'),
+    reviewQueueRequestKey(1,'cursor',2,'application','closure'));
+  assert.throws(() => reviewQueueRequestKey(0,null,0,'all','bad'), /inválida/);
 });

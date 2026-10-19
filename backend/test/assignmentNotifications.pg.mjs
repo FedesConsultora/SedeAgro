@@ -376,6 +376,20 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(recorded.body.data.submitted_by, contractor1);
     const submittedQueue = await request(reviewQueue, adminToken, tenantA);
     assert.equal(submittedQueue.status, 200);
+    const globalHuman = await request(reviewQueue + '?state=review', adminToken, tenantA);
+    assert.equal(globalHuman.status, 200, JSON.stringify(globalHuman.body));
+    assert.equal(globalHuman.body.data.some(item => item.id === orderId), true);
+    assert.equal(globalHuman.body.data.every(item => item.state === 'human_review'), true);
+    assert.equal((await request(reviewQueue + '?state=no_report',
+      adminToken, tenantA)).body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?state=review', adminBToken, tenantB))
+      .body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?state=review', contractorToken, tenantA)).status, 403);
+    for (const bad of ['?state=invalid', '?state=', '?state[]=review',
+      '?state=review&state=blocked']) {
+      assert.equal((await request(reviewQueue + bad, adminToken, tenantA)).status, 422,
+        'Invalid global review filter must reject: ' + bad);
+    }
     assert.equal(submittedQueue.body.data.find(row => row.id === orderId).state, 'human_review');
     assert.equal(submittedQueue.body.data.find(row => row.id === orderId).report_id, firstReportId);
 
@@ -511,6 +525,10 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       adminToken, tenantA, 'POST', { decision: 'verified', checklist: checkedReviewNoFiles });
     assert.equal(verified.status, 200, JSON.stringify(verified.body));
     assert.equal(verified.body.data.review_status, 'verified');
+    const globalClosure = await request(reviewQueue + '?state=closure', adminToken, tenantA);
+    assert.equal(globalClosure.status, 200, JSON.stringify(globalClosure.body));
+    assert.equal(globalClosure.body.data.some(item => item.id === orderId), true);
+    assert.equal(globalClosure.body.data.every(item => item.state === 'ready_for_closure'), true);
     assert.deepEqual(verified.body.data.review_checklist, checkedReviewNoFiles);
     const history = await request(`/work-orders/${orderId}`, adminToken, tenantA);
     assert.equal(history.status, 200);
