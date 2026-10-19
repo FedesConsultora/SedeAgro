@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import pg from 'pg';
 import { chromium } from 'playwright';
+import { assertDialogFocus } from './support/assert-dialog-focus.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
@@ -91,33 +92,39 @@ try {
   // Escape must close it, and focus must return to the invoking control.
   await page1.getByRole('button', { name: 'Establecimientos' }).click();
   const farmOpener = page1.locator('.workspace-heading').getByRole('button', { name: 'Nuevo establecimiento' });
-  await farmOpener.click();
   const farmDialog = page1.getByRole('dialog', { name: 'Nuevo establecimiento' });
-  await farmDialog.waitFor();
-  // The final tab stop (Crear) is intentionally disabled while the real
-  // producer lookup loads. Wait for that observable state, not a fixed sleep:
-  // otherwise Shift+Tab correctly lands on a different enabled control and
-  // an accessibility assertion becomes timing-dependent.
-  await page1.waitForFunction(() => {
-    const dialog = [...document.querySelectorAll('[role="dialog"]')]
-      .find(node => node.getAttribute('aria-labelledby') &&
-        node.textContent.includes('Nuevo establecimiento'));
-    const create = dialog && [...dialog.querySelectorAll('button')]
-      .find(node => node.textContent.trim() === 'Crear');
-    return Boolean(create && !create.disabled);
-  }, null, { timeout: 10000 });
-  assert.equal(await farmDialog.evaluate(el => el === document.activeElement), true,
-    'Dialog focus must remain trapped while loading form dependencies');
-  await page1.keyboard.press('Shift+Tab');
-  assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true })
-    .evaluate(el => el === document.activeElement), true);
-  await page1.keyboard.press('Tab');
-  assert.equal(await farmDialog.getByRole('button', { name: 'Cerrar Nuevo establecimiento' })
-    .evaluate(el => el === document.activeElement), true);
-  await page1.keyboard.press('Escape');
-  await farmDialog.waitFor({ state: 'detached' });
-  assert.equal(await farmOpener.evaluate(el => el === document.activeElement), true);
-  console.log('PASS: Chromium modal focus, Escape and return to opener');
+  // Repeated open/close cycles catch asynchronous focus races that a single
+  // successful run could miss. Every cycle uses real producer API results.
+  for (let cycle = 1; cycle <= 4; cycle += 1) {
+    await farmOpener.click();
+    await farmDialog.waitFor();
+    // Crear starts disabled while the producer lookup is pending. Wait for
+    // actual API-backed form readiness, never for an arbitrary timeout.
+    await farmDialog.getByRole('button', { name: 'Crear', exact: true })
+      .waitFor({ state: 'visible' });
+    await page1.waitForFunction(() => {
+      const dialog = [...document.querySelectorAll('[role="dialog"]')]
+        .find(node => node.getAttribute('aria-labelledby') &&
+          node.textContent.includes('Nuevo establecimiento'));
+      const create = dialog && [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === 'Crear');
+      return Boolean(create && !create.disabled);
+    }, null, { timeout: 10000 });
+    await assertDialogFocus(page1, farmDialog, farmDialog, 'farm-ready-root-' + cycle);
+    await page1.keyboard.press('Shift+Tab');
+    await assertDialogFocus(page1, farmDialog,
+      farmDialog.getByRole('button', { name: 'Crear', exact: true }),
+      'farm-ready-last-' + cycle);
+    await page1.keyboard.press('Tab');
+    await assertDialogFocus(page1, farmDialog,
+      farmDialog.getByRole('button', { name: 'Cerrar Nuevo establecimiento' }),
+      'farm-ready-first-' + cycle);
+    await page1.keyboard.press('Escape');
+    await farmDialog.waitFor({ state: 'detached' });
+    await assertDialogFocus(page1, page1.locator('body'), farmOpener,
+      'farm-ready-return-' + cycle);
+    console.log('PASS: Chromium farm modal focus loop ' + cycle + '/4');
+  }
 
   // An actual live lookup failure must not silently insert demo producer IDs
   // into a create form. Retry is explicit and a failed lookup blocks submit.
@@ -129,6 +136,15 @@ try {
   await farmDialog.getByText('No se pudieron cargar productores.').waitFor();
   assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true }).isDisabled(), true);
   assert.equal(await farmDialog.locator('#farm-producer option').count(), 0);
+  await assertDialogFocus(page1, farmDialog, farmDialog, 'farm-error-root');
+  await page1.keyboard.press('Shift+Tab');
+  // Disabled Crear MUST be skipped; the last tabbable element is Cancelar.
+  await assertDialogFocus(page1, farmDialog,
+    farmDialog.getByRole('button', { name: 'Cancelar' }), 'farm-error-last-enabled');
+  await page1.keyboard.press('Tab');
+  await assertDialogFocus(page1, farmDialog,
+    farmDialog.getByRole('button', { name: 'Cerrar Nuevo establecimiento' }),
+    'farm-error-first');
   await page1.unroute('**/api/v1/farms/producers');
   await farmDialog.getByRole('button', { name: 'Reintentar' }).click();
   await page1.waitForFunction(() => {
@@ -175,8 +191,18 @@ try {
   assert.equal(await orderDialog.getByRole('button', { name: 'Crear orden' }).isDisabled(), true);
   assert.equal(await orderDialog.locator('#wo-field option').count(), 1,
     'no private or fake field choices after lookup fails');
+  await assertDialogFocus(page1, orderDialog, orderDialog, 'order-error-root');
+  await page1.keyboard.press('Shift+Tab');
+  await assertDialogFocus(page1, orderDialog,
+    orderDialog.getByRole('button', { name: 'Cancelar' }), 'order-error-last-enabled');
+  await page1.keyboard.press('Tab');
+  await assertDialogFocus(page1, orderDialog,
+    orderDialog.getByRole('button', { name: 'Cerrar Nueva orden de trabajo' }),
+    'order-error-first');
   await page1.keyboard.press('Escape');
   await orderDialog.waitFor({ state: 'detached' });
+  await assertDialogFocus(page1, page1.locator('body'),
+    page1.getByRole('button', { name: 'Nueva orden' }), 'order-error-return');
   await page1.unroute('**/api/v1/fields');
   console.log('PASS: live order form blocks creation when field lookup fails');
 
