@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { Op, fn, col, where } from 'sequelize';
+import { Op, fn, col, where, literal } from 'sequelize';
 import {
   AgriculturalInput,
   AuditEvent,
@@ -36,7 +36,8 @@ import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithException
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
 import { classifyReviewQueueItem, selectReviewQueueReports, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
 import { issueReviewCursor, parseReviewCursor, ReviewCursorError,
-  REVIEW_QUEUE_WORK_TYPES } from './reviewQueueCursor.js';
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS } from './reviewQueueCursor.js';
+import { reviewQueueStateSql, REVIEW_QUEUE_STATE_GROUPS } from './reviewQueueStateSql.js';
 
 export const workOrdersRouter = Router();
 
@@ -223,9 +224,11 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       undefined, 'ORDER_REVIEW_QUEUE_FORBIDDEN');
   }
   const workType = req.query.type ?? 'all';
-  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type') ||
+  const reviewState = req.query.state ?? 'all';
+  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type' && key !== 'state') ||
       (req.query.cursor != null && (typeof req.query.cursor !== 'string' || !req.query.cursor)) ||
-      typeof workType !== 'string' || !REVIEW_QUEUE_WORK_TYPES.includes(workType)) {
+      typeof workType !== 'string' || !REVIEW_QUEUE_WORK_TYPES.includes(workType) ||
+      typeof reviewState !== 'string' || !REVIEW_QUEUE_STATE_FILTERS.includes(reviewState)) {
     throw new HttpError(422, 'Filtro o cursor de bandeja inválidos.',
       undefined, 'ORDER_REVIEW_CURSOR_INVALID');
   }
@@ -233,7 +236,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   try {
     cursor = req.query.cursor
       ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId,
-        userId: req.auth.user.id, workType })
+        userId: req.auth.user.id, workType, reviewState })
       : null;
   } catch (error) {
     if (!(error instanceof ReviewCursorError)) throw error;
@@ -255,6 +258,11 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const rows = await WorkOrder.findAll({
     where: { tenant_id: req.tenantId, status: 'in_progress',
       ...(workType === 'all' ? {} : { type: workType }),
+      ...(reviewState === 'all' ? {} : {
+        [Op.and]: where(literal(reviewQueueStateSql(req.auth.user.id)), {
+          [Op.in]: REVIEW_QUEUE_STATE_GROUPS[reviewState]
+        })
+      }),
       created_at: { [Op.lte]: anchor }, ...older },
     attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
     order: [[orderingTime, 'DESC'], ['id', 'DESC']],
@@ -264,7 +272,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
   const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
   const nextCursor = hasMore ? issueReviewCursor({
-    tenantId: req.tenantId, userId: req.auth.user.id, workType, anchor,
+    tenantId: req.tenantId, userId: req.auth.user.id, workType, reviewState, anchor,
     last: orders[orders.length - 1]
   }) : null;
   const ids = orders.map(order => order.id);
@@ -333,6 +341,13 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       reviewerId: req.auth.user.id
     });
   });
+  // An unexpected SQL/JS classification drift is never an empty/success page.
+  // This also guards additions to the advisory classifier without SQL updates.
+  if (reviewState !== 'all' && data.some(item =>
+    !REVIEW_QUEUE_STATE_GROUPS[reviewState].includes(item.state))) {
+    throw new HttpError(409, 'La clasificación de pendientes cambió; reiniciá la consulta.',
+      undefined, 'ORDER_REVIEW_STATE_MISMATCH');
+  }
   res.set('Cache-Control', 'private, no-store');
   res.json({ data, pagination: {
     page_size: REVIEW_QUEUE_PAGE_SIZE, has_more: hasMore, next_cursor: nextCursor
