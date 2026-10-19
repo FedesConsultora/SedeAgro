@@ -177,3 +177,47 @@
   outline: 3px solid #15803d;
   outline-offset: 3px;
 }
+
+/* 0T.29 — tenant admin moderation is separate from personal saved views. */
+.orders-workspace__review-moderation {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid #b9cfc2;
+  border-radius: 10px;
+}
+.orders-workspace__review-moderation-form {
+  display: grid;
+  gap: 8px;
+  max-width: 36rem;
+}
+.orders-workspace__review-moderation-form select,
+.orders-workspace__review-moderation-form textarea {
+  box-sizing: border-box;
+  width: min(100%, 36rem);
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #b9cfc2;
+  border-radius: 8px;
+  color: #1f362a;
+  background: #fff;
+}
+.orders-workspace__review-moderation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.orders-workspace__review-moderation button { min-height: 44px; }
+.orders-workspace__review-moderation button:focus-visible,
+.orders-workspace__review-moderation select:focus-visible,
+.orders-workspace__review-moderation textarea:focus-visible,
+.orders-workspace__review-moderation summary:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 3px;
+}
+.orders-workspace__review-moderation li {
+  overflow-wrap: anywhere;
+  padding: 6px 0;
+}
