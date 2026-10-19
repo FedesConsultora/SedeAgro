@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import pg from 'pg';
 import { chromium } from 'playwright';
-import { assertDialogFocus } from './support/assert-dialog-focus.mjs';
+import { assertDialogFocus, pressReverseTabAtDialogRoot } from './support/assert-dialog-focus.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
@@ -111,9 +111,9 @@ try {
       return Boolean(create && !create.disabled);
     }, null, { timeout: 10000 });
     await assertDialogFocus(page1, farmDialog, farmDialog, 'farm-ready-root-' + cycle);
-    await page1.keyboard.press('Shift+Tab');
-    await assertDialogFocus(page1, farmDialog,
-      farmDialog.getByRole('button', { name: 'Crear', exact: true }),
+    // Capture the actually enabled last control at keydown, not at an
+    // earlier lookup-ready observation (the async form may still rerender).
+    await pressReverseTabAtDialogRoot(page1, farmDialog,
       'farm-ready-last-' + cycle);
     await page1.keyboard.press('Tab');
     await assertDialogFocus(page1, farmDialog,
