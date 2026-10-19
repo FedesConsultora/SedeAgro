@@ -135,20 +135,19 @@ try {
   assert.ok(!originalA.includes('Demostración:'));
   console.log('PASS: Chromium rendered fifty authorized orders from real PostGIS/Express');
 
-  // A page-only filter NEVER narrows the server cursor or pretends that a
-  // zero-match current page is an empty global inbox.
-  const filters = region.getByRole('group', { name: 'Filtrar solo esta página' });
+  // State filters now query the ENTIRE authorized tenant before LIMIT.
+  const filters = region.getByRole('group', { name: 'Estado de revisión (todas las páginas)' });
   await filters.getByRole('button', { name: 'Revisión humana' }).click();
+  await pageCount(region, 0, 1);
+  assert.equal(await next.isDisabled(), true, 'No global matches means no cursor');
   assert.equal(await filters.getByRole('button', { name: 'Revisión humana' })
     .getAttribute('aria-pressed'), 'true');
-  await region.getByText(/0 de 50 órdenes visibles en esta página/).waitFor();
-  assert.equal(await region.getByRole('button', { name: 'Abrir orden y comprobar' }).count(), 0);
-  await region.getByText(/Sin coincidencias en esta página/).waitFor();
-  assert.equal(await next.isDisabled(), false, 'A filter must not disable server pagination');
   await filters.getByRole('button', { name: 'Sin parte' }).click();
-  await region.getByText(/50 de 50 órdenes visibles en esta página/).waitFor();
-  assert.equal(await region.getByRole('button', { name: 'Abrir orden y comprobar' }).count(), 50);
-  console.log('PASS: page-local filters show honest counts, empty state and preserve next cursor');
+  await pageCount(region, 50, 1);
+  assert.equal(await next.isDisabled(), false);
+  await filters.getByRole('button', { name: 'Todas' }).click();
+  await pageCount(region, 50, 1);
+  console.log('PASS: global state filters query actual Express and produce bounded cursors');
 
   // Delay a genuine HTTP 200 to prove the prior page disappears while
   // loading. Route.fetch talks to Express; no synthetic successful payload.
@@ -179,7 +178,7 @@ try {
   await headingFocused(page, region);
   assert.equal(await filters.getByRole('button', { name: 'Todas' }).getAttribute('aria-pressed'),
     'true', 'Changing server page resets previous page-local filter');
-  await region.getByText(/11 de 11 órdenes visibles en esta página/).waitFor();
+  await region.getByText(/11 órdenes coincidentes en esta página/).waitFor();
   await page.unroute('**/api/v1/work-orders/review-queue?cursor=*', delayedHandler);
   assert.equal(await next.isDisabled(), true);
   console.log('PASS: keyboard next + real delayed HTTP, no stale flash, 11 real rows and heading focus');
@@ -232,13 +231,15 @@ try {
   console.log('PASS: interrupted HTTP never produces fake data; explicit retry recovers');
 
   await filters.getByRole('button', { name: 'Posible cierre' }).click();
-  await region.getByText(/0 de 11 órdenes visibles en esta página/).waitFor();
+  await pageCount(region, 0, 1);
   await region.getByRole('button', { name: 'Actualizar pendientes' }).click();
+  await pageCount(region, 0, 1);
+  assert.equal(await filters.getByRole('button', { name: 'Posible cierre' })
+    .getAttribute('aria-pressed'), 'true', 'Refresh must retain the global filter');
+  await filters.getByRole('button', { name: 'Todas' }).click();
   await pageCount(region, 50, 1);
-  assert.equal(await filters.getByRole('button', { name: 'Todas' }).getAttribute('aria-pressed'),
-    'true', 'Refreshing from server must reset the page-local filter');
   assert.equal(await previous.isDisabled(), true);
-  console.log('PASS: explicit refresh resets filters and reloads the real first page');
+  console.log('PASS: refresh retains global review state; selecting all resets to first page');
 
   // Filter SQL BEFORE LIMIT: fifty-five fresh applications appear ahead of
   // sixty-one older inspections in the unfiltered ordering.
@@ -288,6 +289,35 @@ try {
   await pageCount(region, 50, 1);
   assert.equal(await previous.isDisabled(), true);
   console.log('PASS: SQL-wide inspection returns older rows and type switch resets cursor');
+
+  // Introduce submitted reports only for all 55 NEWEST application orders.
+  // Global no_report must skip these and return OLD inspection rows beyond
+  // the first unfiltered 50, instead of incorrectly filtering one page.
+  const reportRows = await admin.query(`
+    INSERT INTO work_order_executions
+      (tenant_id,work_order_id,submitted_by,started_at,finished_at,
+       worked_area_hectares,result_summary,review_status,created_at)
+    SELECT $1,wo.id,$2,now() - interval '2 hours',now() - interval '1 hour',
+      1.50,'Verified fixture provenance for review filter test','submitted',now()
+    FROM work_orders wo WHERE wo.tenant_id=$1 AND wo.type='application'
+      AND wo.status='in_progress' AND wo.title LIKE 'Global application %'
+    RETURNING id
+  `, [ownerA.tenant.id, ownerA.user.id]);
+  assert.equal(reportRows.rowCount, 55);
+  await filters.getByRole('button', { name: 'Sin parte' }).click();
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Real review browser'));
+  assert.ok(!(await region.innerText()).includes('Global application'));
+  await next.click();
+  await pageCount(region, 11, 2);
+  await filters.getByRole('button', { name: 'Con bloqueos' }).click();
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Global application'));
+  await next.click();
+  await pageCount(region, 5, 2);
+  console.log('PASS: global no-report 50/11 and blocked 50/5 match source DB reports before LIMIT');
+  await filters.getByRole('button', { name: 'Todas' }).click();
+  await pageCount(region, 50, 1);
 
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
