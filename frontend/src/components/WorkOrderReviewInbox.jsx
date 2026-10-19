@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
+  REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
   reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
@@ -14,6 +15,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const available = isCoordinationReviewer(role, dataMode, session?.authenticated);
   const [cursors, setCursors] = useState([null]);
   const [page, setPage] = useState(0);
+  const [filter, setFilter] = useState('all');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
@@ -64,19 +66,24 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
 
   if (!available) return null;
   const items = shown?.items ?? [];
+  // Only the fifty currently authorized results: NEVER an unbounded search.
+  const visibleItems = filterReviewQueuePage(items, filter);
   const changePage = direction => {
     if (loading || error || !shown) return;
     if (direction < 0 && page > 0) {
       focusOnNavigation.current = true;
+      setFilter('all');
       setPage(value => value - 1);
     } else if (direction > 0 && shown.hasMore && shown.nextCursor) {
       focusOnNavigation.current = true;
+      setFilter('all');
       setCursors(previous => [...previous.slice(0, page + 1), shown.nextCursor]);
       setPage(page + 1);
     }
   };
   const refresh = () => {
     focusOnNavigation.current = false;
+    setFilter('all');
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
@@ -105,9 +112,27 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
         Página {page + 1}. {items.length} órdenes en esta página.
       </p>
+      <fieldset className="orders-workspace__review-filters">
+        <legend>Filtrar solo esta página</legend>
+        <div className="orders-workspace__review-filter-options">
+          {Object.entries(REVIEW_QUEUE_PAGE_FILTERS).map(([key, option]) =>
+            <button key={key} type="button" className={`ghost-action ${filter === key
+              ? 'orders-workspace__review-filter--active' : ''}`}
+              aria-pressed={filter === key} onClick={() => setFilter(key)}>
+              {option.label}
+            </button>)}
+        </div>
+      </fieldset>
+      <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
+        {visibleItems.length} de {items.length} órdenes visibles en esta página.
+        El filtro no busca en otras páginas.
+      </p>
       {items.length === 0 && <p role="status">No hay órdenes en curso en esta página.</p>}
+      {items.length > 0 && visibleItems.length === 0 && <p role="status">
+        Sin coincidencias en esta página. Probá otro filtro o navegá a otra página disponible.
+      </p>}
       <div className="orders-workspace__review-items">
-        {items.map(item => <article key={item.id} className="orders-workspace__review-item">
+        {visibleItems.map(item => <article key={item.id} className="orders-workspace__review-item">
           <div className="orders-workspace__review-item-copy">
             <strong>{item.title}</strong>
             <span>{REVIEW_QUEUE_STATES[item.state]}</span>
