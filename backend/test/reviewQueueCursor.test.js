@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { REVIEW_QUEUE_DUE_WINDOWS } from '../src/modules/workOrders/reviewQueueDueWindow.js';
 import { issueReviewCursor, parseReviewCursor, REVIEW_CURSOR_TTL_MS,
   ReviewCursorError, REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS,
   REVIEW_QUEUE_PRIORITIES } from '../src/modules/workOrders/reviewQueueCursor.js';
@@ -108,4 +109,33 @@ test('v4 cursor binds priority and prohibits cross-priority replay', () => {
     tenantId,userId,priority:'injection',anchor,
     last:{id:lastId,created_at:new Date(now-18000)}
   },now),ReviewCursorError);
+});
+
+test('v5 signed cursor carries the anchored due window and rejects cross-window replay', () => {
+  assert.deepEqual(REVIEW_QUEUE_DUE_WINDOWS,
+    ['all','overdue','next_7_days','later','unscheduled']);
+  for (const dueWindow of REVIEW_QUEUE_DUE_WINDOWS) {
+    const token = issueReviewCursor({
+      tenantId,userId,workType:'inspection',reviewState:'no_report',
+      priority:'normal',dueWindow,anchor,
+      last:{id:lastId,created_at:new Date(now-18000)}
+    },now);
+    const context={tenantId,userId,workType:'inspection',reviewState:'no_report',
+      priority:'normal',dueWindow};
+    const parsed=parseReviewCursor(token,context,now+1000);
+    assert.equal(parsed.dueWindow,dueWindow);
+    assert.equal(parsed.anchor.toISOString(),anchor.toISOString());
+    for (const changed of REVIEW_QUEUE_DUE_WINDOWS.filter(x=>x!==dueWindow)) {
+      assert.throws(()=>parseReviewCursor(token,{...context,dueWindow:changed},now+1000),
+        ReviewCursorError);
+    }
+    assert.throws(()=>parseReviewCursor(token,{...context,tenantId:otherTenant},now+1000),
+      ReviewCursorError);
+    assert.throws(()=>parseReviewCursor(token,{...context,userId:otherUser},now+1000),
+      ReviewCursorError);
+  }
+  assert.throws(()=>issueReviewCursor({tenantId,userId,dueWindow:'unlimited',
+    anchor,last:{id:lastId,created_at:new Date(now-18000)}},now),ReviewCursorError);
+  assert.throws(()=>parseReviewCursor(issued(),{tenantId,userId,dueWindow:'unlimited'},now),
+    ReviewCursorError);
 });
