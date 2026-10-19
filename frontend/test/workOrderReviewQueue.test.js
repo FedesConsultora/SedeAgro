@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
-  REVIEW_QUEUE_STATES } from '../src/services/workOrderReviewQueue.js';
+  REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage
+} from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
   state: 'human_review', reason: 'Requiere chequeo humano', report_id: 'r1' };
@@ -101,4 +102,22 @@ test('page, cursor and retry generation fence asynchronous responses', () => {
   assert.throws(() => reviewQueueRequestKey(-1, null, 0), /inválida/);
   assert.throws(() => reviewQueueRequestKey(0, { bogus: true }, 0), /inválida/);
   assert.throws(() => reviewQueueRequestKey(0, null, NaN), /inválida/);
+});
+
+test('page-only categories cover every server state without inventing global counts', () => {
+  const records = Object.keys(REVIEW_QUEUE_STATES).map((state, i) => ({
+    ...entry, id: String(i), state
+  }));
+  const groups = Object.keys(REVIEW_QUEUE_PAGE_FILTERS);
+  assert.deepEqual(groups, ['all', 'no_report', 'blocked', 'review', 'closure']);
+  assert.equal(filterReviewQueuePage(records).length, 8);
+  assert.equal(filterReviewQueuePage(records, 'no_report').length, 1);
+  assert.equal(filterReviewQueuePage(records, 'blocked').length, 5);
+  assert.equal(filterReviewQueuePage(records, 'review').length, 1);
+  assert.equal(filterReviewQueuePage(records, 'closure').length, 1);
+  assert.equal(filterReviewQueuePage(records, 'all'), records);
+  assert.equal(records.length, 8, 'filter must not mutate a server page');
+  assert.deepEqual(filterReviewQueuePage([], 'blocked'), []);
+  assert.throws(() => filterReviewQueuePage(records, 'all-tenants'), /inválido/);
+  assert.throws(() => filterReviewQueuePage(null, 'all'), /inválido/);
 });
