@@ -425,6 +425,58 @@ workOrdersRouter.get('/review-queue/views/moderation/audit', requireCapability('
       page_size:REVIEW_VIEW_MODERATION_AUDIT_PAGE_SIZE});
   }));
 
+// Exceptional moderation is revoke-only: the author retains the private
+// record, all six filters, and deletion authority. Nothing is copied to the
+// actor. UPDATE and audit INSERT must commit or roll back together.
+workOrdersRouter.post('/review-queue/views/moderation/:viewId/revoke', requireCapability('orders.write'),
+  asyncHandler(async(req,res) => {
+    requireReviewViewModerator(req);
+    if (!reviewViewUuid.safeParse(req.params.viewId).success ||
+        Object.keys(req.query).length) throw new HttpError(422,'Vista inválida.');
+    let reason;
+    try { reason = parseRevokeSharedView(req.body).reason; }
+    catch { throw new HttpError(422,'Motivo de revocación inválido.'); }
+    // Same tenant advisory lock as owner publish/unpublish to serialize
+    // moderation against a concurrent share/rename/capacity change.
+    await queryTenantTransaction(`
+      SELECT pg_advisory_xact_lock(hashtext(:tenant)) AS locked,
+             :tenant AS tenant_id
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId}});
+    const ownedByAnother=await queryTenantTransaction(`
+      SELECT id,user_id,name FROM work_order_review_views
+      WHERE tenant_id=:tenant AND id=:id AND user_id<>:actor
+        AND visibility='shared'
+      FOR UPDATE
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:req.params.viewId,
+        actor:req.auth.user.id}});
+    if (ownedByAnother.length !== 1) {
+      throw new HttpError(404,'Vista compartida no encontrada.');
+    }
+    const target=ownedByAnother[0];
+    const updated=await queryTenantTransaction(`
+      UPDATE work_order_review_views
+      SET visibility='private',updated_at=now()
+      WHERE tenant_id=:tenant AND id=:id AND user_id=:owner
+        AND visibility='shared'
+      RETURNING id
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:target.id,owner:target.user_id}});
+    if(updated.length!==1) throw new HttpError(409,'La vista cambió durante la moderación.');
+    const [event]=await queryTenantTransaction(`
+      INSERT INTO work_order_review_view_moderation_audit
+        (tenant_id,view_id,view_owner_id,actor_user_id,view_name,reason)
+      VALUES (:tenant,:id,:owner,:actor,:name,:reason)
+      RETURNING id,view_id,view_name,actor_user_id,view_owner_id,
+        reason,action,created_at
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,id:target.id,owner:target.user_id,
+        actor:req.auth.user.id,name:target.name,reason}});
+    res.set('Cache-Control','private, no-store');
+    res.json({data:publicModerationEvent(event)});
+  }));
+
 workOrdersRouter.delete('/review-queue/views/:viewId', requireCapability('orders.write'),
   asyncHandler(async (req, res) => {
     requireReviewViewOwner(req);
