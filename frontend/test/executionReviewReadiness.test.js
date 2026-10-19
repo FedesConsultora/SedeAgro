@@ -68,6 +68,9 @@ test('Chromium modal acceptance waits for enabled state, still asserts real focu
   assert.match(section, /create && !create.disabled/);
   assert.match(section, /for \(let cycle = 1; cycle <= 4; cycle \+= 1\)/);
   assert.match(section, /assertDialogFocus\(/);
+  assert.match(section, /pressReverseTabAtDialogRoot\(/);
+  assert.match(helper, /event.key !== 'Tab'/);
+  assert.match(helper, /probe\?\.captured/);
   assert.match(section, /await page1.keyboard.press\('Shift\+Tab'\)/);
   assert.match(section, /await page1.keyboard.press\('Escape'\)/);
   assert.match(helper, /document.activeElement === expected/);
