@@ -67,7 +67,11 @@ test('inbox surfaces failure, clears previous data and opens authorized details 
   assert.match(ui, /setCursors/);
   assert.match(ui, /WorkOrderReviewInboxSession key/);
   assert.match(ui, /onOpenOrder\(\{ id: item.id, title: item.title \}\)/);
-  assert.doesNotMatch(ui, /POST|PATCH|approve\(/);
+  const inboxRead = ui.slice(ui.indexOf('api.request(reviewQueueUrl('),
+    ui.indexOf('.then(result =>', ui.indexOf('api.request(reviewQueueUrl(')));
+  assert.doesNotMatch(inboxRead, /method:\s*['"](?:POST|PATCH)/,
+    'The inbox query remains read-only even when saved views use POST');
+  assert.doesNotMatch(ui, /approve\(/);
   assert.match(page, /<WorkOrderReviewInbox revision=\{revision\} onOpenOrder=\{setSelectedOrder\}/);
 });
 
@@ -278,7 +282,7 @@ test('title search form applies only submitted phrases and resets signed cursor'
   assert.ok(source.includes("setTitleError('Escribí entre 2 y 64 caracteres"));
   assert.ok(source.includes('maxLength={64} disabled={loading}'));
   const searchFn=source.slice(source.indexOf('const commitTitleQuery ='),
-    source.indexOf('const changeReviewState ='));
+    source.indexOf('const saveView ='));
   assert.ok(!searchFn.includes('setWorkType('));
   assert.ok(!searchFn.includes('setPriority('));
   assert.ok(!searchFn.includes('setDueWindow('));
