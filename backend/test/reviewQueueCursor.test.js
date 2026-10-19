@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { issueReviewCursor, parseReviewCursor, REVIEW_CURSOR_TTL_MS,
-  ReviewCursorError, REVIEW_QUEUE_WORK_TYPES } from '../src/modules/workOrders/reviewQueueCursor.js';
+  ReviewCursorError, REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS } from '../src/modules/workOrders/reviewQueueCursor.js';
 
 const tenantId = randomUUID(), userId = randomUUID(), otherTenant = randomUUID(),
   otherUser = randomUUID(), lastId = randomUUID();
@@ -62,4 +62,28 @@ test('v2 cursor binds allowed global work type before keyset pagination', () => 
   assert.throws(() => make('unrestricted'), ReviewCursorError);
   assert.throws(() => parseReviewCursor(issued(), { tenantId, userId,
     workType: 'unrestricted' }, now), ReviewCursorError);
+});
+
+test('v3 state-filter cursor rejects replay under a different global state', () => {
+  assert.deepEqual(REVIEW_QUEUE_STATE_FILTERS, [
+    'all', 'no_report', 'blocked', 'review', 'closure'
+  ]);
+  for (const reviewState of REVIEW_QUEUE_STATE_FILTERS) {
+    const signed = issueReviewCursor({
+      tenantId, userId, workType:'inspection', reviewState, anchor,
+      last: { id:lastId, created_at:new Date(now - 18000) }
+    }, now);
+    assert.equal(parseReviewCursor(signed, {
+      tenantId, userId, workType:'inspection', reviewState
+    },now).reviewState, reviewState);
+    for (const other of REVIEW_QUEUE_STATE_FILTERS.filter(x => x !== reviewState)) {
+      assert.throws(() => parseReviewCursor(signed, {
+        tenantId, userId, workType:'inspection', reviewState:other
+      }, now), ReviewCursorError);
+    }
+  }
+  assert.throws(() => issueReviewCursor({
+    tenantId,userId,reviewState:'invalid',anchor,
+    last:{id:lastId,created_at:new Date(now - 18000)}
+  },now), ReviewCursorError);
 });
