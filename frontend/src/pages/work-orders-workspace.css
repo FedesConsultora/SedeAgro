@@ -68,3 +68,15 @@
 .orders-workspace__review-inbox[aria-busy="true"] .orders-workspace__review-items {
   pointer-events: none;
 }
+
+/* 0T.20: the categories only affect the currently loaded page. */
+.orders-workspace__review-filters { border: 0; margin: 0; padding: 0; min-width: 0; }
+.orders-workspace__review-filters legend {
+  font-size: .875rem; font-weight: 600; margin-bottom: 8px;
+}
+.orders-workspace__review-filter-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.orders-workspace__review-filter-options button { min-height: 44px; }
+.orders-workspace__review-filter--active {
+  background: #e8f7ed; color: #14532d; border-color: #16a34a;
+  font-weight: 700;
+}
