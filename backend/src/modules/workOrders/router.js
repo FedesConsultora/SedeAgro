@@ -40,6 +40,8 @@ import { issueReviewCursor, parseReviewCursor, ReviewCursorError,
 import { reviewQueueStateSql, REVIEW_QUEUE_STATE_GROUPS } from './reviewQueueStateSql.js';
 import { REVIEW_QUEUE_DUE_WINDOWS, reviewQueueDueWhere } from './reviewQueueDueWindow.js';
 import { normalizeReviewTitleQuery, reviewQueueTitleWhere } from './reviewQueueTitleSearch.js';
+import { REVIEW_QUEUE_SORT_MODES, reviewQueueSortOrder,
+  reviewQueueOlderWhere } from './reviewQueueSorting.js';
 
 export const workOrdersRouter = Router();
 
@@ -229,6 +231,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const reviewState = req.query.state ?? 'all';
   const priority = req.query.priority ?? 'all';
   const dueWindow = req.query.due ?? 'all';
+  const sortMode = req.query.sort ?? 'newest';
   let titleQuery;
   try {
     titleQuery = normalizeReviewTitleQuery(req.query.q ?? '');
@@ -237,12 +240,13 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
     throw new HttpError(422, 'Texto de búsqueda de título inválido.',
       undefined, 'ORDER_REVIEW_CURSOR_INVALID');
   }
-  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type' && key !== 'state' && key !== 'priority' && key !== 'due' && key !== 'q') ||
+  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type' && key !== 'state' && key !== 'priority' && key !== 'due' && key !== 'q' && key !== 'sort') ||
       (req.query.cursor != null && (typeof req.query.cursor !== 'string' || !req.query.cursor)) ||
       typeof workType !== 'string' || !REVIEW_QUEUE_WORK_TYPES.includes(workType) ||
       typeof reviewState !== 'string' || !REVIEW_QUEUE_STATE_FILTERS.includes(reviewState) ||
       typeof priority !== 'string' || !REVIEW_QUEUE_PRIORITIES.includes(priority) ||
-      typeof dueWindow !== 'string' || !REVIEW_QUEUE_DUE_WINDOWS.includes(dueWindow)) {
+      typeof dueWindow !== 'string' || !REVIEW_QUEUE_DUE_WINDOWS.includes(dueWindow) ||
+      typeof sortMode !== 'string' || !REVIEW_QUEUE_SORT_MODES.includes(sortMode)) {
     throw new HttpError(422, 'Filtro o cursor de bandeja inválidos.',
       undefined, 'ORDER_REVIEW_CURSOR_INVALID');
   }
@@ -250,7 +254,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   try {
     cursor = req.query.cursor
       ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId,
-        userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery })
+        userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery, sortMode })
       : null;
   } catch (error) {
     if (!(error instanceof ReviewCursorError)) throw error;
@@ -260,15 +264,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   // Millisecond canonicalization matches Sequelize's JS Date precision:
   // timestamptz has microseconds and would otherwise skip rows when traversing.
   const orderingTime = fn('date_trunc', 'milliseconds', col('created_at'));
-  const older = cursor ? {
-    [Op.or]: [
-      where(orderingTime, { [Op.lt]: cursor.lastDate }),
-      { [Op.and]: [
-        where(orderingTime, { [Op.eq]: cursor.lastDate }),
-        { id: { [Op.lt]: cursor.lastId } }
-      ] }
-    ]
-  } : {};
+  const older = cursor ? reviewQueueOlderWhere(sortMode, cursor) : {};
   const rows = await WorkOrder.findAll({
     where: { tenant_id: req.tenantId, status: 'in_progress',
       ...(workType === 'all' ? {} : { type: workType }),
@@ -286,14 +282,14 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       }),
       created_at: { [Op.lte]: anchor }, ...older },
     attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
-    order: [[orderingTime, 'DESC'], ['id', 'DESC']],
+    order: reviewQueueSortOrder(sortMode),
     limit: REVIEW_QUEUE_PAGE_SIZE + 1,
     transaction: req.dbTransaction
   });
   const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
   const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
   const nextCursor = hasMore ? issueReviewCursor({
-    tenantId: req.tenantId, userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery, anchor,
+    tenantId: req.tenantId, userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery, sortMode, anchor,
     last: orders[orders.length - 1]
   }) : null;
   const ids = orders.map(order => order.id);
