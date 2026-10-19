@@ -329,6 +329,35 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(emptyWorkType.status, 200, JSON.stringify(emptyWorkType.body));
     assert.equal(emptyWorkType.body.data.some(item => item.id === orderId), false);
     assert.equal((await request(reviewQueue + '?type=all', adminToken, tenantA)).status, 200);
+    // This order starts undated; null deadlines are neither overdue nor upcoming.
+    const undated = await request(reviewQueue + '?due=unscheduled', adminToken, tenantA);
+    assert.equal(undated.status, 200, JSON.stringify(undated.body));
+    assert.equal(undated.body.data.some(item => item.id === orderId), true);
+    assert.equal((await request(reviewQueue + '?due=overdue', adminToken, tenantA))
+      .body.data.some(item => item.id === orderId), false);
+    const setDue = async timestamp => owner.query(
+      'UPDATE work_orders SET due_at=$1 WHERE id=$2 AND tenant_id=$3',
+      [timestamp, orderId, tenantA]);
+    await setDue(new Date(Date.now()-60*1000));
+    const overdue = await request(reviewQueue + '?due=overdue&type=inspection&priority=normal',
+      adminToken, tenantA);
+    assert.equal(overdue.status, 200, JSON.stringify(overdue.body));
+    assert.equal(overdue.body.data.some(item => item.id === orderId), true);
+    assert.equal((await request(reviewQueue + '?due=next_7_days', adminToken, tenantA))
+      .body.data.some(item => item.id === orderId), false);
+    await setDue(new Date(Date.now()+60*60*1000));
+    assert.equal((await request(reviewQueue + '?due=next_7_days',
+      adminToken, tenantA)).body.data.some(item => item.id === orderId), true);
+    await setDue(new Date(Date.now()+10*24*60*60*1000));
+    assert.equal((await request(reviewQueue + '?due=later',
+      adminToken, tenantA)).body.data.some(item => item.id === orderId), true);
+    await setDue(null);
+    assert.equal((await request(reviewQueue + '?due=all',
+      adminToken, tenantA)).body.data.some(item => item.id === orderId), true);
+    assert.equal((await request(reviewQueue + '?due=unscheduled',
+      adminBToken, tenantB)).body.data.some(item => item.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?due=overdue',
+      contractorToken, tenantA)).status, 403);
     const normalQueue = await request(reviewQueue + '?priority=normal', adminToken, tenantA);
     assert.equal(normalQueue.status, 200, JSON.stringify(normalQueue.body));
     assert.equal(normalQueue.body.data.some(item => item.id === orderId), true);
@@ -346,7 +375,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       '?type=not-a-real-labor', '?type=inspection&type=application',
       '?type=', '?cursor=', '?type[]=inspection', '?type=application&page=0',
       '?priority=', '?priority=critical', '?priority=normal&priority=urgent',
-      '?priority[]=urgent', '?priority=urgent&page=1'
+      '?priority[]=urgent', '?priority=urgent&page=1',
+      '?due=', '?due=today', '?due=overdue&due=later',
+      '?due[]=overdue', '?due=overdue&page=1'
     ]) {
       assert.equal((await request(reviewQueue + invalid, adminToken, tenantA)).status, 422,
         'Invalid global filter or cursor must be rejected: ' + invalid);

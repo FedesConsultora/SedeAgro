@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_PAGE_FILTERS,
-  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES,
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
   reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
@@ -19,13 +19,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [reviewState, setReviewState] = useState('all');
   const [workType, setWorkType] = useState('all');
   const [priority, setPriority] = useState('all');
+  const [dueWindow, setDueWindow] = useState('all');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -39,7 +40,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor, workType, reviewState, priority), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -49,7 +50,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, workType, reviewState, priority, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -85,6 +86,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
     setReviewState(nextState);
+    setPage(0);
+    setCursors([null]);
+    setReload(value => value + 1);
+  };
+  const changeDueWindow = nextWindow => {
+    if (!Object.hasOwn(REVIEW_QUEUE_DUE_WINDOWS, nextWindow) ||
+        nextWindow === dueWindow || loading) return;
+    focusOnNavigation.current = false;
+    setDueWindow(nextWindow);
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
@@ -146,8 +156,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         {Object.entries(REVIEW_QUEUE_PRIORITIES).map(([code, label]) =>
           <option key={code} value={code}>{label}</option>)}
       </select>
-      <p>Tipo, estado y prioridad filtran en el servidor antes de paginar.
-        No se alteran prioridades ni se autorizan aprobaciones automáticamente.</p>
+      <label htmlFor="review-queue-due-window">Vencimiento (todas las páginas)</label>
+      <select id="review-queue-due-window" value={dueWindow} disabled={loading}
+        onChange={event => changeDueWindow(event.target.value)}>
+        {Object.entries(REVIEW_QUEUE_DUE_WINDOWS).map(([code, label]) =>
+          <option key={code} value={code}>{label}</option>)}
+      </select>
+      <p>Tipo, estado, prioridad y vencimiento se filtran en el servidor antes
+        de paginar. Las ventanas usan la hora de inicio de cada consulta, no
+        el calendario local. No autorizan aprobaciones ni cambian fechas.</p>
     </div>
     {!loading && !error && shown && <>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">

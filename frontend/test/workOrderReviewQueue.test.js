@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
-  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -126,8 +126,8 @@ test('page-only categories cover every server state without inventing global cou
 test('state filter now queries the server before pagination instead of slicing loaded page', () => {
   const component = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const contract of [
-    'reviewQueueUrl(cursor, workType, reviewState, priority)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow)',
     'aria-pressed={reviewState === key}',
     'changeReviewState(key)', 'items.map(', 'Estado de revisión (todas las páginas)',
     'setCursors([null])'
@@ -160,8 +160,8 @@ test('global selector resets signed cursors, page-local state and old response g
   const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const expected of [
     'Tipo de labor (todas las páginas)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)',
-    'reviewQueueUrl(cursor, workType, reviewState, priority)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow)',
     'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
     "setReviewState('all')", 'REVIEW_QUEUE_WORK_TYPES'
   ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
@@ -202,12 +202,45 @@ test('priority selector is accessible, global and resets cursors without droppin
     'Prioridad (todas las páginas)', 'review-queue-priority',
     'REVIEW_QUEUE_PRIORITIES', 'changePriority(event.target.value)',
     'setPriority(nextPriority)', 'setCursors([null])', 'setPage(0)',
-    'reviewQueueUrl(cursor, workType, reviewState, priority)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority)'
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow)'
   ]) assert.ok(ui.includes(phrase), 'Missing global priority UI contract: '+phrase);
   const fn = ui.slice(ui.indexOf('const changePriority ='),ui.indexOf('const changeWorkType ='));
   assert.ok(!fn.includes("setWorkType("));
   assert.ok(!fn.includes("setReviewState("));
   assert.ok(fn.includes("setPriority(nextPriority)"));
   assert.ok(ui.includes('value={priority} disabled={loading}'));
+});
+
+test('global due-window URL and request generations are isolated across filters', () => {
+  assert.deepEqual(Object.keys(REVIEW_QUEUE_DUE_WINDOWS),
+    ['all','overdue','next_7_days','later','unscheduled']);
+  assert.equal(reviewQueueUrl(), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null,'all','all','all','overdue'),
+    '/work-orders/review-queue?due=overdue');
+  assert.equal(reviewQueueUrl('a.b+/','application','blocked','urgent','next_7_days'),
+    '/work-orders/review-queue?cursor=a.b%2B%2F&type=application&state=blocked&priority=urgent&due=next_7_days');
+  assert.throws(()=>reviewQueueUrl(null,'all','all','all','next-month'),/inválido/);
+  assert.notEqual(
+    reviewQueueRequestKey(1,'cursor',0,'application','blocked','urgent','overdue'),
+    reviewQueueRequestKey(1,'cursor',0,'application','blocked','urgent','next_7_days')
+  );
+  assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','all','invalid'),/inválida/);
+});
+
+test('accessible due selector starts a new cursor while retaining type/state/priority', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url),'utf8');
+  for (const value of [
+    'Vencimiento (todas las páginas)', 'review-queue-due-window',
+    'REVIEW_QUEUE_DUE_WINDOWS', 'changeDueWindow(event.target.value)',
+    'setDueWindow(nextWindow)','setPage(0)','setCursors([null])',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow)'
+  ]) assert.ok(ui.includes(value),'Due-window UI contract missing '+value);
+  const only = ui.slice(ui.indexOf('const changeDueWindow ='),ui.indexOf('const changePriority ='));
+  assert.ok(!only.includes('setWorkType('));
+  assert.ok(!only.includes('setReviewState('));
+  assert.ok(!only.includes('setPriority('));
+  assert.ok(only.includes('setReload(value => value + 1)'));
+  assert.ok(ui.includes('value={dueWindow} disabled={loading}'));
 });

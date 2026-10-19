@@ -383,6 +383,78 @@ try {
   await pageCount(region, 50, 1);
   console.log('PASS: global priority SQL normal 50/11, urgent 50/5, all filters compose, real cursor replay 422');
 
+  // Fixture deadline partition: older inspections are overdue, newer
+  // applications fall into the next 168h; no synthetic backend response.
+  const overdueSeed = await admin.query(`
+    UPDATE work_orders SET due_at=now() - interval '1 day'
+    WHERE tenant_id=$1 AND title LIKE 'Real review browser %' RETURNING id
+  `, [ownerA.tenant.id]);
+  const upcomingSeed = await admin.query(`
+    UPDATE work_orders SET due_at=now() + interval '1 day'
+    WHERE tenant_id=$1 AND title LIKE 'Global application %' RETURNING id
+  `, [ownerA.tenant.id]);
+  assert.equal(overdueSeed.rowCount, 61);
+  assert.equal(upcomingSeed.rowCount, 55);
+  const dueFilter = region.getByLabel('Vencimiento (todas las páginas)');
+  await dueFilter.selectOption('overdue');
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Real review browser'));
+  assert.ok(!(await region.innerText()).includes('Global application'));
+  await next.click();
+  await pageCount(region, 11, 2);
+  await headingFocused(page, region);
+  await dueFilter.selectOption('next_7_days');
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Global application'));
+  assert.ok(!(await region.innerText()).includes('Real review browser'));
+  assert.equal(await previous.isDisabled(), true);
+
+  // Replay a real signed cursor against a different time window: 422.
+  await page.route('**/api/v1/work-orders/review-queue?cursor=*&due=next_7_days', async route => {
+    const url = new URL(route.request().url());
+    assert.equal(url.searchParams.get('due'), 'next_7_days');
+    url.searchParams.set('due', 'overdue');
+    await route.continue({ url: url.toString() });
+  }, { times: 1 });
+  const crossDeadline = page.waitForResponse(res =>
+    res.url().includes('/work-orders/review-queue?cursor=') &&
+    res.status() === 422);
+  await next.click();
+  assert.equal((await (await crossDeadline).json()).error.code,
+    'ORDER_REVIEW_CURSOR_INVALID');
+  await region.getByRole('button', { name: 'Iniciar nueva consulta' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await dueFilter.inputValue(), 'next_7_days');
+  await next.click();
+  await pageCount(region, 5, 2);
+  await headingFocused(page, region);
+  assert.equal(await next.isDisabled(), true);
+
+  await dueFilter.selectOption('unscheduled');
+  await pageCount(region, 0, 1);
+  await dueFilter.selectOption('later');
+  await pageCount(region, 0, 1);
+  await dueFilter.selectOption('overdue');
+  await pageCount(region, 50, 1);
+  // Composed filters remain evaluated in PostgreSQL before pagination.
+  await workType.selectOption('inspection');
+  await pageCount(region, 50, 1);
+  await filters.getByRole('button', { name: 'Sin parte' }).click();
+  await pageCount(region, 50, 1);
+  await priorityFilter.selectOption('normal');
+  await pageCount(region, 50, 1);
+  assert.equal(await dueFilter.inputValue(), 'overdue');
+  assert.equal(await next.isDisabled(), false);
+  await workType.selectOption('all');
+  await pageCount(region, 50, 1);
+  await priorityFilter.selectOption('all');
+  await pageCount(region, 50, 1);
+  await filters.getByRole('button', { name: 'Todas' }).click();
+  await pageCount(region, 50, 1);
+  await dueFilter.selectOption('all');
+  await pageCount(region, 50, 1);
+  console.log('PASS: SQL-global deadlines overdue 50/11, next 168h 50/5, none missing/later, real HMAC 422');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })
