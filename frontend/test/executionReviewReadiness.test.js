@@ -71,7 +71,7 @@ test('Chromium modal acceptance waits for enabled state, still asserts real focu
   assert.match(section, /pressReverseTabAtDialogRoot\(/);
   assert.match(helper, /event.key !== 'Tab'/);
   assert.match(helper, /probe\?\.captured/);
-  assert.match(section, /await page1.keyboard.press\('Shift\+Tab'\)/);
+  assert.match(helper, /await page.keyboard.press\('Shift\+Tab'\)/);
   assert.match(section, /await page1.keyboard.press\('Escape'\)/);
   assert.match(helper, /document.activeElement === expected/);
   assert.match(helper, /timeout: 750/);
