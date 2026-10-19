@@ -43,8 +43,8 @@ import { REVIEW_QUEUE_DUE_WINDOWS, reviewQueueDueWhere } from './reviewQueueDueW
 import { normalizeReviewTitleQuery, reviewQueueTitleWhere } from './reviewQueueTitleSearch.js';
 import { REVIEW_QUEUE_SORT_MODES, reviewQueueSortOrder,
   reviewQueueOlderWhere } from './reviewQueueSorting.js';
-import { REVIEW_VIEW_LIMIT, parseReviewView, isValidSavedReviewView
-} from './reviewQueueSavedViews.js';
+import { REVIEW_VIEW_LIMIT, SHARED_REVIEW_VIEW_LIMIT, parseReviewView,
+  publicReviewView, isValidSavedReviewView } from './reviewQueueSavedViews.js';
 
 export const workOrdersRouter = Router();
 
@@ -234,24 +234,38 @@ function requireReviewViewOwner(req) {
   }
 }
 const reviewViewUuid = z.string().uuid();
+const reviewViewVisibility = z.object({visibility:z.enum(['private','shared'])}).strict();
 
 workOrdersRouter.get('/review-queue/views', requireCapability('orders.write'),
   asyncHandler(async (req, res) => {
     requireReviewViewOwner(req);
     if (Object.keys(req.query).length) throw new HttpError(422, 'Consulta de vistas inválida.');
-    const views = await queryTenantTransaction(`
-      SELECT id, name, filters, created_at, updated_at
+    const own = await queryTenantTransaction(`
+      SELECT id, user_id, name, filters, visibility, created_at, updated_at
       FROM work_order_review_views
       WHERE tenant_id = :tenant AND user_id = :user
       ORDER BY created_at DESC, id DESC LIMIT 11
     `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
       replacements:{tenant:req.tenantId,user:req.auth.user.id}});
-    if (views.length > REVIEW_VIEW_LIMIT || views.some(view=>!isValidSavedReviewView(view))) {
+    // Share visibility NEVER implies permission to see a private saved view.
+    // A demoted/deactivated publisher does not remain a shared authority.
+    const shared = await queryTenantTransaction(`
+      SELECT v.id, v.user_id, v.name, v.filters, v.visibility, v.created_at, v.updated_at
+      FROM work_order_review_views v
+      JOIN memberships m ON m.tenant_id = v.tenant_id AND m.user_id = v.user_id
+      WHERE v.tenant_id = :tenant AND v.user_id <> :user
+        AND v.visibility = 'shared'
+        AND m.role_code = 'tenant_admin' AND m.status = 'active'
+      ORDER BY v.created_at DESC, v.id DESC LIMIT 21
+    `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id}});
+    if (own.length > REVIEW_VIEW_LIMIT || shared.length > SHARED_REVIEW_VIEW_LIMIT ||
+        [...own,...shared].some(view=>!isValidSavedReviewView(view))) {
       throw new HttpError(409, 'Las vistas guardadas requieren revisión.',
         undefined, 'ORDER_REVIEW_VIEW_INVALID');
     }
     res.set('Cache-Control','private, no-store');
-    res.json({data:views});
+    res.json({data:[...own,...shared].map(view=>publicReviewView(view,req.auth.user.id))});
   }));
 
 workOrdersRouter.post('/review-queue/views', requireCapability('orders.write'),
@@ -283,7 +297,7 @@ workOrdersRouter.post('/review-queue/views', requireCapability('orders.write'),
       rows = await queryTenantTransaction(`
         INSERT INTO work_order_review_views (tenant_id,user_id,name,filters)
         VALUES (:tenant,:user,:name,CAST(:filters AS jsonb))
-        RETURNING id,name,filters,created_at,updated_at
+        RETURNING id,user_id,name,filters,visibility,created_at,updated_at
       `, {transaction:req.dbTransaction, type:QueryTypes.SELECT,
         replacements:{tenant:req.tenantId,user:req.auth.user.id,
           name:submitted.name,filters:JSON.stringify(submitted.filters)}});
@@ -295,7 +309,67 @@ workOrdersRouter.post('/review-queue/views', requireCapability('orders.write'),
       throw error;
     }
     res.set('Cache-Control','private, no-store');
-    res.status(201).json({data:rows[0]});
+    res.status(201).json({data:publicReviewView(rows[0],req.auth.user.id)});
+  }));
+
+// Only a tenant administrator can publish/unpublish their OWN saved
+// criteria. The tenant row lock serializes the tenant-wide 20-view cap.
+workOrdersRouter.patch('/review-queue/views/:viewId/visibility',
+  requireCapability('orders.write'), asyncHandler(async (req,res) => {
+    requireReviewViewOwner(req);
+    if (req.auth.role.code !== 'tenant_admin') {
+      throw new HttpError(403,'Solo administración puede compartir vistas.');
+    }
+    if (!reviewViewUuid.safeParse(req.params.viewId).success ||
+        Object.keys(req.query).length) throw new HttpError(422,'Vista inválida.');
+    const parsed=reviewViewVisibility.safeParse(req.body);
+    if (!parsed.success) throw new HttpError(422,'Visibilidad inválida.');
+    const lock=await queryTenantTransaction(`
+      SELECT id FROM tenants WHERE id = :tenant FOR UPDATE
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId}});
+    if (lock.length !== 1) throw new HttpError(403,'Empresa no disponible.');
+    const owned=await queryTenantTransaction(`
+      SELECT id, user_id, name, filters, visibility, created_at, updated_at
+      FROM work_order_review_views
+      WHERE tenant_id = :tenant AND user_id = :user AND id = :id
+      FOR UPDATE
+    `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+      replacements:{tenant:req.tenantId,user:req.auth.user.id,id:req.params.viewId}});
+    if (owned.length !== 1) throw new HttpError(404,'Vista no encontrada.');
+    if (parsed.data.visibility === 'shared' && owned[0].visibility !== 'shared') {
+      const [{count}]=await queryTenantTransaction(`
+        SELECT count(*)::int AS count FROM work_order_review_views
+        WHERE tenant_id = :tenant AND visibility = 'shared'
+      `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+        replacements:{tenant:req.tenantId}});
+      if (count >= SHARED_REVIEW_VIEW_LIMIT) {
+        throw new HttpError(409,'La empresa alcanzó el máximo de veinte vistas compartidas.',
+          undefined,'ORDER_REVIEW_SHARED_LIMIT');
+      }
+    }
+    if (parsed.data.visibility === owned[0].visibility) {
+      res.set('Cache-Control','private, no-store');
+      return res.json({data:publicReviewView(owned[0],req.auth.user.id)});
+    }
+    let updated;
+    try {
+      [updated]=await queryTenantTransaction(`
+        UPDATE work_order_review_views SET visibility=:visibility, updated_at=now()
+        WHERE tenant_id=:tenant AND user_id=:user AND id=:id
+        RETURNING id,user_id,name,filters,visibility,created_at,updated_at
+      `, {transaction:req.dbTransaction,type:QueryTypes.SELECT,
+        replacements:{tenant:req.tenantId,user:req.auth.user.id,
+          id:req.params.viewId,visibility:parsed.data.visibility}});
+    } catch(error) {
+      if (error?.parent?.code === '23505' || error?.original?.code === '23505') {
+        throw new HttpError(409,'Ya existe una vista compartida con ese nombre.',
+          undefined,'ORDER_REVIEW_SHARED_DUPLICATE');
+      }
+      throw error;
+    }
+    res.set('Cache-Control','private, no-store');
+    res.json({data:publicReviewView(updated,req.auth.user.id)});
   }));
 
 workOrdersRouter.delete('/review-queue/views/:viewId', requireCapability('orders.write'),
