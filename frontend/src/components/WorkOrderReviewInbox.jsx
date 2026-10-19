@@ -9,6 +9,9 @@ import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
 import { REVIEW_VIEW_LIMIT, REVIEW_VIEWS_PATH, normalizeReviewViewName,
   reviewViewFilters, validateSavedView, validateSavedViews
 } from '../services/reviewQueueSavedViews.js';
+import { REVIEW_MODERATION_PATH,normalizeModerationReason,
+  validateModerationInventory,validateModerationAudit,validateModerationRevoke
+} from '../services/reviewQueueViewModeration.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
 // order fetches a fresh authorized detail; the server owns every transition.
@@ -36,6 +39,16 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [viewError, setViewError] = useState('');
   const [viewStatus, setViewStatus] = useState('');
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const [moderatedViews, setModeratedViews] = useState([]);
+  const [moderationAudit, setModerationAudit] = useState([]);
+  const [moderationLoading, setModerationLoading] = useState(true);
+  const [moderationRevision, setModerationRevision] = useState(0);
+  const [moderationBusy, setModerationBusy] = useState(false);
+  const [moderationError, setModerationError] = useState('');
+  const [moderationStatus, setModerationStatus] = useState('');
+  const [moderationTargetId, setModerationTargetId] = useState('');
+  const [moderationReason, setModerationReason] = useState('');
+  const [moderationArmed, setModerationArmed] = useState(false);
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
@@ -90,6 +103,30 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       });
     return () => { active = false; controller.abort(); };
   }, [api, available, scope]);
+
+  useEffect(() => {
+    if (!available || role !== 'tenant_admin') return undefined;
+    let active = true;
+    const controller = new AbortController();
+    setModerationLoading(true);
+    Promise.all([
+      api.request(REVIEW_MODERATION_PATH, {silent:true,signal:controller.signal})
+        .then(validateModerationInventory),
+      api.request(REVIEW_MODERATION_PATH + '/audit', {silent:true,signal:controller.signal})
+        .then(validateModerationAudit)
+    ]).then(([inventory,events])=>{
+      if(!active) return;
+      setModeratedViews(inventory);
+      setModerationAudit(events);
+      setModerationLoading(false);
+      setModerationError('');
+    }).catch(err=>{
+      if(!active) return;
+      setModerationLoading(false);
+      setModerationError(err?.message || 'No se pudo recuperar la moderación.');
+    });
+    return ()=>{active=false;controller.abort();};
+  },[api,available,role,scope,moderationRevision]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -240,6 +277,54 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       setViewBusy(false);
     }
   };
+  const chooseModeration = id => {
+    if (moderationBusy) return;
+    setModerationTargetId(id);
+    setModerationReason('');
+    setModerationArmed(false);
+    setModerationError('');
+    setModerationStatus('');
+  };
+  const prepareModeration = event => {
+    event.preventDefault();
+    if (moderationBusy || moderationLoading || role !== 'tenant_admin') return;
+    if (!moderatedViews.some(view => view.id === moderationTargetId)) return;
+    try { normalizeModerationReason(moderationReason); }
+    catch { setModerationError('Ingresá un motivo de 8 a 200 caracteres.'); return; }
+    setModerationError('');
+    setModerationArmed(true);
+  };
+  const confirmModeration = async () => {
+    if (moderationBusy || moderationLoading || role !== 'tenant_admin' ||
+        !moderationArmed || !moderatedViews.some(view => view.id === moderationTargetId)) return;
+    let reason;
+    try { reason = normalizeModerationReason(moderationReason); }
+    catch { setModerationError('Ingresá un motivo de 8 a 200 caracteres.'); return; }
+    setModerationBusy(true);
+    setModerationError('');
+    setModerationStatus('');
+    try {
+      const event=validateModerationRevoke(await api.request(
+        REVIEW_MODERATION_PATH + '/' + encodeURIComponent(moderationTargetId) + '/revoke', {
+          method:'POST',silent:true,body:{reason}
+        }));
+      setSavedViews(previous=>previous.filter(view=>view.id!==moderationTargetId));
+      setSelectedViewId(previous=>previous===moderationTargetId?'':previous);
+      setModerationTargetId('');
+      setModerationReason('');
+      setModerationArmed(false);
+      setModerationAudit(previous=>[event,...previous].slice(0,50));
+      setModeratedViews(previous=>previous.filter(view=>view.id!==event.view_id));
+      setModerationRevision(previous=>previous+1);
+      setModerationStatus('Publicación revocada y auditoría registrada. La vista sigue siendo privada de su autor.');
+    } catch(err) {
+      setModerationError(err?.message || 'No se pudo revocar la publicación.');
+      setModerationArmed(false);
+      setModerationRevision(previous=>previous+1);
+    } finally {
+      setModerationBusy(false);
+    }
+  };
   const changeReviewState = nextState => {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
@@ -372,6 +457,59 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       {selectedView?.source === 'shared' &&
         <p>Esta vista es de solo lectura: podés aplicarla, pero no editarla ni eliminarla.</p>}
     </div>
+    {role === 'tenant_admin' && <section className="orders-workspace__review-moderation"
+      aria-labelledby="review-moderation-title">
+      <h3 id="review-moderation-title">Moderación de vistas compartidas</h3>
+      <p>Podés retirar una publicación ajena de esta empresa con un motivo.
+        No modifica ni elimina los filtros privados de su autor.</p>
+      {moderationLoading && <p role="status">Cargando publicaciones y auditoría…</p>}
+      {moderationError && <p role="alert">{moderationError}</p>}
+      {moderationStatus && <p role="status">{moderationStatus}</p>}
+      <p>{moderatedViews.length} publicaciones ajenas visibles para moderación.</p>
+      <form className="orders-workspace__review-moderation-form" onSubmit={prepareModeration}>
+        <label htmlFor="review-moderation-target">Publicación a revisar</label>
+        <select id="review-moderation-target" value={moderationTargetId}
+          disabled={moderationLoading || moderationBusy}
+          onChange={event=>chooseModeration(event.target.value)}>
+          <option value="">Seleccioná una vista compartida</option>
+          {moderatedViews.map(view=><option key={view.id} value={view.id}>
+            {view.name}{view.publisher_active?'':' (autor sin rol activo)'}
+          </option>)}
+        </select>
+        <label htmlFor="review-moderation-reason">Motivo de revocación</label>
+        <textarea id="review-moderation-reason" value={moderationReason}
+          maxLength={200} rows={2}
+          disabled={moderationLoading || moderationBusy}
+          onChange={event=>{setModerationReason(event.target.value);setModerationArmed(false);}} />
+        {!moderationArmed
+          ? <button type="submit" className="ghost-action"
+              disabled={!moderationTargetId || moderationLoading || moderationBusy}>
+              Revisar revocación</button>
+          : <div className="orders-workspace__review-moderation-actions">
+            <p>¿Confirmás retirar esta vista compartida? El evento será auditado.</p>
+            <button type="button" className="ghost-action" disabled={moderationBusy}
+              onClick={confirmModeration}>Confirmar revocación</button>
+            <button type="button" className="ghost-action" disabled={moderationBusy}
+              onClick={()=>setModerationArmed(false)}>Cancelar revocación</button>
+          </div>}
+      </form>
+      <button type="button" className="ghost-action" disabled={moderationLoading || moderationBusy}
+        onClick={()=>setModerationRevision(previous=>previous+1)}>
+        Actualizar publicaciones y auditoría
+      </button>
+      <details>
+        <summary>Historial de revocaciones (últimas 50)</summary>
+        {moderationAudit.length===0 && <p>Sin revocaciones registradas.</p>}
+        <ul>
+          {moderationAudit.map(event=><li key={event.id}>
+            <strong>{event.view_name}</strong>: {event.reason}.
+            {' '}Fecha: {event.created_at}.
+            {' '}Administrador: {event.actor_user_id}.
+            {' '}Propietario: {event.view_owner_id}.
+          </li>)}
+        </ul>
+      </details>
+    </section>}
     <div className="orders-workspace__review-global-filter">
       <form className="orders-workspace__review-title-search" role="search"
         onSubmit={submitTitleSearch}>
