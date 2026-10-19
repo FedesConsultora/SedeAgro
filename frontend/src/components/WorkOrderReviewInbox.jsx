@@ -6,6 +6,9 @@ import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_SORT_MODES,
   reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, normalizeReviewTitleQuery } from '../services/workOrderReviewQueue.js';
+import { REVIEW_VIEW_LIMIT, REVIEW_VIEWS_PATH, normalizeReviewViewName,
+  reviewViewFilters, validateSavedView, validateSavedViews
+} from '../services/reviewQueueSavedViews.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
 // order fetches a fresh authorized detail; the server owns every transition.
@@ -25,6 +28,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [draftTitle, setDraftTitle] = useState('');
   const [titleQuery, setTitleQuery] = useState('');
   const [titleError, setTitleError] = useState('');
+  const [savedViews, setSavedViews] = useState([]);
+  const [viewName, setViewName] = useState('');
+  const [selectedViewId, setSelectedViewId] = useState('');
+  const [viewBusy, setViewBusy] = useState(false);
+  const [viewLoading, setViewLoading] = useState(true);
+  const [viewError, setViewError] = useState('');
+  const [viewStatus, setViewStatus] = useState('');
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
@@ -56,6 +67,29 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       });
     return () => { active = false; controller.abort(); };
   }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, titleQuery, sortMode, tenantId, userId, scope]);
+
+  useEffect(() => {
+    if (!available) return undefined;
+    let active = true;
+    const controller = new AbortController();
+    setViewLoading(true);
+    api.request(REVIEW_VIEWS_PATH, {silent:true, signal:controller.signal})
+      .then(response => {
+        const views = validateSavedViews(response);
+        if (active) {
+          setSavedViews(views);
+          setViewLoading(false);
+          setViewError('');
+        }
+      })
+      .catch(error => {
+        if (active) {
+          setViewLoading(false);
+          setViewError(error?.message || 'No se pudieron recuperar tus vistas.');
+        }
+      });
+    return () => { active = false; controller.abort(); };
+  }, [api, available, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -107,6 +141,78 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     }
   };
   const clearTitleSearch = () => commitTitleQuery('');
+  const saveView = async event => {
+    event.preventDefault();
+    if (viewBusy || viewLoading || !available || savedViews.length >= REVIEW_VIEW_LIMIT) return;
+    setViewError('');
+    setViewStatus('');
+    let name, filters;
+    try {
+      name = normalizeReviewViewName(viewName);
+      filters = reviewViewFilters({workType,reviewState,priority,dueWindow,
+        titleQuery,sortMode});
+    } catch(error) {
+      setViewError(error.message);
+      return;
+    }
+    setViewBusy(true);
+    try {
+      const result = validateSavedView(await api.request(REVIEW_VIEWS_PATH, {
+        method:'POST', silent:true, body:{name,filters}
+      }));
+      setSavedViews(previous => [result,...previous]);
+      setSelectedViewId(result.id);
+      setViewName('');
+      setDeleteArmed(false);
+      setViewStatus('Vista guardada. Podés recuperarla en tu próxima sesión.');
+    } catch(error) {
+      setViewError(error?.message || 'No se pudo guardar la vista.');
+    } finally {
+      setViewBusy(false);
+    }
+  };
+  const applyView = () => {
+    if (viewBusy || viewLoading || loading) return;
+    const selected = savedViews.find(item => item.id === selectedViewId);
+    if (!selected) return;
+    let filters;
+    try { filters = reviewViewFilters(selected.filters); }
+    catch { setViewError('La vista guardada ya no es válida.'); return; }
+    focusOnNavigation.current = false;
+    setWorkType(filters.workType);
+    setReviewState(filters.reviewState);
+    setPriority(filters.priority);
+    setDueWindow(filters.dueWindow);
+    setTitleQuery(filters.titleQuery);
+    setDraftTitle(filters.titleQuery);
+    setSortMode(filters.sortMode);
+    setTitleError('');
+    setPage(0);
+    setCursors([null]);
+    setReload(value => value + 1);
+    setDeleteArmed(false);
+    setViewError('');
+    setViewStatus('Vista aplicada. Se inició una consulta nueva.');
+  };
+  const removeView = async () => {
+    if (viewBusy || viewLoading || !deleteArmed || !selectedViewId) return;
+    setViewBusy(true);
+    setViewError('');
+    setViewStatus('');
+    try {
+      await api.request(REVIEW_VIEWS_PATH + '/' + encodeURIComponent(selectedViewId), {
+        method:'DELETE', silent:true
+      });
+      setSavedViews(previous => previous.filter(item => item.id !== selectedViewId));
+      setSelectedViewId('');
+      setDeleteArmed(false);
+      setViewStatus('Vista eliminada. Los filtros actuales no cambiaron.');
+    } catch(error) {
+      setViewError(error?.message || 'No se pudo eliminar la vista.');
+    } finally {
+      setViewBusy(false);
+    }
+  };
   const changeReviewState = nextState => {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
@@ -177,6 +283,47 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         : <button type="button" ref={errorActionRef} className="ghost-action"
           onClick={() => setReload(value => value + 1)}>Reintentar</button>}
     </div>}
+    <div className="orders-workspace__review-saved-views" aria-label="Mis vistas guardadas">
+      <h3>Mis vistas guardadas</h3>
+      <p>Hasta diez combinaciones de filtros privadas para tu usuario y empresa.
+        No se guardan órdenes ni cursores de navegación.</p>
+      {viewLoading && <p role="status">Recuperando vistas guardadas…</p>}
+      {viewError && <p role="alert">{viewError}</p>}
+      {viewStatus && <p role="status">{viewStatus}</p>}
+      <form onSubmit={saveView} className="orders-workspace__review-save-form">
+        <label htmlFor="review-view-name">Nombre de la nueva vista</label>
+        <input id="review-view-name" type="text" maxLength={48} value={viewName}
+          disabled={viewBusy || viewLoading} onChange={event => setViewName(event.target.value)}
+          placeholder="Ej.: Inspecciones urgentes" />
+        <button type="submit" className="ghost-action"
+          disabled={viewBusy || viewLoading || savedViews.length >= REVIEW_VIEW_LIMIT}>
+          Guardar filtros actuales
+        </button>
+      </form>
+      <p>{savedViews.length} de {REVIEW_VIEW_LIMIT} vistas guardadas.</p>
+      <label htmlFor="review-view-select">Elegir vista guardada</label>
+      <select id="review-view-select" value={selectedViewId}
+        disabled={viewBusy || viewLoading || !savedViews.length}
+        onChange={event => { setSelectedViewId(event.target.value); setDeleteArmed(false); }}>
+        <option value="">Seleccioná una vista</option>
+        {savedViews.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}
+      </select>
+      <div className="orders-workspace__review-save-actions">
+        <button type="button" className="ghost-action" onClick={applyView}
+          disabled={!selectedViewId || viewBusy || viewLoading || loading}>Aplicar vista</button>
+        {!deleteArmed
+          ? <button type="button" className="ghost-action"
+            disabled={!selectedViewId || viewBusy || viewLoading}
+            onClick={() => setDeleteArmed(true)}>Eliminar vista…</button>
+          : <>
+            <span>¿Eliminar esta vista guardada?</span>
+            <button type="button" className="ghost-action"
+              disabled={viewBusy} onClick={removeView}>Confirmar eliminación</button>
+            <button type="button" className="ghost-action"
+              disabled={viewBusy} onClick={() => setDeleteArmed(false)}>Cancelar</button>
+          </>}
+      </div>
+    </div>
     <div className="orders-workspace__review-global-filter">
       <form className="orders-workspace__review-title-search" role="search"
         onSubmit={submitTitleSearch}>
