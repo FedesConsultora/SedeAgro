@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
-  REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
+  REVIEW_QUEUE_PAGE_FILTERS,
   REVIEW_QUEUE_WORK_TYPES, reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
@@ -15,7 +15,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const available = isCoordinationReviewer(role, dataMode, session?.authenticated);
   const [cursors, setCursors] = useState([null]);
   const [page, setPage] = useState(0);
-  const [filter, setFilter] = useState('all');
+  const [reviewState, setReviewState] = useState('all');
   const [workType, setWorkType] = useState('all');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
@@ -23,7 +23,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -37,7 +37,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor, workType), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType, reviewState), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -47,7 +47,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, workType, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, reviewState, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -67,20 +67,25 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
 
   if (!available) return null;
   const items = shown?.items ?? [];
-  // Only the fifty currently authorized results: NEVER an unbounded search.
-  const visibleItems = filterReviewQueuePage(items, filter);
+  // Server-authoritative state filter was applied before the bounded page.
   const changePage = direction => {
     if (loading || error || !shown) return;
     if (direction < 0 && page > 0) {
       focusOnNavigation.current = true;
-      setFilter('all');
       setPage(value => value - 1);
     } else if (direction > 0 && shown.hasMore && shown.nextCursor) {
       focusOnNavigation.current = true;
-      setFilter('all');
       setCursors(previous => [...previous.slice(0, page + 1), shown.nextCursor]);
       setPage(page + 1);
     }
+  };
+  const changeReviewState = nextState => {
+    if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
+    focusOnNavigation.current = false;
+    setReviewState(nextState);
+    setPage(0);
+    setCursors([null]);
+    setReload(value => value + 1);
   };
   const changeWorkType = nextType => {
     if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, nextType) || nextType === workType) return;
@@ -88,12 +93,11 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     setWorkType(nextType);
     setPage(0);
     setCursors([null]);
-    setFilter('all');
+    setReviewState('all');
     setReload(value => value + 1);
   };
   const refresh = () => {
     focusOnNavigation.current = false;
-    setFilter('all');
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
@@ -125,34 +129,31 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         {Object.entries(REVIEW_QUEUE_WORK_TYPES).map(([code, label]) =>
           <option key={code} value={code}>{label}</option>)}
       </select>
-      <p>Este filtro consulta el servidor en todas las páginas. Los filtros por
-        estado se aplican únicamente a la página que estás viendo.</p>
+      <p>Los filtros por tipo y estado se aplican en el servidor, antes de paginar.
+        Los resultados orientan la revisión; no autorizan aprobaciones.</p>
     </div>
     {!loading && !error && shown && <>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
         Página {page + 1}. {items.length} órdenes en esta página.
       </p>
-      <fieldset className="orders-workspace__review-filters">
-        <legend>Filtrar solo esta página</legend>
+      <fieldset className="orders-workspace__review-filters" disabled={loading}>
+        <legend>Estado de revisión (todas las páginas)</legend>
         <div className="orders-workspace__review-filter-options">
           {Object.entries(REVIEW_QUEUE_PAGE_FILTERS).map(([key, option]) =>
-            <button key={key} type="button" className={`ghost-action ${filter === key
+            <button key={key} type="button" className={`ghost-action ${reviewState === key
               ? 'orders-workspace__review-filter--active' : ''}`}
-              aria-pressed={filter === key} onClick={() => setFilter(key)}>
+              aria-pressed={reviewState === key} onClick={() => changeReviewState(key)}>
               {option.label}
             </button>)}
         </div>
       </fieldset>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
-        {visibleItems.length} de {items.length} órdenes visibles en esta página.
-        El filtro no busca en otras páginas.
+        {items.length} órdenes coincidentes en esta página de resultados.
+        El filtro de estado abarca todas las páginas autorizadas.
       </p>
       {items.length === 0 && <p role="status">No hay órdenes en curso en esta página.</p>}
-      {items.length > 0 && visibleItems.length === 0 && <p role="status">
-        Sin coincidencias en esta página. Probá otro filtro o navegá a otra página disponible.
-      </p>}
       <div className="orders-workspace__review-items">
-        {visibleItems.map(item => <article key={item.id} className="orders-workspace__review-item">
+        {items.map(item => <article key={item.id} className="orders-workspace__review-item">
           <div className="orders-workspace__review-item-copy">
             <strong>{item.title}</strong>
             <span>{REVIEW_QUEUE_STATES[item.state]}</span>
