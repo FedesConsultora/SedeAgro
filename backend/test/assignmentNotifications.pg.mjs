@@ -337,6 +337,45 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     const savedId=saved.body.data.id;
     assert.equal((await request(viewPath,adminToken,tenantA))
       .body.data[0].id,savedId,'Database record survives separate requests');
+    assert.equal(saved.body.data.visibility,'private');
+    assert.equal(saved.body.data.source,'mine');
+    const publishUrl=viewPath+'/'+savedId+'/visibility';
+    const coordinatorCannotPublish=await request(publishUrl,coordinatorToken,tenantA,
+      'PATCH',{visibility:'shared'});
+    assert.equal(coordinatorCannotPublish.status,403);
+    assert.equal((await request(publishUrl,adminBToken,tenantB,'PATCH',
+      {visibility:'shared'})).status,404);
+    for(const invalid of [{visibility:'all'},{visibility:'shared',tenant_id:tenantB},
+      {},{visibility:[]},null]) {
+      assert.equal((await request(publishUrl,adminToken,tenantA,'PATCH',invalid)).status,422);
+    }
+    const published=await request(publishUrl,adminToken,tenantA,
+      'PATCH',{visibility:'shared'});
+    assert.equal(published.status,200,JSON.stringify(published.body));
+    assert.equal(published.body.data.visibility,'shared');
+    assert.equal(published.body.data.source,'mine');
+    assert.equal(published.body.data.tenant_id,undefined);
+    assert.equal(published.body.data.user_id,undefined);
+    assert.deepEqual(published.body.data.filters,filters);
+    const sharedForCoordinator=await request(viewPath,coordinatorToken,tenantA);
+    assert.equal(sharedForCoordinator.status,200,JSON.stringify(sharedForCoordinator.body));
+    assert.equal(sharedForCoordinator.body.data.length,1);
+    assert.equal(sharedForCoordinator.body.data[0].source,'shared');
+    assert.equal(sharedForCoordinator.body.data[0].visibility,'shared');
+    assert.deepEqual(sharedForCoordinator.body.data[0].filters,filters);
+    assert.deepEqual((await request(viewPath,adminBToken,tenantB)).body.data,[]);
+    assert.equal((await request(viewPath,contractorToken,tenantA)).status,403);
+    assert.equal((await request(viewPath+'/'+savedId,coordinatorToken,tenantA,'DELETE')).status,404);
+    // Idempotent share/revoke; the owner keeps the private row and filters.
+    assert.equal((await request(publishUrl,adminToken,tenantA,'PATCH',
+      {visibility:'shared'})).status,200);
+    const revoked=await request(publishUrl,adminToken,tenantA,
+      'PATCH',{visibility:'private'});
+    assert.equal(revoked.status,200);
+    assert.equal(revoked.body.data.visibility,'private');
+    assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
+    assert.equal((await request(viewPath,adminToken,tenantA)).body.data[0].id,savedId);
+
     assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
     assert.deepEqual((await request(viewPath,adminBToken,tenantB)).body.data,[]);
     assert.equal((await request(viewPath,contractorToken,tenantA)).status,403);
