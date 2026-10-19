@@ -269,7 +269,7 @@ test('title search form applies only submitted phrases and resets signed cursor'
   for (const required of [
     'role="search"', 'Buscar por título (todas las páginas)', 'review-queue-title-search',
     'submitTitleSearch', 'normalizeReviewTitleQuery(draftTitle)',
-    'commitTitleQuery(value)', 'setTitleQuery(value)', 'setCursors([null])',
+    'const commitTitleQuery = value =>', 'setTitleQuery(value)', 'setCursors([null])',
     'Búsqueda activa por título:', 'Limpiar búsqueda',
     'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
     'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)'
