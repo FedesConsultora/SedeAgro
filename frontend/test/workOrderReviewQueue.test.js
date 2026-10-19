@@ -121,3 +121,12 @@ test('page-only categories cover every server state without inventing global cou
   assert.throws(() => filterReviewQueuePage(records, 'all-tenants'), /inválido/);
   assert.throws(() => filterReviewQueuePage(null, 'all'), /inválido/);
 });
+
+test('page-only filter UI never masquerades as a server-wide search', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
+  for (const contract of [
+    'filterReviewQueuePage(items, filter)', 'aria-pressed={filter === key}',
+    'visibleItems.map(', "setFilter('all')", 'El filtro no busca en otras páginas',
+    'Sin coincidencias en esta página'
+  ]) assert.ok(ui.includes(contract), 'Missing current-page filter contract: ' + contract);
+});

@@ -135,6 +135,21 @@ try {
   assert.ok(!originalA.includes('Demostración:'));
   console.log('PASS: Chromium rendered fifty authorized orders from real PostGIS/Express');
 
+  // A page-only filter NEVER narrows the server cursor or pretends that a
+  // zero-match current page is an empty global inbox.
+  const filters = region.getByRole('group', { name: 'Filtrar solo esta página' });
+  await filters.getByRole('button', { name: 'Revisión humana' }).click();
+  assert.equal(await filters.getByRole('button', { name: 'Revisión humana' })
+    .getAttribute('aria-pressed'), 'true');
+  await region.getByText(/0 de 50 órdenes visibles en esta página/).waitFor();
+  assert.equal(await region.getByRole('button', { name: 'Abrir orden y comprobar' }).count(), 0);
+  await region.getByText(/Sin coincidencias en esta página/).waitFor();
+  assert.equal(await next.isDisabled(), false, 'A filter must not disable server pagination');
+  await filters.getByRole('button', { name: 'Sin parte' }).click();
+  await region.getByText(/50 de 50 órdenes visibles en esta página/).waitFor();
+  assert.equal(await region.getByRole('button', { name: 'Abrir orden y comprobar' }).count(), 50);
+  console.log('PASS: page-local filters show honest counts, empty state and preserve next cursor');
+
   // Delay a genuine HTTP 200 to prove the prior page disappears while
   // loading. Route.fetch talks to Express; no synthetic successful payload.
   let started;
@@ -162,6 +177,9 @@ try {
   release();
   await pageCount(region, 11, 2);
   await headingFocused(page, region);
+  assert.equal(await filters.getByRole('button', { name: 'Todas' }).getAttribute('aria-pressed'),
+    'true', 'Changing server page resets previous page-local filter');
+  await region.getByText(/11 de 11 órdenes visibles en esta página/).waitFor();
   await page.unroute('**/api/v1/work-orders/review-queue?cursor=*', delayedHandler);
   assert.equal(await next.isDisabled(), true);
   console.log('PASS: keyboard next + real delayed HTTP, no stale flash, 11 real rows and heading focus');
@@ -212,6 +230,15 @@ try {
   await retry.click();
   await pageCount(region, 11, 2);
   console.log('PASS: interrupted HTTP never produces fake data; explicit retry recovers');
+
+  await filters.getByRole('button', { name: 'Posible cierre' }).click();
+  await region.getByText(/0 de 11 órdenes visibles en esta página/).waitFor();
+  await region.getByRole('button', { name: 'Actualizar pendientes' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await filters.getByRole('button', { name: 'Todas' }).getAttribute('aria-pressed'),
+    'true', 'Refreshing from server must reset the page-local filter');
+  assert.equal(await previous.isDisabled(), true);
+  console.log('PASS: explicit refresh resets filters and reloads the real first page');
 
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
