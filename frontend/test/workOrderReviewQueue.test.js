@@ -5,7 +5,7 @@ import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
-  normalizeReviewTitleQuery, REVIEW_TITLE_QUERY_MAX_CODEPOINTS
+  normalizeReviewTitleQuery, REVIEW_TITLE_QUERY_MAX_CODEPOINTS, REVIEW_QUEUE_SORT_MODES
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -283,4 +283,20 @@ test('title search form applies only submitted phrases and resets signed cursor'
   assert.ok(!searchFn.includes('setPriority('));
   assert.ok(!searchFn.includes('setDueWindow('));
   assert.ok(!searchFn.includes('setReviewState('));
+});
+
+test('operational sort is server-wide, validates enum and fences old responses', () => {
+  assert.deepEqual(Object.keys(REVIEW_QUEUE_SORT_MODES),
+    ['newest','due_first','priority_first']);
+  assert.equal(reviewQueueUrl(), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null,'all','all','all','all','','due_first'),
+    '/work-orders/review-queue?sort=due_first');
+  assert.equal(reviewQueueUrl('signed','inspection','no_report','urgent','overdue',
+    'Control de campo','priority_first'),
+    '/work-orders/review-queue?cursor=signed&type=inspection&state=no_report&priority=urgent&due=overdue&q=Control+de+campo&sort=priority_first');
+  assert.throws(()=>reviewQueueUrl(null,'all','all','all','all','','random'),/inválido/);
+  assert.notEqual(
+    reviewQueueRequestKey(1,'cursor',0,'all','all','all','all','','newest'),
+    reviewQueueRequestKey(1,'cursor',0,'all','all','all','all','','due_first'));
+  assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','all','all','','missing'),/inválida/);
 });
