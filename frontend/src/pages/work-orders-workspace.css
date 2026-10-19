@@ -69,7 +69,7 @@
   pointer-events: none;
 }
 
-/* 0T.20: the categories only affect the currently loaded page. */
+/* 0T.22: categories are server-wide; these buttons represent the active selection. */
 .orders-workspace__review-filters { border: 0; margin: 0; padding: 0; min-width: 0; }
 .orders-workspace__review-filters legend {
   font-size: .875rem; font-weight: 600; margin-bottom: 8px;
@@ -81,7 +81,7 @@
   font-weight: 700;
 }
 
-/* 0T.21: database-wide type selector, distinct from the page-only chips. */
+/* 0T.21–0T.25: authorized global selectors and text search. */
 .orders-workspace__review-global-filter { display: grid; justify-items: start; gap: 6px; }
 .orders-workspace__review-global-filter label { font-weight: 700; font-size: .875rem; }
 .orders-workspace__review-global-filter select {
@@ -94,3 +94,32 @@
 .orders-workspace__review-global-filter p {
   margin: 0; color: #52665b; font-size: .875rem; line-height: 1.4;
 }
+
+/* 0T.25 — title query is submitted explicitly, never per keystroke. */
+.orders-workspace__review-title-search {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 34rem);
+  margin-bottom: 12px;
+}
+.orders-workspace__review-title-search input[type="search"] {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #b9cfc2;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f362a;
+}
+.orders-workspace__review-title-search input:focus-visible {
+  outline: 3px solid #15803d;
+  outline-offset: 3px;
+}
+.orders-workspace__review-search-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.orders-workspace__review-search-actions button { min-height: 44px; }
