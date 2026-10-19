@@ -109,6 +109,10 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
 
   if (!available) return null;
   const items = shown?.items ?? [];
+  const ownViews = savedViews.filter(view => view.source === 'mine');
+  const sharedViews = savedViews.filter(view => view.source === 'shared');
+  const selectedView = savedViews.find(view => view.id === selectedViewId);
+  const canManageSelected = selectedView?.source === 'mine';
   // Server-authoritative state filter was applied before the bounded page.
   const changePage = direction => {
     if (loading || error || !shown) return;
@@ -143,7 +147,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const clearTitleSearch = () => commitTitleQuery('');
   const saveView = async event => {
     event.preventDefault();
-    if (viewBusy || viewLoading || !available || savedViews.length >= REVIEW_VIEW_LIMIT) return;
+    if (viewBusy || viewLoading || !available || savedViews.filter(view=>view.source === 'mine').length >= REVIEW_VIEW_LIMIT) return;
     setViewError('');
     setViewStatus('');
     let name, filters;
@@ -195,7 +199,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     setViewStatus('Vista aplicada. Se inició una consulta nueva.');
   };
   const removeView = async () => {
-    if (viewBusy || viewLoading || !deleteArmed || !selectedViewId) return;
+    if (viewBusy || viewLoading || !deleteArmed || !selectedViewId || !canManageSelected) return;
     setViewBusy(true);
     setViewError('');
     setViewStatus('');
@@ -209,6 +213,29 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       setViewStatus('Vista eliminada. Los filtros actuales no cambiaron.');
     } catch(error) {
       setViewError(error?.message || 'No se pudo eliminar la vista.');
+    } finally {
+      setViewBusy(false);
+    }
+  };
+  const changeViewVisibility = async visibility => {
+    if (viewBusy || viewLoading || role !== 'tenant_admin' ||
+        !canManageSelected || selectedView.visibility === visibility) return;
+    setViewBusy(true);
+    setViewError('');
+    setViewStatus('');
+    try {
+      const result = validateSavedView(await api.request(
+        REVIEW_VIEWS_PATH + '/' + encodeURIComponent(selectedViewId) + '/visibility', {
+          method:'PATCH', silent:true, body:{visibility}
+        }));
+      setSavedViews(previous => previous.map(view =>
+        view.id === selectedViewId ? result : view));
+      setDeleteArmed(false);
+      setViewStatus(visibility === 'shared'
+        ? 'Vista compartida con coordinación de esta empresa.'
+        : 'Vista nuevamente privada para tu usuario.');
+    } catch(error) {
+      setViewError(error?.message || 'No se pudo cambiar la visibilidad de la vista.');
     } finally {
       setViewBusy(false);
     }
@@ -285,8 +312,9 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     </div>}
     <div className="orders-workspace__review-saved-views" aria-label="Mis vistas guardadas">
       <h3>Mis vistas guardadas</h3>
-      <p>Hasta diez combinaciones de filtros privadas para tu usuario y empresa.
-        No se guardan órdenes ni cursores de navegación.</p>
+      <p>Hasta diez combinaciones de filtros tuyas, privadas por defecto.
+        Administración puede compartirlas con coordinadores de esta empresa.
+        No se comparten órdenes, permisos ni cursores de navegación.</p>
       {viewLoading && <p role="status">Recuperando vistas guardadas…</p>}
       {viewError && <p role="alert">{viewError}</p>}
       {viewStatus && <p role="status">{viewStatus}</p>}
@@ -296,24 +324,34 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           disabled={viewBusy || viewLoading} onChange={event => setViewName(event.target.value)}
           placeholder="Ej.: Inspecciones urgentes" />
         <button type="submit" className="ghost-action"
-          disabled={viewBusy || viewLoading || savedViews.length >= REVIEW_VIEW_LIMIT}>
+          disabled={viewBusy || viewLoading || savedViews.filter(view=>view.source === 'mine').length >= REVIEW_VIEW_LIMIT}>
           Guardar filtros actuales
         </button>
       </form>
-      <p>{savedViews.length} de {REVIEW_VIEW_LIMIT} vistas guardadas.</p>
+      <p>{ownViews.length} de {REVIEW_VIEW_LIMIT} vistas guardadas.</p>
+      <p>{sharedViews.length} vistas compartidas por administración disponibles.</p>
       <label htmlFor="review-view-select">Elegir vista guardada</label>
       <select id="review-view-select" value={selectedViewId}
         disabled={viewBusy || viewLoading || !savedViews.length}
         onChange={event => { setSelectedViewId(event.target.value); setDeleteArmed(false); }}>
         <option value="">Seleccioná una vista</option>
-        {savedViews.map(view => <option key={view.id} value={view.id}>{view.name}</option>)}
+        <optgroup label="Mis vistas">
+          {ownViews.map(view => <option key={view.id} value={view.id}>
+            {view.name}{view.visibility === 'shared' ? ' (compartida)' : ''}
+          </option>)}
+        </optgroup>
+        <optgroup label="Compartidas con coordinación">
+          {sharedViews.map(view => <option key={view.id} value={view.id}>
+            {view.name} (compartida)
+          </option>)}
+        </optgroup>
       </select>
       <div className="orders-workspace__review-save-actions">
         <button type="button" className="ghost-action" onClick={applyView}
           disabled={!selectedViewId || viewBusy || viewLoading || loading}>Aplicar vista</button>
         {!deleteArmed
           ? <button type="button" className="ghost-action"
-            disabled={!selectedViewId || viewBusy || viewLoading}
+            disabled={!canManageSelected || viewBusy || viewLoading}
             onClick={() => setDeleteArmed(true)}>Eliminar vista…</button>
           : <>
             <span>¿Eliminar esta vista guardada?</span>
@@ -323,6 +361,16 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
               disabled={viewBusy} onClick={() => setDeleteArmed(false)}>Cancelar</button>
           </>}
       </div>
+      {role === 'tenant_admin' && canManageSelected && <div
+        className="orders-workspace__review-share-actions">
+        {selectedView.visibility === 'private'
+          ? <button type="button" className="ghost-action" disabled={viewBusy || viewLoading}
+              onClick={() => changeViewVisibility('shared')}>Compartir con coordinación</button>
+          : <button type="button" className="ghost-action" disabled={viewBusy || viewLoading}
+              onClick={() => changeViewVisibility('private')}>Dejar de compartir</button>}
+      </div>}
+      {selectedView?.source === 'shared' &&
+        <p>Esta vista es de solo lectura: podés aplicarla, pero no editarla ni eliminarla.</p>}
     </div>
     <div className="orders-workspace__review-global-filter">
       <form className="orders-workspace__review-title-search" role="search"
