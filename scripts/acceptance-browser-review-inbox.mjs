@@ -658,7 +658,9 @@ try {
   assert.equal(await filters.getByRole('button',{name:'Sin parte'})
     .getAttribute('aria-pressed'),'true');
   await next.click();
-  await pageCount(region,11,2);
+  // The due-sort fixture intentionally made one of the 61 inspections NULL,
+  // so overdue finds 60 orders and the second page has 10, not 11.
+  await pageCount(region,10,2);
   await region.getByRole('button',{name:'Eliminar vista…'}).click();
   await region.getByText('¿Eliminar esta vista guardada?').waitFor();
   await region.getByRole('button',{name:'Cancelar'}).click();
