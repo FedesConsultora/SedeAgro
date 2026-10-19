@@ -240,6 +240,55 @@ try {
   assert.equal(await previous.isDisabled(), true);
   console.log('PASS: explicit refresh resets filters and reloads the real first page');
 
+  // Filter SQL BEFORE LIMIT: fifty-five fresh applications appear ahead of
+  // sixty-one older inspections in the unfiltered ordering.
+  const apps = await admin.query(`
+    INSERT INTO work_orders (tenant_id,field_id,requested_by,type,status,title,created_at)
+    SELECT $1,$2,$3,'application','in_progress',
+      'Global application ' || LPAD(g::text, 3, '0'),
+      clock_timestamp() - interval '2 minutes' + g * interval '1 millisecond'
+    FROM generate_series(1,55) g RETURNING id
+  `, [ownerA.tenant.id, field, ownerA.user.id]);
+  assert.equal(apps.rowCount, 55);
+  const workType = region.getByLabel('Tipo de labor (todas las páginas)');
+  await workType.selectOption('inspection');
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Real review browser'));
+  assert.ok(!(await region.innerText()).includes('Global application'));
+  await workType.selectOption('application');
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Global application'));
+  assert.ok(!(await region.innerText()).includes('Real review browser'));
+
+  // The cursor must be rejected when replayed with another SQL predicate.
+  await page.route('**/api/v1/work-orders/review-queue?cursor=*&type=application', async route => {
+    const url = new URL(route.request().url());
+    url.searchParams.set('type', 'inspection');
+    await route.continue({ url: url.toString() });
+  }, { times: 1 });
+  const filterReplay = page.waitForResponse(res =>
+    res.url().includes('/work-orders/review-queue?cursor=') && res.status() === 422);
+  await next.click();
+  assert.equal((await (await filterReplay).json()).error.code, 'ORDER_REVIEW_CURSOR_INVALID');
+  await region.getByRole('button', { name: 'Iniciar nueva consulta' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await workType.inputValue(), 'application');
+  await next.click();
+  await pageCount(region, 5, 2);
+  await headingFocused(page, region);
+  assert.equal(await next.isDisabled(), true);
+  console.log('PASS: SQL-wide type filter 55 application 50/5, cursor type replay 422');
+
+  await workType.selectOption('inspection');
+  await pageCount(region, 50, 1);
+  assert.equal(await previous.isDisabled(), true);
+  await next.click();
+  await pageCount(region, 11, 2);
+  await workType.selectOption('all');
+  await pageCount(region, 50, 1);
+  assert.equal(await previous.isDisabled(), true);
+  console.log('PASS: SQL-wide inspection returns older rows and type switch resets cursor');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })
