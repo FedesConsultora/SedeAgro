@@ -32,9 +32,28 @@ export function filterReviewQueuePage(items, filter = 'all') {
   return states === null ? items : items.filter(item => states.includes(item.state));
 }
 
-export function reviewQueueUrl(cursor = null) {
+// This filter is SQL-backed, across ALL matching orders. In contrast,
+// REVIEW_QUEUE_PAGE_FILTERS is strictly local to one page.
+export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
+  all: 'Todas las labores',
+  application: 'Aplicación',
+  sowing: 'Siembra',
+  fertilization: 'Fertilización',
+  harvest: 'Cosecha',
+  irrigation: 'Riego',
+  inspection: 'Inspección',
+  other: 'Otra labor'
+});
+
+export function reviewQueueUrl(cursor = null, workType = 'all') {
+  if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType)) {
+    throw new Error('Filtro global de labor inválido.');
+  }
+  const query = new URLSearchParams();
+  if (cursor !== null) query.set('cursor', cursor);
+  if (workType !== 'all') query.set('type', workType);
   return '/work-orders/review-queue' +
-    (cursor == null ? '' : `?cursor=${encodeURIComponent(cursor)}`);
+    (query.size ? '?' + query.toString() : '');
 }
 
 export function validateReviewQueue(response) {
@@ -76,11 +95,12 @@ export function reviewQueueFailure(error, usedCursor) {
     message: error?.message || 'No se pudo consultar la bandeja de revisión.' };
 }
 
-export function reviewQueueRequestKey(page, cursor, reload) {
+export function reviewQueueRequestKey(page, cursor, reload, workType = 'all') {
   if (!Number.isSafeInteger(page) || page < 0 ||
       !Number.isSafeInteger(reload) || reload < 0 ||
-      (cursor !== null && typeof cursor !== 'string')) {
+      (cursor !== null && typeof cursor !== 'string') ||
+      !Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType)) {
     throw new Error('Navegación de revisión inválida.');
   }
-  return JSON.stringify([page, cursor, reload]);
+  return JSON.stringify([page, cursor, reload, workType]);
 }
