@@ -31,7 +31,7 @@ export function filterReviewQueuePage(items, filter = 'all') {
   return states === null ? items : items.filter(item => states.includes(item.state));
 }
 
-// All criteria (work type, review state, priority and due window) are evaluated
+// All criteria (work type, review state, priority, due window and title) are evaluated
 // by the authorized backend before keyset pagination; never filter only 50 rows.
 export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
   all: 'Todas las labores',
@@ -60,11 +60,28 @@ export const REVIEW_QUEUE_DUE_WINDOWS = Object.freeze({
   unscheduled: 'Sin fecha de vencimiento'
 });
 
-export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'all', priority = 'all', dueWindow = 'all') {
+export const REVIEW_TITLE_QUERY_MAX_CODEPOINTS = 64;
+export function normalizeReviewTitleQuery(input) {
+  if (typeof input !== 'string') throw new Error('Texto de búsqueda inválido.');
+  const query = input.normalize('NFC').trim().replace(/\s+/gu, ' ');
+  const length = Array.from(query).length;
+  if (query && (length < 2 || length > REVIEW_TITLE_QUERY_MAX_CODEPOINTS ||
+      /[\p{Cc}\p{Cf}]/u.test(query))) {
+    throw new Error('Texto de búsqueda inválido.');
+  }
+  return query;
+}
+const isCanonicalTitleQuery = input => {
+  try { return normalizeReviewTitleQuery(input) === input; }
+  catch { return false; }
+};
+
+export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'all', priority = 'all', dueWindow = 'all', titleQuery = '') {
   if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
       !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState) ||
       !Object.hasOwn(REVIEW_QUEUE_PRIORITIES, priority) ||
-      !Object.hasOwn(REVIEW_QUEUE_DUE_WINDOWS, dueWindow)) {
+      !Object.hasOwn(REVIEW_QUEUE_DUE_WINDOWS, dueWindow) ||
+      !isCanonicalTitleQuery(titleQuery)) {
     throw new Error('Filtro global de labor inválido.');
   }
   const query = new URLSearchParams();
@@ -73,6 +90,7 @@ export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'a
   if (reviewState !== 'all') query.set('state', reviewState);
   if (priority !== 'all') query.set('priority', priority);
   if (dueWindow !== 'all') query.set('due', dueWindow);
+  if (titleQuery) query.set('q', titleQuery);
   return '/work-orders/review-queue' +
     (query.size ? '?' + query.toString() : '');
 }
@@ -116,15 +134,16 @@ export function reviewQueueFailure(error, usedCursor) {
     message: error?.message || 'No se pudo consultar la bandeja de revisión.' };
 }
 
-export function reviewQueueRequestKey(page, cursor, reload, workType = 'all', reviewState = 'all', priority = 'all', dueWindow = 'all') {
+export function reviewQueueRequestKey(page, cursor, reload, workType = 'all', reviewState = 'all', priority = 'all', dueWindow = 'all', titleQuery = '') {
   if (!Number.isSafeInteger(page) || page < 0 ||
       !Number.isSafeInteger(reload) || reload < 0 ||
       (cursor !== null && typeof cursor !== 'string') ||
       !Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
       !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState) ||
       !Object.hasOwn(REVIEW_QUEUE_PRIORITIES, priority) ||
-      !Object.hasOwn(REVIEW_QUEUE_DUE_WINDOWS, dueWindow)) {
+      !Object.hasOwn(REVIEW_QUEUE_DUE_WINDOWS, dueWindow) ||
+      !isCanonicalTitleQuery(titleQuery)) {
     throw new Error('Navegación de revisión inválida.');
   }
-  return JSON.stringify([page, cursor, reload, workType, reviewState, priority, dueWindow]);
+  return JSON.stringify([page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery]);
 }

@@ -320,6 +320,27 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(earlyQueue.body.pagination.has_more, false);
     assert.equal(earlyQueue.body.pagination.next_cursor, null);
     assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
+    const titleSearch = await request(reviewQueue + '?q=+cHeCk++GaTe+', adminToken, tenantA);
+    assert.equal(titleSearch.status, 200, JSON.stringify(titleSearch.body));
+    assert.equal(titleSearch.body.data.some(row => row.id === orderId), true);
+    assert.equal(titleSearch.body.data.every(row => row.title.toLowerCase()
+      .includes('check gate')), true);
+    const titleCombined = await request(reviewQueue +
+      '?q=Check%20gate&type=inspection&state=no_report&priority=normal&due=unscheduled',
+      adminToken, tenantA);
+    assert.equal(titleCombined.status, 200, JSON.stringify(titleCombined.body));
+    assert.equal(titleCombined.body.data.some(row => row.id === orderId), true);
+    const wildcardLiteral = await request(reviewQueue + '?q=%25_', adminToken, tenantA);
+    assert.equal(wildcardLiteral.status, 200, JSON.stringify(wildcardLiteral.body));
+    assert.equal(wildcardLiteral.body.data.some(row => row.id === orderId), false);
+    const quoteInjection = await request(reviewQueue +
+      '?q=' + encodeURIComponent("' OR true--"), adminToken, tenantA);
+    assert.equal(quoteInjection.status, 200, JSON.stringify(quoteInjection.body));
+    assert.equal(quoteInjection.body.data.some(row => row.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?q=Check%20gate', adminBToken, tenantB))
+      .body.data.some(row => row.id === orderId), false);
+    assert.equal((await request(reviewQueue + '?q=Check%20gate',
+      contractorToken, tenantA)).status, 403);
     assert.equal((await request(reviewQueue, coordinatorToken, tenantA)).status, 200);
     const scopedByType = await request(reviewQueue + '?type=inspection', adminToken, tenantA);
     assert.equal(scopedByType.status, 200, JSON.stringify(scopedByType.body));
@@ -377,7 +398,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       '?priority=', '?priority=critical', '?priority=normal&priority=urgent',
       '?priority[]=urgent', '?priority=urgent&page=1',
       '?due=', '?due=today', '?due=overdue&due=later',
-      '?due[]=overdue', '?due=overdue&page=1'
+      '?due[]=overdue', '?due=overdue&page=1',
+      '?q=', '?q=a', '?q=+++++++++', '?q[]=Check',
+      '?q=Check&q=gate', '?q=' + 'a'.repeat(65), '?q=Check&page=1'
     ]) {
       assert.equal((await request(reviewQueue + invalid, adminToken, tenantA)).status, 422,
         'Invalid global filter or cursor must be rejected: ' + invalid);

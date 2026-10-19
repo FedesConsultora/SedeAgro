@@ -139,3 +139,23 @@ test('v5 signed cursor carries the anchored due window and rejects cross-window 
   assert.throws(()=>parseReviewCursor(issued(),{tenantId,userId,dueWindow:'unlimited'},now),
     ReviewCursorError);
 });
+
+test('v6 signed cursor binds canonical global title phrase and rejects query replay', () => {
+  for (const titleQuery of ['', 'Riego mañana', '%_ literal', 'Café']) {
+    const token=issueReviewCursor({tenantId,userId,workType:'inspection',priority:'normal',
+      reviewState:'no_report',dueWindow:'overdue',titleQuery,anchor,
+      last:{id:lastId,created_at:new Date(now-18000)}},now);
+    const context={tenantId,userId,workType:'inspection',priority:'normal',
+      reviewState:'no_report',dueWindow:'overdue',titleQuery};
+    assert.equal(parseReviewCursor(token,context,now+1000).titleQuery,titleQuery);
+    for (const changed of ['', 'café', 'Riego mañana', '%_ literal', 'Otra frase']
+      .filter(v=>v!==titleQuery)) {
+      assert.throws(()=>parseReviewCursor(token,{...context,titleQuery:changed},now+1000),
+        ReviewCursorError);
+    }
+  }
+  for (const bad of ['a','t'.repeat(65),' unclean', 'a\u0000b']) {
+    assert.throws(()=>issueReviewCursor({tenantId,userId,titleQuery:bad,anchor,
+      last:{id:lastId,created_at:new Date(now-18000)}},now),ReviewCursorError);
+  }
+});

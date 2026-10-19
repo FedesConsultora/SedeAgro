@@ -39,6 +39,7 @@ import { issueReviewCursor, parseReviewCursor, ReviewCursorError,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS, REVIEW_QUEUE_PRIORITIES } from './reviewQueueCursor.js';
 import { reviewQueueStateSql, REVIEW_QUEUE_STATE_GROUPS } from './reviewQueueStateSql.js';
 import { REVIEW_QUEUE_DUE_WINDOWS, reviewQueueDueWhere } from './reviewQueueDueWindow.js';
+import { normalizeReviewTitleQuery, reviewQueueTitleWhere } from './reviewQueueTitleSearch.js';
 
 export const workOrdersRouter = Router();
 
@@ -228,7 +229,15 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const reviewState = req.query.state ?? 'all';
   const priority = req.query.priority ?? 'all';
   const dueWindow = req.query.due ?? 'all';
-  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type' && key !== 'state' && key !== 'priority' && key !== 'due') ||
+  let titleQuery;
+  try {
+    titleQuery = normalizeReviewTitleQuery(req.query.q ?? '');
+    if (Object.hasOwn(req.query, 'q') && !titleQuery) throw new Error('empty query');
+  } catch {
+    throw new HttpError(422, 'Texto de búsqueda de título inválido.',
+      undefined, 'ORDER_REVIEW_CURSOR_INVALID');
+  }
+  if (Object.keys(req.query).some(key => key !== 'cursor' && key !== 'type' && key !== 'state' && key !== 'priority' && key !== 'due' && key !== 'q') ||
       (req.query.cursor != null && (typeof req.query.cursor !== 'string' || !req.query.cursor)) ||
       typeof workType !== 'string' || !REVIEW_QUEUE_WORK_TYPES.includes(workType) ||
       typeof reviewState !== 'string' || !REVIEW_QUEUE_STATE_FILTERS.includes(reviewState) ||
@@ -241,7 +250,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   try {
     cursor = req.query.cursor
       ? parseReviewCursor(req.query.cursor, { tenantId: req.tenantId,
-        userId: req.auth.user.id, workType, reviewState, priority, dueWindow })
+        userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery })
       : null;
   } catch (error) {
     if (!(error instanceof ReviewCursorError)) throw error;
@@ -265,10 +274,15 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       ...(workType === 'all' ? {} : { type: workType }),
       ...(priority === 'all' ? {} : { priority }),
       ...reviewQueueDueWhere(dueWindow, anchor),
-      ...(reviewState === 'all' ? {} : {
-        [Op.and]: where(literal(reviewQueueStateSql(req.auth.user.id)), {
-          [Op.in]: REVIEW_QUEUE_STATE_GROUPS[reviewState]
-        })
+      ...(reviewState === 'all' && !titleQuery ? {} : {
+        [Op.and]: [
+          ...(reviewState === 'all' ? [] : [
+            where(literal(reviewQueueStateSql(req.auth.user.id)), {
+              [Op.in]: REVIEW_QUEUE_STATE_GROUPS[reviewState]
+            })
+          ]),
+          ...(titleQuery ? [reviewQueueTitleWhere(titleQuery)] : [])
+        ]
       }),
       created_at: { [Op.lte]: anchor }, ...older },
     attributes: ['id', 'title', 'type', 'priority', 'due_at', 'status', 'created_at'],
@@ -279,7 +293,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
   const hasMore = rows.length > REVIEW_QUEUE_PAGE_SIZE;
   const orders = rows.slice(0, REVIEW_QUEUE_PAGE_SIZE);
   const nextCursor = hasMore ? issueReviewCursor({
-    tenantId: req.tenantId, userId: req.auth.user.id, workType, reviewState, priority, dueWindow, anchor,
+    tenantId: req.tenantId, userId: req.auth.user.id, workType, reviewState, priority, dueWindow, titleQuery, anchor,
     last: orders[orders.length - 1]
   }) : null;
   const ids = orders.map(order => order.id);

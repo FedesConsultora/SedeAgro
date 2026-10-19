@@ -4,7 +4,7 @@ import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_PAGE_FILTERS,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
   reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
-  validateReviewQueue } from '../services/workOrderReviewQueue.js';
+  validateReviewQueue, normalizeReviewTitleQuery } from '../services/workOrderReviewQueue.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
 // order fetches a fresh authorized detail; the server owns every transition.
@@ -20,13 +20,16 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [workType, setWorkType] = useState('all');
   const [priority, setPriority] = useState('all');
   const [dueWindow, setDueWindow] = useState('all');
+  const [draftTitle, setDraftTitle] = useState('');
+  const [titleQuery, setTitleQuery] = useState('');
+  const [titleError, setTitleError] = useState('');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -40,7 +43,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -50,7 +53,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, reviewState, priority, dueWindow, titleQuery, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -82,6 +85,26 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
       setPage(page + 1);
     }
   };
+  const commitTitleQuery = value => {
+    setTitleError('');
+    setDraftTitle(value);
+    if (value === titleQuery) return;
+    focusOnNavigation.current = false;
+    setTitleQuery(value);
+    setPage(0);
+    setCursors([null]);
+    setReload(previous => previous + 1);
+  };
+  const submitTitleSearch = event => {
+    event.preventDefault();
+    if (loading) return;
+    try {
+      commitTitleQuery(normalizeReviewTitleQuery(draftTitle));
+    } catch {
+      setTitleError('Escribí entre 2 y 64 caracteres, sin caracteres de control.');
+    }
+  };
+  const clearTitleSearch = () => commitTitleQuery('');
   const changeReviewState = nextState => {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
@@ -144,6 +167,24 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           onClick={() => setReload(value => value + 1)}>Reintentar</button>}
     </div>}
     <div className="orders-workspace__review-global-filter">
+      <form className="orders-workspace__review-title-search" role="search"
+        onSubmit={submitTitleSearch}>
+        <label htmlFor="review-queue-title-search">Buscar por título (todas las páginas)</label>
+        <input id="review-queue-title-search" type="search" value={draftTitle}
+          maxLength={64} disabled={loading} aria-describedby="review-queue-title-hint"
+          onChange={event => { setDraftTitle(event.target.value); setTitleError(''); }} />
+        <div className="orders-workspace__review-search-actions">
+          <button type="submit" className="ghost-action" disabled={loading}>
+            Buscar órdenes
+          </button>
+          <button type="button" className="ghost-action" disabled={loading || (!draftTitle && !titleQuery)}
+            onClick={clearTitleSearch}>Limpiar búsqueda</button>
+        </div>
+        <p id="review-queue-title-hint">Busca una frase literal del título en todas
+          las órdenes autorizadas; no busca en partes ni evidencias privadas.</p>
+        {titleError && <p role="alert">{titleError}</p>}
+        {titleQuery && <p role="status">Búsqueda activa por título: {titleQuery}</p>}
+      </form>
       <label htmlFor="review-queue-work-type">Tipo de labor (todas las páginas)</label>
       <select id="review-queue-work-type" value={workType}
         disabled={loading} onChange={event => changeWorkType(event.target.value)}>
@@ -162,9 +203,9 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         {Object.entries(REVIEW_QUEUE_DUE_WINDOWS).map(([code, label]) =>
           <option key={code} value={code}>{label}</option>)}
       </select>
-      <p>Tipo, estado, prioridad y vencimiento se filtran en el servidor antes
-        de paginar. Las ventanas usan la hora de inicio de cada consulta, no
-        el calendario local. No autorizan aprobaciones ni cambian fechas.</p>
+      <p>El título, tipo, estado, prioridad y vencimiento se filtran en el servidor
+        antes de paginar. Las ventanas toman la hora de inicio de la consulta.
+        Ningún filtro autoriza aprobaciones ni cambia fechas.</p>
     </div>
     {!loading && !error && shown && <>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">

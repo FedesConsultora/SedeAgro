@@ -455,6 +455,85 @@ try {
   await pageCount(region, 50, 1);
   console.log('PASS: SQL-global deadlines overdue 50/11, next 168h 50/5, none missing/later, real HMAC 422');
 
+
+  // Search text is matched against ALL tenant-authorized titles BEFORE LIMIT 51.
+  // The 55 NEWER applications precede all 61 older "Real review browser" titles.
+  const titleSearch = region.getByRole('search');
+  const titleBox = titleSearch.getByRole('searchbox', {
+    name: 'Buscar por título (todas las páginas)'
+  });
+  const submitTitle = titleSearch.getByRole('button', { name: 'Buscar órdenes' });
+  const clearTitle = titleSearch.getByRole('button', { name: 'Limpiar búsqueda' });
+  await titleBox.fill('  rEaL  review   Browser  ');
+  await submitTitle.click();
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Real review browser'));
+  assert.ok(!(await region.innerText()).includes('Global application'));
+  await next.click();
+  await pageCount(region, 11, 2);
+  await headingFocused(page, region);
+  console.log('PASS: case-insensitive global title search sees 61 OLD matches beyond newer page');
+
+  // Percent and underscore are literal characters, NEVER ILIKE wildcards.
+  await titleBox.fill('%_');
+  await submitTitle.click();
+  await pageCount(region, 0, 1);
+  assert.equal(await next.isDisabled(), true);
+  await titleBox.fill('a');
+  await submitTitle.click();
+  await titleSearch.getByRole('alert').waitFor();
+  await pageCount(region, 0, 1); // Validation must NOT replace active query.
+  await clearTitle.click();
+  await pageCount(region, 50, 1);
+  assert.equal(await previous.isDisabled(), true);
+  console.log('PASS: literal %_ is not wildcard; invalid short search never clears active results');
+
+  // Search also composes with ALL existing SQL filters and resets cursors.
+  await workType.selectOption('application');
+  await pageCount(region, 50, 1);
+  await priorityFilter.selectOption('urgent');
+  await pageCount(region, 50, 1);
+  await dueFilter.selectOption('next_7_days');
+  await pageCount(region, 50, 1);
+  await filters.getByRole('button', { name: 'Con bloqueos' }).click();
+  await pageCount(region, 50, 1);
+  await titleBox.fill('Global application');
+  await submitTitle.click();
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Global application'));
+
+  // Change only q on a real signed request, preserving its other four filters.
+  await page.route('**/api/v1/work-orders/review-queue?cursor=*', async route => {
+    const url = new URL(route.request().url());
+    assert.equal(url.searchParams.get('q'), 'Global application');
+    url.searchParams.set('q', 'Real review browser');
+    await route.continue({ url: url.toString() });
+  }, { times: 1 });
+  const replayedTitle = page.waitForResponse(res =>
+    res.url().includes('/work-orders/review-queue?cursor=') && res.status() === 422);
+  await next.click();
+  assert.equal((await (await replayedTitle).json()).error.code, 'ORDER_REVIEW_CURSOR_INVALID');
+  await region.getByRole('button', { name: 'Iniciar nueva consulta' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await titleBox.inputValue(), 'Global application');
+  await next.click();
+  await pageCount(region, 5, 2);
+  await headingFocused(page, region);
+  assert.equal(await next.isDisabled(), true);
+  await clearTitle.click();
+  await pageCount(region, 50, 1);
+  assert.equal(await priorityFilter.inputValue(), 'urgent');
+  assert.equal(await dueFilter.inputValue(), 'next_7_days');
+  assert.equal(await filters.getByRole('button', { name: 'Con bloqueos' })
+    .getAttribute('aria-pressed'), 'true');
+  await workType.selectOption('all');
+  await pageCount(region, 50, 1);
+  await priorityFilter.selectOption('all');
+  await pageCount(region, 50, 1);
+  await dueFilter.selectOption('all');
+  await pageCount(region, 50, 1);
+  console.log('PASS: composable title search 50/5, cross-query HMAC 422, clear retains global filters');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })
