@@ -346,9 +346,12 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal((await request(publishUrl,adminBToken,tenantB,'PATCH',
       {visibility:'shared'})).status,404);
     for(const invalid of [{visibility:'all'},{visibility:'shared',tenant_id:tenantB},
-      {},{visibility:[]},null]) {
+      {},{visibility:[]}]) {
       assert.equal((await request(publishUrl,adminToken,tenantA,'PATCH',invalid)).status,422);
     }
+    // Express strict JSON parser rejects a primitive null body before route
+    // validation: fail closed with 400, not the route's 422 schema response.
+    assert.equal((await request(publishUrl,adminToken,tenantA,'PATCH',null)).status,400);
     const published=await request(publishUrl,adminToken,tenantA,
       'PATCH',{visibility:'shared'});
     assert.equal(published.status,200,JSON.stringify(published.body));
