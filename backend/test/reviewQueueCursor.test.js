@@ -159,3 +159,33 @@ test('v6 signed cursor binds canonical global title phrase and rejects query rep
       last:{id:lastId,created_at:new Date(now-18000)}},now),ReviewCursorError);
   }
 });
+
+test('v7 signed sort scope prevents cross-sort cursor replay and carries complete tuple', () => {
+  const last={id:lastId,created_at:new Date(now-18000),
+    priority:'urgent',due_at:new Date(now+86400000)};
+  const modes=[
+    ['newest',null], ['priority_first',0],
+    ['due_first',new Date(now+86400000).toISOString()]
+  ];
+  for (const [sortMode, sortKey] of modes) {
+    const token=issueReviewCursor({tenantId,userId,workType:'inspection',
+      reviewState:'no_report',priority:'normal',dueWindow:'overdue',
+      titleQuery:'Inspección',sortMode,anchor,last},now);
+    const context={tenantId,userId,workType:'inspection',
+      reviewState:'no_report',priority:'normal',dueWindow:'overdue',
+      titleQuery:'Inspección',sortMode};
+    const result=parseReviewCursor(token,context,now+1000);
+    assert.equal(result.sortMode,sortMode);
+    assert.equal(result.sortKey,sortKey);
+    assert.equal(result.lastId,lastId);
+    for (const other of modes.map(([name])=>name).filter(x=>x!==sortMode)) {
+      assert.throws(()=>parseReviewCursor(token,{...context,sortMode:other},now+1000),
+        ReviewCursorError);
+    }
+  }
+  const undated=issueReviewCursor({tenantId,userId,sortMode:'due_first',anchor,
+    last:{id:lastId,created_at:new Date(now-18000),due_at:null}},now);
+  assert.equal(parseReviewCursor(undated,{tenantId,userId,sortMode:'due_first'},now).sortKey,null);
+  assert.throws(()=>issueReviewCursor({tenantId,userId,sortMode:'nonexistent',anchor,last},now),
+    ReviewCursorError);
+});
