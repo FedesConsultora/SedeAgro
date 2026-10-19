@@ -227,3 +227,20 @@ test('global due-window URL and request generations are isolated across filters'
   );
   assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','all','invalid'),/inválida/);
 });
+
+test('accessible due selector starts a new cursor while retaining type/state/priority', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url),'utf8');
+  for (const value of [
+    'Vencimiento (todas las páginas)', 'review-queue-due-window',
+    'REVIEW_QUEUE_DUE_WINDOWS', 'changeDueWindow(event.target.value)',
+    'setDueWindow(nextWindow)','setPage(0)','setCursors([null])',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow)'
+  ]) assert.ok(ui.includes(value),'Due-window UI contract missing '+value);
+  const only = ui.slice(ui.indexOf('const changeDueWindow ='),ui.indexOf('const changePriority ='));
+  assert.ok(!only.includes('setWorkType('));
+  assert.ok(!only.includes('setReviewState('));
+  assert.ok(!only.includes('setPriority('));
+  assert.ok(only.includes('setReload(value => value + 1)'));
+  assert.ok(ui.includes('value={dueWindow} disabled={loading}'));
+});
