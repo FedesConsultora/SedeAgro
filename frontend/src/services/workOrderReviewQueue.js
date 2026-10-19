@@ -31,8 +31,8 @@ export function filterReviewQueuePage(items, filter = 'all') {
   return states === null ? items : items.filter(item => states.includes(item.state));
 }
 
-// This filter is SQL-backed, across ALL matching orders. In contrast,
-// REVIEW_QUEUE_PAGE_FILTERS is strictly local to one page.
+// All three criteria (work type, review state and priority) are evaluated
+// by the authorized backend before keyset pagination; never filter only 50 rows.
 export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
   all: 'Todas las labores',
   application: 'Aplicación',
@@ -44,15 +44,25 @@ export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
   other: 'Otra labor'
 });
 
-export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'all') {
+export const REVIEW_QUEUE_PRIORITIES = Object.freeze({
+  all: 'Todas las prioridades',
+  urgent: 'Urgente',
+  high: 'Alta',
+  normal: 'Normal',
+  low: 'Baja'
+});
+
+export function reviewQueueUrl(cursor = null, workType = 'all', reviewState = 'all', priority = 'all') {
   if (!Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
-      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState)) {
+      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState) ||
+      !Object.hasOwn(REVIEW_QUEUE_PRIORITIES, priority)) {
     throw new Error('Filtro global de labor inválido.');
   }
   const query = new URLSearchParams();
   if (cursor !== null) query.set('cursor', cursor);
   if (workType !== 'all') query.set('type', workType);
   if (reviewState !== 'all') query.set('state', reviewState);
+  if (priority !== 'all') query.set('priority', priority);
   return '/work-orders/review-queue' +
     (query.size ? '?' + query.toString() : '');
 }
@@ -96,13 +106,14 @@ export function reviewQueueFailure(error, usedCursor) {
     message: error?.message || 'No se pudo consultar la bandeja de revisión.' };
 }
 
-export function reviewQueueRequestKey(page, cursor, reload, workType = 'all', reviewState = 'all') {
+export function reviewQueueRequestKey(page, cursor, reload, workType = 'all', reviewState = 'all', priority = 'all') {
   if (!Number.isSafeInteger(page) || page < 0 ||
       !Number.isSafeInteger(reload) || reload < 0 ||
       (cursor !== null && typeof cursor !== 'string') ||
       !Object.hasOwn(REVIEW_QUEUE_WORK_TYPES, workType) ||
-      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState)) {
+      !Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, reviewState) ||
+      !Object.hasOwn(REVIEW_QUEUE_PRIORITIES, priority)) {
     throw new Error('Navegación de revisión inválida.');
   }
-  return JSON.stringify([page, cursor, reload, workType, reviewState]);
+  return JSON.stringify([page, cursor, reload, workType, reviewState, priority]);
 }

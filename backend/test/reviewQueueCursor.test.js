@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { issueReviewCursor, parseReviewCursor, REVIEW_CURSOR_TTL_MS,
-  ReviewCursorError, REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS } from '../src/modules/workOrders/reviewQueueCursor.js';
+  ReviewCursorError, REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS,
+  REVIEW_QUEUE_PRIORITIES } from '../src/modules/workOrders/reviewQueueCursor.js';
 
 const tenantId = randomUUID(), userId = randomUUID(), otherTenant = randomUUID(),
   otherUser = randomUUID(), lastId = randomUUID();
@@ -86,4 +87,25 @@ test('v3 state-filter cursor rejects replay under a different global state', () 
     tenantId,userId,reviewState:'invalid',anchor,
     last:{id:lastId,created_at:new Date(now - 18000)}
   },now), ReviewCursorError);
+});
+
+test('v4 cursor binds priority and prohibits cross-priority replay', () => {
+  assert.deepEqual(REVIEW_QUEUE_PRIORITIES, ['all', 'urgent', 'high', 'normal', 'low']);
+  for (const priority of REVIEW_QUEUE_PRIORITIES) {
+    const token = issueReviewCursor({
+      tenantId, userId, workType:'application', reviewState:'blocked', priority,
+      anchor, last:{id:lastId,created_at:new Date(now-18000)}
+    }, now);
+    const context = {tenantId,userId,workType:'application',reviewState:'blocked',priority};
+    assert.equal(parseReviewCursor(token, context, now).priority, priority);
+    for (const different of REVIEW_QUEUE_PRIORITIES.filter(v=>v!==priority)) {
+      assert.throws(()=>parseReviewCursor(token,{...context,priority:different},now), ReviewCursorError);
+    }
+    assert.throws(()=>parseReviewCursor(token,{...context,tenantId:otherTenant},now),ReviewCursorError);
+    assert.throws(()=>parseReviewCursor(token,{...context,userId:otherUser},now),ReviewCursorError);
+  }
+  assert.throws(()=>issueReviewCursor({
+    tenantId,userId,priority:'injection',anchor,
+    last:{id:lastId,created_at:new Date(now-18000)}
+  },now),ReviewCursorError);
 });

@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { isCoordinationReviewer, REVIEW_QUEUE_STATES,
   REVIEW_QUEUE_PAGE_FILTERS,
-  REVIEW_QUEUE_WORK_TYPES, reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES,
+  reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue } from '../services/workOrderReviewQueue.js';
 
 // This is a navigational inbox, never an approve/close action. Opening the
@@ -17,13 +18,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
   const [page, setPage] = useState(0);
   const [reviewState, setReviewState] = useState('all');
   const [workType, setWorkType] = useState('all');
+  const [priority, setPriority] = useState('all');
   const scope = [tenantId, userId, role, revision].join(':');
   const cursor = cursors[page] ?? null;
   const [reload, setReload] = useState(0);
   const headingRef = useRef(null);
   const errorActionRef = useRef(null);
   const focusOnNavigation = useRef(false);
-  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState);
+  const requestKey = reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority);
   const [requestState, setRequestState] = useState(null);
   // A response can render ONLY against its own page/cursor/reload key.
   // This avoids a frame showing the previous page during effect scheduling.
@@ -37,7 +39,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     let active = true;
     const controller = new AbortController();
     setRequestState({ key: requestKey, phase: 'loading' });
-    api.request(reviewQueueUrl(cursor, workType, reviewState), { silent: true, signal: controller.signal })
+    api.request(reviewQueueUrl(cursor, workType, reviewState, priority), { silent: true, signal: controller.signal })
       .then(result => {
         const validated = validateReviewQueue(result);
         if (active) setRequestState({ key: requestKey, phase: 'ready', result: validated });
@@ -47,7 +49,7 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
           failure: reviewQueueFailure(err, cursor !== null) });
       });
     return () => { active = false; controller.abort(); };
-  }, [api, available, cursor, requestKey, workType, reviewState, tenantId, userId, scope]);
+  }, [api, available, cursor, requestKey, workType, reviewState, priority, tenantId, userId, scope]);
 
   useEffect(() => {
     if (shown && focusOnNavigation.current) {
@@ -83,6 +85,15 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
     if (!Object.hasOwn(REVIEW_QUEUE_PAGE_FILTERS, nextState) || nextState === reviewState) return;
     focusOnNavigation.current = false;
     setReviewState(nextState);
+    setPage(0);
+    setCursors([null]);
+    setReload(value => value + 1);
+  };
+  const changePriority = nextPriority => {
+    if (!Object.hasOwn(REVIEW_QUEUE_PRIORITIES, nextPriority) ||
+        nextPriority === priority || loading) return;
+    focusOnNavigation.current = false;
+    setPriority(nextPriority);
     setPage(0);
     setCursors([null]);
     setReload(value => value + 1);
@@ -129,8 +140,14 @@ function WorkOrderReviewInboxSession({ onOpenOrder, revision }) {
         {Object.entries(REVIEW_QUEUE_WORK_TYPES).map(([code, label]) =>
           <option key={code} value={code}>{label}</option>)}
       </select>
-      <p>Los filtros por tipo y estado se aplican en el servidor, antes de paginar.
-        Los resultados orientan la revisión; no autorizan aprobaciones.</p>
+      <label htmlFor="review-queue-priority">Prioridad (todas las páginas)</label>
+      <select id="review-queue-priority" value={priority} disabled={loading}
+        onChange={event => changePriority(event.target.value)}>
+        {Object.entries(REVIEW_QUEUE_PRIORITIES).map(([code, label]) =>
+          <option key={code} value={code}>{label}</option>)}
+      </select>
+      <p>Tipo, estado y prioridad filtran en el servidor antes de paginar.
+        No se alteran prioridades ni se autorizan aprobaciones automáticamente.</p>
     </div>
     {!loading && !error && shown && <>
       <p role="status" aria-live="polite" className="orders-workspace__review-announcement">
