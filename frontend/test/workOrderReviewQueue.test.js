@@ -150,3 +150,16 @@ test('global SQL work-type query is distinct from the current-page state filter'
     'Signed cursor must be request-bound to selected work type');
   assert.throws(() => reviewQueueRequestKey(0, null, 0, 'bad'), /inválida/);
 });
+
+test('global selector resets signed cursors, page-local state and old response generation', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
+  for (const expected of [
+    'Tipo de labor (todas las páginas)',
+    'reviewQueueRequestKey(page, cursor, reload, workType)',
+    'reviewQueueUrl(cursor, workType)',
+    'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
+    "setFilter('all')", 'REVIEW_QUEUE_WORK_TYPES'
+  ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
+  assert.ok(ui.includes('disabled={loading}'), 'Selector should not act during in-flight queries');
+  assert.ok(ui.includes('onChange={event => changeWorkType(event.target.value)}'));
+});
