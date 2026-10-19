@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
-  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS
+  REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
+  normalizeReviewTitleQuery, REVIEW_TITLE_QUERY_MAX_CODEPOINTS
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -243,4 +244,22 @@ test('accessible due selector starts a new cursor while retaining type/state/pri
   assert.ok(!only.includes('setPriority('));
   assert.ok(only.includes('setReload(value => value + 1)'));
   assert.ok(ui.includes('value={dueWindow} disabled={loading}'));
+});
+
+test('global title search encodes a literal bounded Unicode phrase in URL and request key', () => {
+  assert.equal(REVIEW_TITLE_QUERY_MAX_CODEPOINTS,64);
+  assert.equal(normalizeReviewTitleQuery('  Riego   URGENTE '),'Riego URGENTE');
+  assert.equal(normalizeReviewTitleQuery('Cafe\u0301'),'Café');
+  assert.equal(reviewQueueUrl(),'/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null,'all','all','all','all','Café'),
+    '/work-orders/review-queue?q=Caf%C3%A9');
+  assert.equal(reviewQueueUrl('signed.token','inspection','no_report','normal',
+    'overdue','Riego %_'),
+    '/work-orders/review-queue?cursor=signed.token&type=inspection&state=no_report&priority=normal&due=overdue&q=Riego+%25_');
+  assert.notEqual(reviewQueueRequestKey(1,'signed',0,'all','all','all','all','Camino'),
+    reviewQueueRequestKey(1,'signed',0,'all','all','all','all','Cosecha'));
+  for (const invalid of ['a','a'.repeat(65),' No canon ','Riego\u200B']) {
+    assert.throws(()=>reviewQueueUrl(null,'all','all','all','all',invalid),/inválido/);
+    assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','all','all',invalid),/inválida/);
+  }
 });
