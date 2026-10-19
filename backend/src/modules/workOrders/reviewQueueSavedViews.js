@@ -8,7 +8,10 @@ import { normalizeReviewTitleQuery } from './reviewQueueTitleSearch.js';
 export const REVIEW_VIEW_LIMIT = 10;
 const exactEnum = values => z.enum([...values]);
 const titleQuery = z.string().max(128).refine(
-  value => normalizeReviewTitleQuery(value) === value,
+  value => {
+    try { return normalizeReviewTitleQuery(value) === value; }
+    catch { return false; }
+  },
   'La búsqueda guardada debe estar normalizada.'
 );
 
