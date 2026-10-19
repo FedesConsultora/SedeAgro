@@ -314,8 +314,8 @@ workOrdersRouter.post('/review-queue/views', requireCapability('orders.write'),
 
 // Only a tenant administrator can publish/unpublish their OWN saved
 // criteria. The tenant row lock serializes the tenant-wide 20-view cap.
-workOrdersRouter.patch('/review-queue/views/:viewId/visibility',
-  requireCapability('orders.write'), asyncHandler(async (req,res) => {
+workOrdersRouter.patch('/review-queue/views/:viewId/visibility', requireCapability('orders.write'),
+  asyncHandler(async (req,res) => {
     requireReviewViewOwner(req);
     if (req.auth.role.code !== 'tenant_admin') {
       throw new HttpError(403,'Solo administración puede compartir vistas.');
