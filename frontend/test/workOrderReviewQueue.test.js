@@ -5,7 +5,7 @@ import { reviewQueueUrl, reviewQueueFailure, reviewQueueRequestKey,
   validateReviewQueue, isCoordinationReviewer,
   REVIEW_QUEUE_STATES, REVIEW_QUEUE_PAGE_FILTERS, filterReviewQueuePage,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PRIORITIES, REVIEW_QUEUE_DUE_WINDOWS,
-  normalizeReviewTitleQuery, REVIEW_TITLE_QUERY_MAX_CODEPOINTS
+  normalizeReviewTitleQuery, REVIEW_TITLE_QUERY_MAX_CODEPOINTS, REVIEW_QUEUE_SORT_MODES
 } from '../src/services/workOrderReviewQueue.js';
 
 const entry = { id: 'o1', title: 'Inspección', type: 'inspection', status: 'in_progress',
@@ -127,8 +127,8 @@ test('page-only categories cover every server state without inventing global cou
 test('state filter now queries the server before pagination instead of slicing loaded page', () => {
   const component = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const contract of [
-    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
     'aria-pressed={reviewState === key}',
     'changeReviewState(key)', 'items.map(', 'Estado de revisión (todas las páginas)',
     'setCursors([null])'
@@ -161,8 +161,8 @@ test('global selector resets signed cursors, page-local state and old response g
   const ui = readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx', import.meta.url), 'utf8');
   for (const expected of [
     'Tipo de labor (todas las páginas)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)',
-    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
     'setWorkType(nextType)', 'setCursors([null])', 'setPage(0)',
     "setReviewState('all')", 'REVIEW_QUEUE_WORK_TYPES'
   ]) assert.ok(ui.includes(expected), 'Global SQL filter contract missing: ' + expected);
@@ -203,8 +203,8 @@ test('priority selector is accessible, global and resets cursors without droppin
     'Prioridad (todas las páginas)', 'review-queue-priority',
     'REVIEW_QUEUE_PRIORITIES', 'changePriority(event.target.value)',
     'setPriority(nextPriority)', 'setCursors([null])', 'setPage(0)',
-    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)'
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)'
   ]) assert.ok(ui.includes(phrase), 'Missing global priority UI contract: '+phrase);
   const fn = ui.slice(ui.indexOf('const changePriority ='),ui.indexOf('const changeWorkType ='));
   assert.ok(!fn.includes("setWorkType("));
@@ -235,8 +235,8 @@ test('accessible due selector starts a new cursor while retaining type/state/pri
     'Vencimiento (todas las páginas)', 'review-queue-due-window',
     'REVIEW_QUEUE_DUE_WINDOWS', 'changeDueWindow(event.target.value)',
     'setDueWindow(nextWindow)','setPage(0)','setCursors([null])',
-    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)'
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)'
   ]) assert.ok(ui.includes(value),'Due-window UI contract missing '+value);
   const only = ui.slice(ui.indexOf('const changeDueWindow ='),ui.indexOf('const changePriority ='));
   assert.ok(!only.includes('setWorkType('));
@@ -271,8 +271,8 @@ test('title search form applies only submitted phrases and resets signed cursor'
     'submitTitleSearch', 'normalizeReviewTitleQuery(draftTitle)',
     'const commitTitleQuery = value =>', 'setTitleQuery(value)', 'setCursors([null])',
     'Búsqueda activa por título:', 'Limpiar búsqueda',
-    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery)',
-    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery)'
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)'
   ]) assert.ok(source.includes(required), 'Missing global title search contract: '+required);
   assert.ok(source.includes('event.preventDefault()'));
   assert.ok(source.includes("setTitleError('Escribí entre 2 y 64 caracteres"));
@@ -283,4 +283,39 @@ test('title search form applies only submitted phrases and resets signed cursor'
   assert.ok(!searchFn.includes('setPriority('));
   assert.ok(!searchFn.includes('setDueWindow('));
   assert.ok(!searchFn.includes('setReviewState('));
+});
+
+test('operational sort is server-wide, validates enum and fences old responses', () => {
+  assert.deepEqual(Object.keys(REVIEW_QUEUE_SORT_MODES),
+    ['newest','due_first','priority_first']);
+  assert.equal(reviewQueueUrl(), '/work-orders/review-queue');
+  assert.equal(reviewQueueUrl(null,'all','all','all','all','','due_first'),
+    '/work-orders/review-queue?sort=due_first');
+  assert.equal(reviewQueueUrl('signed','inspection','no_report','urgent','overdue',
+    'Control de campo','priority_first'),
+    '/work-orders/review-queue?cursor=signed&type=inspection&state=no_report&priority=urgent&due=overdue&q=Control+de+campo&sort=priority_first');
+  assert.throws(()=>reviewQueueUrl(null,'all','all','all','all','','random'),/inválido/);
+  assert.notEqual(
+    reviewQueueRequestKey(1,'cursor',0,'all','all','all','all','','newest'),
+    reviewQueueRequestKey(1,'cursor',0,'all','all','all','all','','due_first'));
+  assert.throws(()=>reviewQueueRequestKey(0,null,0,'all','all','all','all','','missing'),/inválida/);
+});
+
+test('operational sort selector resets cursor and keeps all global filter criteria', () => {
+  const source=readFileSync(new URL('../src/components/WorkOrderReviewInbox.jsx',import.meta.url),'utf8');
+  for (const value of [
+    'Ordenar resultados (todas las páginas)','review-queue-sort',
+    'REVIEW_QUEUE_SORT_MODES','changeSortMode(event.target.value)',
+    'setSortMode(nextSort)','setPage(0)','setCursors([null])',
+    'reviewQueueUrl(cursor, workType, reviewState, priority, dueWindow, titleQuery, sortMode)',
+    'reviewQueueRequestKey(page, cursor, reload, workType, reviewState, priority, dueWindow, titleQuery, sortMode)'
+  ]) assert.ok(source.includes(value),'Sort UI missing '+value);
+  const method=source.slice(source.indexOf('const changeSortMode ='),
+    source.indexOf('const changeDueWindow ='));
+  assert.ok(!method.includes('setWorkType('));
+  assert.ok(!method.includes('setReviewState('));
+  assert.ok(!method.includes('setPriority('));
+  assert.ok(!method.includes('setDueWindow('));
+  assert.ok(!method.includes('setTitleQuery('));
+  assert.ok(source.includes('value={sortMode} disabled={loading}'));
 });

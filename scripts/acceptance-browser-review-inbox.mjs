@@ -534,6 +534,84 @@ try {
   await pageCount(region, 50, 1);
   console.log('PASS: composable title search 50/5, cross-query HMAC 422, clear retains global filters');
 
+
+  // Sorting runs on the full SQL tenant query, never on the current page.
+  // 55 newer application rows are urgent; 61 older inspections are normal.
+  const sortSelector = region.getByLabel('Ordenar resultados (todas las páginas)');
+  const rowTitles = () => region.locator('.orders-workspace__review-item strong').allTextContents();
+  await sortSelector.selectOption('priority_first');
+  await pageCount(region,50,1);
+  assert.equal((await rowTitles()).every(title=>title.startsWith('Global application')),true);
+
+  // Replay the exact HMAC token under a DIFFERENT sort mode against Express.
+  await page.route('**/api/v1/work-orders/review-queue?cursor=*',async route=>{
+    const url=new URL(route.request().url());
+    assert.equal(url.searchParams.get('sort'),'priority_first');
+    url.searchParams.set('sort','due_first');
+    await route.continue({url:url.toString()});
+  },{times:1});
+  const badSort=page.waitForResponse(response=>
+    response.url().includes('/work-orders/review-queue?cursor=') &&
+    response.status()===422);
+  await next.click();
+  assert.equal((await (await badSort).json()).error.code,'ORDER_REVIEW_CURSOR_INVALID');
+  await region.getByRole('button',{name:'Iniciar nueva consulta'}).click();
+  await pageCount(region,50,1);
+  assert.equal(await sortSelector.inputValue(),'priority_first');
+  await next.click();
+  await pageCount(region,50,2);
+  assert.equal((await rowTitles()).filter(title=>title.startsWith('Global application')).length,5);
+  assert.equal((await rowTitles()).filter(title=>title.startsWith('Real review browser')).length,45);
+  await next.click();
+  await pageCount(region,16,3);
+  assert.equal((await rowTitles()).every(title=>title.startsWith('Real review browser')),true);
+  assert.equal(await next.isDisabled(),true);
+  console.log('PASS: priority-first global 50/50/16 with SQL tie keys, real signed sort replay 422');
+
+  // Due sorting puts NULLs at the very END rather than treating them as
+  // overdue or today. One older inspection becomes undated deliberately.
+  const undatedSort = await admin.query(`
+    UPDATE work_orders SET due_at=NULL
+    WHERE id=(SELECT id FROM work_orders
+      WHERE tenant_id=$1 AND title LIKE 'Real review browser %'
+      ORDER BY id ASC LIMIT 1)
+    RETURNING id,title
+  `,[ownerA.tenant.id]);
+  assert.equal(undatedSort.rowCount,1);
+  await sortSelector.selectOption('due_first');
+  await pageCount(region,50,1);
+  assert.equal(await previous.isDisabled(),true);
+  assert.equal((await rowTitles()).every(title=>title.startsWith('Real review browser')),true);
+  await next.click();
+  await pageCount(region,50,2);
+  assert.equal((await rowTitles()).filter(title=>title.startsWith('Real review browser')).length,10);
+  assert.equal((await rowTitles()).filter(title=>title.startsWith('Global application')).length,40);
+  await next.click();
+  await pageCount(region,16,3);
+  const dueLast=await rowTitles();
+  assert.equal(dueLast.filter(title=>title.startsWith('Global application')).length,15);
+  assert.equal(dueLast.at(-1),undatedSort.rows[0].title,'NULL due must be last');
+  assert.equal(await next.isDisabled(),true);
+  console.log('PASS: due-first global keyset 50/50/16, equal dates tie by creation, null last');
+
+  // Sorting composes with an existing title search and is reset without
+  // retaining the outgoing signed cursor.
+  await titleBox.fill('Real review browser');
+  await submitTitle.click();
+  await pageCount(region,50,1);
+  assert.equal(await sortSelector.inputValue(),'due_first');
+  await next.click();
+  await pageCount(region,11,2);
+  assert.equal((await rowTitles()).at(-1),undatedSort.rows[0].title);
+  await sortSelector.selectOption('newest');
+  await pageCount(region,50,1);
+  assert.equal(await previous.isDisabled(),true);
+  await clearTitle.click();
+  await pageCount(region,50,1);
+  assert.equal(await sortSelector.inputValue(),'newest');
+  assert.equal((await rowTitles()).every(title=>title.startsWith('Global application')),true);
+  console.log('PASS: sort + title compose; changing sort resets cursors; newest remains backward compatible');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })
