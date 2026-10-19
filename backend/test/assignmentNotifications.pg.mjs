@@ -320,6 +320,18 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(earlyQueue.body.pagination.has_more, false);
     assert.equal(earlyQueue.body.pagination.next_cursor, null);
     assert.equal(earlyQueue.body.data.find(row => row.id === orderId).state, 'awaiting_report');
+    for (const sort of ['newest','due_first','priority_first']) {
+      const ordered=await request(reviewQueue+'?sort='+sort,adminToken,tenantA);
+      assert.equal(ordered.status,200,JSON.stringify(ordered.body));
+      assert.equal(ordered.body.data.some(row=>row.id===orderId),true);
+      assert.equal(ordered.body.pagination.next_cursor,null);
+    }
+    assert.equal((await request(reviewQueue+'?sort=due_first',
+      coordinatorToken,tenantA)).status,200);
+    assert.equal((await request(reviewQueue+'?sort=priority_first',
+      contractorToken,tenantA)).status,403);
+    assert.equal((await request(reviewQueue+'?sort=due_first',
+      adminBToken,tenantB)).body.data.some(row=>row.id===orderId),false);
     const titleSearch = await request(reviewQueue + '?q=+cHeCk++GaTe+', adminToken, tenantA);
     assert.equal(titleSearch.status, 200, JSON.stringify(titleSearch.body));
     assert.equal(titleSearch.body.data.some(row => row.id === orderId), true);
@@ -400,7 +412,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       '?due=', '?due=today', '?due=overdue&due=later',
       '?due[]=overdue', '?due=overdue&page=1',
       '?q=', '?q=a', '?q=+++++++++', '?q[]=Check',
-      '?q=Check&q=gate', '?q=' + 'a'.repeat(65), '?q=Check&page=1'
+      '?q=Check&q=gate', '?q=' + 'a'.repeat(65), '?q=Check&page=1',
+      '?sort=', '?sort=oldest', '?sort[]=due_first',
+      '?sort=due_first&sort=newest', '?sort=priority_first&page=2'
     ]) {
       assert.equal((await request(reviewQueue + invalid, adminToken, tenantA)).status, 422,
         'Invalid global filter or cursor must be rejected: ' + invalid);
