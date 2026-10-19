@@ -261,9 +261,8 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
     throw new HttpError(422, error.message, undefined, error.code);
   }
   const anchor = cursor?.anchor || new Date();
-  // Millisecond canonicalization matches Sequelize's JS Date precision:
-  // timestamptz has microseconds and would otherwise skip rows when traversing.
-  const orderingTime = fn('date_trunc', 'milliseconds', col('created_at'));
+  // Millisecond truncation and all sort expressions live in reviewQueueSorting,
+  // keeping ORDER BY and the keyset predicate byte-for-byte equivalent.
   const older = cursor ? reviewQueueOlderWhere(sortMode, cursor) : {};
   const rows = await WorkOrder.findAll({
     where: { tenant_id: req.tenantId, status: 'in_progress',
