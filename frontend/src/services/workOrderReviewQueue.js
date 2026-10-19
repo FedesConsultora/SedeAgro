@@ -31,8 +31,8 @@ export function filterReviewQueuePage(items, filter = 'all') {
   return states === null ? items : items.filter(item => states.includes(item.state));
 }
 
-// This filter is SQL-backed, across ALL matching orders. In contrast,
-// REVIEW_QUEUE_PAGE_FILTERS is strictly local to one page.
+// All three criteria (work type, review state and priority) are evaluated
+// by the authorized backend before keyset pagination; never filter only 50 rows.
 export const REVIEW_QUEUE_WORK_TYPES = Object.freeze({
   all: 'Todas las labores',
   application: 'Aplicación',
