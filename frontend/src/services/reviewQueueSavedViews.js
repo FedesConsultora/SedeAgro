@@ -4,6 +4,7 @@ import { REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_PAGE_FILTERS,
 } from './workOrderReviewQueue.js';
 
 export const REVIEW_VIEW_LIMIT = 10;
+export const SHARED_REVIEW_VIEW_LIMIT = 20;
 export const REVIEW_VIEWS_PATH = '/work-orders/review-queue/views';
 const isKnown = (items, value) =>
   typeof value === 'string' && Object.hasOwn(items, value);
@@ -39,10 +40,18 @@ export function reviewViewFilters(value) {
 }
 export function validateSavedViews(response) {
   const rows = response?.data;
-  if (!Array.isArray(rows) || rows.length > REVIEW_VIEW_LIMIT ||
+  if (!Array.isArray(rows) ||
+      rows.filter(row=>row?.source === 'mine').length > REVIEW_VIEW_LIMIT ||
+      rows.filter(row=>row?.source === 'shared').length > SHARED_REVIEW_VIEW_LIMIT ||
+      rows.length > REVIEW_VIEW_LIMIT + SHARED_REVIEW_VIEW_LIMIT ||
+      new Set(rows.map(row=>row?.id)).size !== rows.length ||
       !rows.every(row => row && typeof row.id === 'string' &&
         typeof row.name === 'string' && row.name.length >= 2 &&
-        row.name.length <= 48 && Boolean(reviewViewFilters(row.filters)))) {
+        row.name.length <= 48 &&
+        ['mine','shared'].includes(row.source) &&
+        ['private','shared'].includes(row.visibility) &&
+        (row.source !== 'shared' || row.visibility === 'shared') &&
+        Boolean(reviewViewFilters(row.filters)))) {
     throw new Error('La respuesta de vistas guardadas no es válida.');
   }
   return rows;
