@@ -319,6 +319,70 @@ try {
   await filters.getByRole('button', { name: 'Todas' }).click();
   await pageCount(region, 50, 1);
 
+  // Reclassify ONLY the newer application fixtures as urgent, leaving the
+  // 61 older inspections normal. Global priority must filter BEFORE LIMIT 51.
+  const urgentSeed = await admin.query(`
+    UPDATE work_orders SET priority='urgent'
+    WHERE tenant_id=$1 AND type='application' AND title LIKE 'Global application %'
+    RETURNING id
+  `, [ownerA.tenant.id]);
+  assert.equal(urgentSeed.rowCount, 55);
+  const priorityFilter = region.getByLabel('Prioridad (todas las páginas)');
+  await priorityFilter.selectOption('normal');
+  await pageCount(region, 50, 1);
+  assert.ok((await region.innerText()).includes('Real review browser'));
+  assert.ok(!(await region.innerText()).includes('Global application'));
+  await next.click();
+  await pageCount(region, 11, 2);
+  await headingFocused(page, region);
+  await priorityFilter.selectOption('urgent');
+  await pageCount(region, 50, 1);
+  assert.equal(await previous.isDisabled(), true);
+  assert.ok((await region.innerText()).includes('Global application'));
+  assert.ok(!(await region.innerText()).includes('Real review browser'));
+
+  // Alter only the work priority in an actual signed paginated request.
+  // The backend must reject the cross-priority replay, not use a fake 422.
+  await page.route('**/api/v1/work-orders/review-queue?cursor=*&priority=urgent', async route => {
+    const url = new URL(route.request().url());
+    assert.equal(url.searchParams.get('priority'), 'urgent');
+    url.searchParams.set('priority', 'normal');
+    await route.continue({ url: url.toString() });
+  }, { times: 1 });
+  const crossPriority = page.waitForResponse(res =>
+    res.url().includes('/work-orders/review-queue?cursor=') &&
+    res.status() === 422);
+  await next.click();
+  assert.equal((await (await crossPriority).json()).error.code,
+    'ORDER_REVIEW_CURSOR_INVALID');
+  await region.getByRole('button', { name: 'Iniciar nueva consulta' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await priorityFilter.inputValue(), 'urgent');
+  await next.click();
+  await pageCount(region, 5, 2);
+  await headingFocused(page, region);
+  assert.equal(await next.isDisabled(), true);
+
+  // Global filters compose; priority switches preserve type/state while
+  // resetting the signed cursor. Page count never claims tenant-wide totals.
+  await filters.getByRole('button', { name: 'Con bloqueos' }).click();
+  await pageCount(region, 50, 1);
+  assert.equal(await priorityFilter.inputValue(), 'urgent');
+  await workType.selectOption('application');
+  await pageCount(region, 50, 1);
+  assert.equal(await filters.getByRole('button', { name: 'Todas' })
+    .getAttribute('aria-pressed'), 'true');
+  await priorityFilter.selectOption('normal');
+  await pageCount(region, 0, 1);
+  assert.equal(await next.isDisabled(), true);
+  await priorityFilter.selectOption('urgent');
+  await pageCount(region, 50, 1);
+  await workType.selectOption('all');
+  await pageCount(region, 50, 1);
+  await priorityFilter.selectOption('all');
+  await pageCount(region, 50, 1);
+  console.log('PASS: global priority SQL normal 50/11, urgent 50/5, all filters compose, real cursor replay 422');
+
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
   await page.getByRole('navigation', { name: 'Principal' })
