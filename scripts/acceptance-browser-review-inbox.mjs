@@ -745,6 +745,9 @@ try {
   await page.reload();
   await openInbox(page);
   await moderatorPanel.getByText('0 publicaciones ajenas visibles para moderación.').waitFor();
+  // Audit is intentionally collapsed by default; open the disclosure before
+  // asserting its persisted contents after a real application reload.
+  await moderatorPanel.getByText('Historial de revocaciones (últimas 50)').click();
   await moderatorPanel.getByText('Publicación obsoleta en esta campaña').waitFor();
   console.log('PASS: real Chromium admin revokes another publisher only after confirmation; audit survives reload and view stays private with owner');
 
