@@ -366,6 +366,74 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(sharedForCoordinator.body.data[0].source,'shared');
     assert.equal(sharedForCoordinator.body.data[0].visibility,'shared');
     assert.deepEqual(sharedForCoordinator.body.data[0].filters,filters);
+    // 0T.29: unrelated tenant administrators may remove PUBLIC visibility,
+    // but never read private criteria or delete/rename the publisher's view.
+    const moderatorId=await addUser('moderator a','tenant_admin',tenantA);
+    const moderatorToken=token(moderatorId,'tenant_admin',tenantA);
+    const moderatePath=viewPath+'/moderation';
+    const inventory=await request(moderatePath,moderatorToken,tenantA);
+    assert.equal(inventory.status,200,JSON.stringify(inventory.body));
+    assert.match(inventory.headers.get('cache-control'),/private, no-store/);
+    assert.equal(inventory.body.data.length,1);
+    assert.equal(inventory.body.data[0].id,savedId);
+    assert.equal(inventory.body.data[0].name,'Mis inspecciones');
+    assert.equal(inventory.body.data[0].publisher_active,true);
+    assert.equal(inventory.body.data[0].filters,undefined);
+    assert.equal(inventory.body.data[0].user_id,undefined);
+    assert.deepEqual((await request(moderatePath,adminBToken,tenantB)).body.data,[]);
+    assert.equal((await request(moderatePath,coordinatorToken,tenantA)).status,403);
+    assert.equal((await request(moderatePath+'/audit',coordinatorToken,tenantA)).status,403);
+    assert.equal((await request(moderatePath,contractorToken,tenantA)).status,403);
+    assert.equal((await request(moderatePath+'?page=2',moderatorToken,tenantA)).status,422);
+    const revokePath=moderatePath+'/'+savedId+'/revoke';
+    assert.equal((await request(revokePath,coordinatorToken,tenantA,'POST',
+      {reason:'Vista obsoleta por cambios operativos'})).status,403);
+    assert.equal((await request(revokePath,adminToken,tenantA,'POST',
+      {reason:'Esta vista fue reemplazada'})).status,404,
+      'Publishing owner must use their own visibility route');
+    assert.equal((await request(revokePath,adminBToken,tenantB,'POST',
+      {reason:'Sin vigencia operativa'})).status,404);
+    for (const invalid of [
+      {reason:'breve'}, {reason:'x'.repeat(201)}, {reason:[]},
+      {reason:'Aprobada',visibility:'shared'}, {},
+      {reason:'Texto con\u200b invisible'}
+    ]) assert.equal((await request(revokePath,moderatorToken,tenantA,'POST',invalid)).status,422);
+    const reason='  Vista  obsoleta  por cambios   operativos  ';
+    const moderation=await request(revokePath,moderatorToken,tenantA,'POST',{reason});
+    assert.equal(moderation.status,200,JSON.stringify(moderation.body));
+    assert.equal(moderation.body.data.action,'revoke_share');
+    assert.equal(moderation.body.data.reason,'Vista obsoleta por cambios operativos');
+    assert.equal(moderation.body.data.view_id,savedId);
+    assert.equal(moderation.body.data.actor_user_id,moderatorId);
+    assert.equal(moderation.body.data.view_owner_id,adminA);
+    assert.equal(moderation.body.data.filters,undefined);
+    assert.equal((await request(revokePath,moderatorToken,tenantA,'POST',
+      {reason:'Otra revocación no permitida'})).status,404);
+    assert.deepEqual((await request(moderatePath,moderatorToken,tenantA)).body.data,[]);
+    assert.deepEqual((await request(viewPath,coordinatorToken,tenantA)).body.data,[]);
+    const audit=await request(moderatePath+'/audit',moderatorToken,tenantA);
+    assert.equal(audit.status,200,JSON.stringify(audit.body));
+    assert.equal(audit.body.page_size,50);
+    assert.equal(audit.body.data.length,1,'replay must not create another event');
+    assert.equal(audit.body.data[0].id,moderation.body.data.id);
+    assert.deepEqual((await request(moderatePath+'/audit',adminBToken,tenantB)).body.data,[]);
+    const auditSecurity=(await owner.query(`
+      SELECT c.relrowsecurity,c.relforcerowsecurity,
+        (SELECT array_agg(cmd ORDER BY cmd) FROM pg_policies
+         WHERE tablename='work_order_review_view_moderation_audit') AS commands
+      FROM pg_class c WHERE c.oid='public.work_order_review_view_moderation_audit'::regclass
+    `)).rows[0];
+    assert.ok(auditSecurity.relrowsecurity && auditSecurity.relforcerowsecurity);
+    assert.deepEqual(auditSecurity.commands,['INSERT','SELECT'],
+      'audit table has no RLS UPDATE or DELETE policy');
+    const original=await request(viewPath,adminToken,tenantA);
+    assert.equal(original.body.data.find(row=>row.id===savedId).visibility,'private');
+    assert.deepEqual(original.body.data.find(row=>row.id===savedId).filters,filters);
+    // Original publisher remains free to republish; moderation never changes
+    // author, content, permissions, or the recipient's already loaded filters.
+    assert.equal((await request(publishUrl,adminToken,tenantA,'PATCH',
+      {visibility:'shared'})).status,200);
+
     // If an author loses administrator status, shared visibility fails closed.
     await owner.query(`
       UPDATE memberships SET role_code='agronomic_coordinator'
