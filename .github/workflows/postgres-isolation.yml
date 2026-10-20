@@ -48,6 +48,8 @@ jobs:
           node --test scripts/test/production-preflight.test.mjs
           bash -n scripts/verify-production-backup.sh
           node --test scripts/test/production-backup-guards.test.mjs
+          bash -n scripts/verify-fresh-install-db.sh
+          node --test scripts/test/fresh-install-guards.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
