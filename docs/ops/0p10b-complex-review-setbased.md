@@ -30,3 +30,24 @@ El benchmark sobre PostGIS migrado y rol runtime no privilegiado mide en **el mi
 
 ## Restricciones
 No agregar índices ni migraciones sin planes medidos. No mutar VPS/staging/DB privada, ni aceptar las seis vulnerabilidades moderadas de #137 como resueltas. Las métricas de CI no constituyen SLO de API ni certificación de release. Antes de cerrar la parte funcional de #140 verificar cuatro jobs SUCCESS en HEAD exacto del PR y workflow **independiente** de main posmerge, registrando SHA y URLs.
+
+## Primera corrida emparejada medida y validada
+
+El run premerge [#39439270858](https://github.com/FedesConsultora/SedeAgro/actions/runs/39439270858), PR HEAD `516970453722022dbd00b5cf6af269c7ff008bf7`, terminó `COMPLETED SUCCESS` con **4/4 jobs**, primer intento. Linux x64, 4 CPUs lógicas, Node 22.23.3, PostgreSQL 16.4. Criterios `PERF_STATES`:
+
+- **240 órdenes**: `awaiting_report 60`, `ready_for_closure 60`, `self_authored 60`, `awaiting_inputs 12`, `rejected_exception 12`, `pending_exception 12`, `awaiting_evidence 4`, `human_review 20`.
+- **1200 órdenes**: respectivamente 300, 300, 300, 60, 60, 60, 20 y 100. Los ocho estados se ejercitan contra los constraints y el aislamiento PostgreSQL real, no mediante mocks.
+
+**Resultados del mismo runner**, `Execution Time` de PostgreSQL p95 por 7 `EXPLAIN ANALYZE` por caso:
+
+| Filtro | Candidatas | Baseline | Optimizado | Máximo loops antes → después | Shared hits antes → después |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `blocked` / todos | 240 | 1,722 ms | 0,647 ms | 240 → 100 | 811 → 326 |
+| `review` / todos | 240 | 1,654 ms | 0,422 ms | 240 → 20 | 811 → 86 |
+| `blocked` / todos | 1200 | 23,634 ms | 2,468 ms | 1200 → 500 | 41391 → 1670 |
+| `review` / todos | 1200 | 19,180 ms | 1,519 ms | 1200 → 100 | 41391 → 470 |
+| `review` / application | 1200 | 9,049 ms | 1,381 ms | 400 → 100 | 13979 → 470 |
+
+La optimización elimina buena parte de los `Nested Loop` correlacionados, pero **no necesariamente todos**: el plan todavía puede recorrer filas clasificadas con loops, y puede costar más para bases mucho más grandes o distinta distribución. En el caso `review/application` de 240 órdenes, el tiempo cliente medido con instrumentación fue ligeramente mayor después, aunque el servidor mejoró. No se establece un SLO, mejora porcentual universal ni extrapolación a producción.
+
+**Invariante crítica:** el harness obtuvo `parity:true` y la igualdad exacta de IDs y orden para las 11 combinaciones de tipo/estado en ambas escalas; rechazó explícitamente cualquier desvío de resultado. Los logs contienen las 44 líneas por modo/escala y evidencias de RLS. Antes de integrar un commit de documentación nuevo se requiere otro run sobre ese SHA y posmerge independiente de `main`.
