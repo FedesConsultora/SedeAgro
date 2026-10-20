@@ -26,3 +26,21 @@ El runner protege against pérdidas de aislamiento: verifica exactamente las fil
 ## Ejecución / alcance
 
 La medición corre solo en la DB PostgreSQL/PostGIS de servicio GitHub Actions ya migrada y aprovisionada. Nunca utilizar estas banderas con un servidor compartido o prod. Fuera de este alcance: staging real, backup privado+restauración real, ensayos Android/iOS/rural offline, tráfico multi-tenant real, TLS y rollback.
+
+## Primer resultado instrumentado (referencia puntual, no SLO)
+
+El run premerge [#39423697517](https://github.com/FedesConsultora/SedeAgro/actions/runs/39423697517) en el SHA `4cba1fca8bc69ffa2bea1bbf4dd5c70e49f96ae9` finalizó **SUCCESS 4/4**. En el job `tenant-rls` del primer intento, los siete `EXPLAIN ANALYZE` por combinación reportaron, en PostgreSQL CI:
+
+| Filtro / tipo | P95 servidor 240 órdenes | P95 servidor 1200 órdenes | Loops máximos 240 → 1200 |
+| --- | ---: | ---: | ---: |
+| all / all | 0,123 ms | 0,362 ms | 1 → 1 |
+| no_report / all | 1,173 ms | 4,995 ms | 240 → 1200 |
+| blocked / all | 1,014 ms | 4,951 ms | 240 → 1200 |
+| review / all | 0,999 ms | 4,937 ms | 240 → 1200 |
+| closure / all | 0,992 ms | 4,987 ms | 240 → 1200 |
+| no_report / application | 0,423 ms | 1,977 ms | 80 → 400 |
+| review / application | 0,419 ms | 2,549 ms | 80 → 400 |
+
+La query de estado recorrió hasta **5439 bloques shared hit** con 1200 candidatas, sin lecturas físicas nuevas medidas en esa corrida; también usó nodos `Nested Loop` y `Index Scan`. Se observa aumento de costos al escalar filas, **no** una catástrofe de rendimiento certificada ni una predicción extrapolable linealmente a 50 mil órdenes. Los planes corresponden a una query sintética que conserva el filtro de estado y la ordenación inicial pero selecciona un subconjunto de columnas; no mide el tiempo de materializar, clasificar y entregar la API completa. La distribución no replica una campaña productiva real.
+
+A partir del commit siguiente, el propio perfilador registra además `REVIEW_QUEUE_PG_ENV` (arquitectura, CPUs lógicos, RAM, Node, versión PostgreSQL) en cada ejecución; el run anterior no registró CPU/RAM y no se inventan esos datos. Cualquier optimización de índices/SQL debe validarse con una medición comparable posterior y con semántica RLS y cursor preservadas.
