@@ -8,8 +8,10 @@ import { dirname, resolve } from 'node:path';
 import pg from 'pg';
 import { chromium } from 'playwright';
 import { assertDialogFocus, pressReverseTabAtDialogRoot } from './support/assert-dialog-focus.mjs';
+import { getFocusStressCycles } from './support/focus-stress-config.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const focusCycles = getFocusStressCycles();
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
 const appUrl = process.env.TEST_DATABASE_APP_URL;
 if (!adminUrl || !appUrl || !/[_-]test(?:[_-]|$)/i.test(new URL(adminUrl).pathname)) {
@@ -22,6 +24,16 @@ function start(cwd, argv, moreEnv = {}) {
     env: { ...process.env, ...moreEnv }, stdio: 'ignore'
   });
   return child;
+}
+async function stopService(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 4000))]);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    await exited;
+  }
 }
 async function waitUntil(url) {
   for (let attempt = 0; attempt < 120; attempt++) {
@@ -95,7 +107,7 @@ try {
   const farmDialog = page1.getByRole('dialog', { name: 'Nuevo establecimiento' });
   // Repeated open/close cycles catch asynchronous focus races that a single
   // successful run could miss. Every cycle uses real producer API results.
-  for (let cycle = 1; cycle <= 4; cycle += 1) {
+  for (let cycle = 1; cycle <= focusCycles; cycle += 1) {
     await farmOpener.click();
     await farmDialog.waitFor();
     // Crear starts disabled while the producer lookup is pending. Wait for
@@ -123,7 +135,59 @@ try {
     await farmDialog.waitFor({ state: 'detached' });
     await assertDialogFocus(page1, page1.locator('body'), farmOpener,
       'farm-ready-return-' + cycle);
-    console.log('PASS: Chromium farm modal focus loop ' + cycle + '/4');
+    console.log('PASS: Chromium farm modal focus loop ' + cycle + '/' + focusCycles);
+  }
+
+  // Force a genuine in-flight HTTP lookup to remain pending while keyboard
+  // navigation executes. No artificial sleeps: the transport is released by
+  // the test only AFTER asserting disabled control, reverse/forward focus,
+  // and the active dialog. Then assert focus still stays inside after React
+  // enables Crear and mounts optional producer choices.
+  let releaseProducerLookup;
+  const holdProducerLookup = new Promise(resolve => { releaseProducerLookup = resolve; });
+  const requestStarted = page1.waitForRequest(
+    request => request.url().includes('/api/v1/farms/producers') && request.method() === 'GET',
+    { timeout: 10000 }
+  );
+  await page1.route('**/api/v1/farms/producers', async route => {
+    await holdProducerLookup;
+    await route.continue();
+  });
+  try {
+    await farmOpener.click();
+    await requestStarted;
+    await farmDialog.getByText('Cargando productores autorizados…').waitFor();
+    assert.equal(await farmDialog.getByRole('button', { name: 'Crear', exact: true }).isDisabled(), true,
+      'Crear must not become keyboard-enabled before the real API resolves');
+    await assertDialogFocus(page1, farmDialog, farmDialog, 'farm-pending-root');
+    await pressReverseTabAtDialogRoot(page1, farmDialog, 'farm-pending-last');
+    await assertDialogFocus(page1, farmDialog,
+      farmDialog.getByRole('button', { name: 'Cancelar' }), 'farm-pending-cancel');
+    await page1.keyboard.press('Tab');
+    const pendingClose = farmDialog.getByRole('button', { name: 'Cerrar Nuevo establecimiento' });
+    await assertDialogFocus(page1, farmDialog, pendingClose, 'farm-pending-first');
+    releaseProducerLookup();
+    await page1.waitForFunction(() => {
+      const dialog = [...document.querySelectorAll('[role="dialog"]')]
+        .find(node => node.textContent.includes('Nuevo establecimiento'));
+      const create = dialog && [...dialog.querySelectorAll('button')]
+        .find(node => node.textContent.trim() === 'Crear');
+      return Boolean(create && !create.disabled);
+    }, null, { timeout: 10000 });
+    await assertDialogFocus(page1, farmDialog, pendingClose,
+      'farm-after-lookup-retains-first');
+    await page1.keyboard.press('Shift+Tab');
+    await assertDialogFocus(page1, farmDialog,
+      farmDialog.getByRole('button', { name: 'Crear', exact: true }),
+      'farm-after-lookup-new-last');
+    await page1.keyboard.press('Escape');
+    await farmDialog.waitFor({ state: 'detached' });
+    await assertDialogFocus(page1, page1.locator('body'), farmOpener,
+      'farm-after-lookup-restored-opener');
+    console.log('PASS: Chromium focus remains trapped through held HTTP loading -> ready transition');
+  } finally {
+    releaseProducerLookup();
+    await page1.unroute('**/api/v1/farms/producers');
   }
 
   // An actual live lookup failure must not silently insert demo producer IDs
@@ -266,8 +330,8 @@ try {
   await context1.close();
 } finally {
   if (browser) await browser.close();
-  if (vite) vite.kill();
-  if (backend) backend.kill();
+  await stopService(vite);
+  await stopService(backend);
   if (tenantId) await admin.query('DELETE FROM tenants WHERE id = $1', [tenantId]).catch(() => {});
   if (userId) await admin.query('DELETE FROM users WHERE id = $1', [userId]).catch(() => {});
   await admin.end().catch(() => {});

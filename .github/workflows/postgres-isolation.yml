@@ -53,6 +53,7 @@ jobs:
           node --test scripts/test/production-container-guards.test.mjs
           node --test scripts/test/security-audit-report.test.mjs scripts/test/security-moderate-policy.test.mjs
           node --test scripts/test/production-security-gate.test.mjs
+          node --test scripts/test/focus-stress-config.test.mjs
           node --test scripts/test/benchmark-review-queue.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
@@ -116,7 +117,13 @@ jobs:
         run: |
           npm install --no-save --package-lock=false playwright@1.58.2
           npx playwright install chromium --with-deps
-          node scripts/acceptance-browser-cookie.mjs
+          # Two fresh Chromium/browser contexts + backend processes against the
+          # same disposable PostGIS. Each tests 12 open/close keyboard cycles
+          # and the deliberate held-HTTP disabled-to-enabled transition.
+          for pass in 1 2; do
+            echo "FOCUS_STRESS_PASS=$pass/2 exact SHA: $(git rev-parse HEAD)"
+            SEDEAGRO_FOCUS_STRESS_CYCLES=12 node scripts/acceptance-browser-cookie.mjs
+          done
       - name: Run real Chromium evidence pagination, offline and revoked session acceptance
         env:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
