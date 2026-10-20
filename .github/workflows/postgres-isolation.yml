@@ -235,17 +235,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Audit locked backend runtime and frontend build dependencies
+      - name: Audit exact Docker lockfiles outside root npm workspace
         run: |
-          (cd backend && npm audit --omit=dev --json) > backend-audit.json || true
-          (cd frontend && npm audit --json) > frontend-audit.json || true
+          mkdir -p /tmp/sedeagro-audit-backend /tmp/sedeagro-audit-frontend
+          cp backend/package.json backend/package-lock.json /tmp/sedeagro-audit-backend/
+          cp frontend/package.json frontend/package-lock.json /tmp/sedeagro-audit-frontend/
+          (cd /tmp/sedeagro-audit-backend && npm audit --omit=dev --json) > backend-audit.json || true
+          (cd /tmp/sedeagro-audit-frontend && npm audit --json) > frontend-audit.json || true
           node scripts/security-audit-report.mjs backend-audit.json frontend-audit.json
-      - name: Suggest lockfile-only semver remediation (diagnostic, not committed)
+      - name: Suggest isolated npm lockfile remediation (diagnostic, not committed)
         if: failure()
         run: |
-          cp backend/package-lock.json /tmp/sedeagro-backend-before.json
-          cp frontend/package-lock.json /tmp/sedeagro-frontend-before.json
-          (cd backend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
-          (cd frontend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
-          node scripts/security-lock-delta.mjs backend /tmp/sedeagro-backend-before.json backend/package-lock.json
-          node scripts/security-lock-delta.mjs frontend /tmp/sedeagro-frontend-before.json frontend/package-lock.json
+          cp /tmp/sedeagro-audit-backend/package-lock.json /tmp/sedeagro-backend-before.json
+          cp /tmp/sedeagro-audit-frontend/package-lock.json /tmp/sedeagro-frontend-before.json
+          (cd /tmp/sedeagro-audit-backend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
+          (cd /tmp/sedeagro-audit-frontend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
+          node scripts/security-lock-delta.mjs backend /tmp/sedeagro-backend-before.json /tmp/sedeagro-audit-backend/package-lock.json
+          node scripts/security-lock-delta.mjs frontend /tmp/sedeagro-frontend-before.json /tmp/sedeagro-audit-frontend/package-lock.json
