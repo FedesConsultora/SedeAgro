@@ -19,9 +19,10 @@ test('Sequelize CommonJS resolver loads pinned patched uuid 11.1.1, not ESM-only
 });
 
 test('Sequelize UUIDV4 default generates canonical UUIDs with CJS patched uuid', async () => {
-  const generator = Utils.toDefaultValue(DataTypes.UUIDV4);
-  assert.equal(typeof generator, 'string');
-  assert.match(generator, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  // Static DataTypes.UUIDV4 is a model default descriptor, not a UUID.
+  // Exercise Sequelize's model instance pipeline rather than treating
+  // Utils.toDefaultValue(DataTypes.UUIDV4) as a generator.
+  assert.equal(Utils.toDefaultValue(DataTypes.UUIDV4), 'UUIDV4');
   const orm = new Sequelize('postgres://unused:unused@localhost:5432/unused_test', { dialect:'postgres', logging:false });
   try {
     const Model = orm.define('UuidCompatOnly', {
