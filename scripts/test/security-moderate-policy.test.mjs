@@ -109,3 +109,35 @@ test('rejects untrusted lockfiles, invalid review dates and invalid clocks', () 
   assert.throws(() => enforceModerateInventory(makeSummary(), baseline, makeLock(), new Date('invalid')),
     /malformed backend moderate-vulnerability inventory/);
 });
+
+test('formal remediated state requires zero MODERATE findings in live npm audit AND baseline', () => {
+  const remediated = copy(baseline);
+  remediated.status = 'remediated';
+  remediated.packages = {};
+  remediated.maxModerate = 0;
+  const zero = makeSummary();
+  zero.affected = [];
+  zero.moderate = 0;
+  const result = enforceModerateInventory(zero, remediated, makeLock(), clock);
+  assert.deepEqual({ openModerate: result.openModerate, releaseAccepted: result.releaseAccepted,
+    policy: result.policy }, { openModerate: 0, releaseAccepted: true, policy: 'remediated' });
+  assert.throws(() => enforceModerateInventory(makeSummary(), remediated, makeLock(), clock),
+    /remediated policy requires an empty LIVE advisory report/);
+  const partial = copy(baseline);
+  partial.status = 'remediated';
+  partial.maxModerate = 6;
+  assert.throws(() => enforceModerateInventory(makeSummary(), partial, makeLock(), clock),
+    /remediated policy requires an empty LIVE advisory report/);
+  const fake = copy(remediated);
+  fake.packages.uuid = { version: '8.3.2', titles: [] };
+  assert.throws(() => enforceModerateInventory(zero, fake, makeLock(), clock), /invalid or unreviewed/);
+});
+
+test('current real inventory is NEVER a release admission despite CI audit passing', () => {
+  const report = makeSummary();
+  assert.equal(enforceModerateInventory(report, baseline, makeLock(), clock).releaseAccepted, false);
+  const dropped = copy(report);
+  dropped.affected = [];
+  dropped.moderate = 0;
+  assert.equal(enforceModerateInventory(dropped, baseline, makeLock(), clock).releaseAccepted, false);
+});
