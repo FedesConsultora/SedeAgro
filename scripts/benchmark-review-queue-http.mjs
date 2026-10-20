@@ -7,6 +7,8 @@ import { arch, cpus, platform, totalmem } from 'node:os';
 
 export const HTTP_LOAD_FLAG = 'I_ACCEPT_ONLY_GITHUB_DISPOSABLE_TEST_DATABASE';
 export const HTTP_LOAD_SIZE = 5000;
+export const HTTP_LOAD_SCALES = Object.freeze([5000, 20000, 50000]);
+export const HTTP_LOAD_CONCURRENCY = 3;
 export const HTTP_LOAD_SAMPLES = 7;
 export const HTTP_LOAD_CASES = Object.freeze([
   { name: 'newest_all', query: { sort: 'newest' } },
@@ -20,6 +22,21 @@ export const HTTP_LOAD_CASES = Object.freeze([
   { name: 'composed', query: { type: 'application', state: 'blocked',
     priority: 'urgent', due: 'overdue', sort: 'due_first' } }
 ]);
+
+export const HTTP_LOAD_LARGE_CASES = Object.freeze(
+  HTTP_LOAD_CASES.filter(item => ['newest_all', 'blocked', 'human_review', 'due_overdue', 'composed'].includes(item.name))
+);
+
+export function validateLoadScales(scales) {
+  if (!Array.isArray(scales) || scales.length < 2 || scales.length > 3 ||
+      scales[0] !== HTTP_LOAD_SIZE ||
+      scales.some((size, i) => !Number.isSafeInteger(size) ||
+        size > 50000 || size < HTTP_LOAD_SIZE ||
+        (i > 0 && (size <= scales[i - 1] || size % 5000 !== 0)))) {
+    throw new Error('BLOCKED: invalid disposable load scale progression');
+  }
+  return [...scales];
+}
 
 const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export function assertHttpLoadConfig(env) {
@@ -119,86 +136,125 @@ export async function runHttpReviewLoad({ admin, page, tenant, field, reviewer, 
     [tenant, 'PilotLoad %']);
   assert.equal(prior.rows[0].n, 0, 'An existing load fixture must not be reused');
 
-  const seed = await admin.query([
-    'INSERT INTO work_orders',
-    '(tenant_id,field_id,requested_by,type,status,priority,due_at,title,created_at)',
-    'SELECT $1::uuid,$2::uuid,$3::uuid,',
-    "CASE WHEN g%4=0 THEN 'application' WHEN g%4=1 THEN 'sowing'",
-    "WHEN g%4=2 THEN 'harvest' ELSE 'inspection' END,",
-    "'in_progress',",
-    "CASE WHEN g%6=0 THEN 'urgent' WHEN g%6=1 THEN 'high' ELSE 'normal' END,",
-    "CASE WHEN g%5=0 THEN NULL WHEN g%5=1 THEN now()+interval '3 days'",
-    "ELSE now()-interval '3 days' END,",
-    "'PilotLoad '||lpad(g::text,5,'0'),",
-    "now()-interval '1 hour' - g*interval '1 second'",
-    'FROM generate_series(1,$4::integer) g'
-  ].join(' '), [tenant, field, reviewer, HTTP_LOAD_SIZE]);
-  assert.equal(seed.rowCount, HTTP_LOAD_SIZE);
-  const reports = await admin.query([
-    'INSERT INTO work_order_executions',
-    '(tenant_id,work_order_id,submitted_by,started_at,finished_at,',
-    'worked_area_hectares,result_summary,review_status,reviewed_by,reviewed_at)',
-    'SELECT w.tenant_id,w.id,',
-    'CASE WHEN right(w.title,5)::int%5=1 THEN $2::uuid ELSE $3::uuid END,',
-    "now()-interval '4 hours',now()-interval '3 hours',",
-    "2.00,'Synthetic HTTP request load result',",
-    "CASE WHEN right(w.title,5)::int%5=4 THEN 'verified' ELSE 'submitted' END,",
-    'CASE WHEN right(w.title,5)::int%5=4 THEN $2::uuid ELSE NULL END,',
-    'CASE WHEN right(w.title,5)::int%5=4 THEN now() ELSE NULL END',
-    'FROM work_orders w',
-    "WHERE w.tenant_id=$1::uuid AND w.title LIKE 'PilotLoad %'",
-    'AND right(w.title,5)::int%5<>0'
-  ].join(' '), [tenant, reviewer, submitter]);
-  assert.equal(reports.rowCount, HTTP_LOAD_SIZE * 4 / 5);
-  // ANALYZE as database owner: update planner statistics after synthetic bulk
-  // insert before applying real HTTP queries through restricted runtime role.
-  await admin.query('ANALYZE work_orders');
-  await admin.query('ANALYZE work_order_executions');
-  console.log('REVIEW_HTTP_LOAD_ENV=' + JSON.stringify({
-    os: platform(), arch: arch(), cpus: cpus().length,
-    memoryMb: Math.round(totalmem()/1048576),
-    node: process.version, postgres: (await admin.query('SHOW server_version')).rows[0].server_version,
-    scale: HTTP_LOAD_SIZE, executions: reports.rowCount, samples: HTTP_LOAD_SAMPLES,
-    service: 'real Express via Vite loopback proxy and Chromium cookie session'
-  }));
-  for (const testCase of HTTP_LOAD_CASES) {
-    const measurements = [];
-    let firstIds = null;
-    let firstPage = null;
-    for (let i = 0; i < HTTP_LOAD_SAMPLES; i++) {
-      const response = await httpPage(page, tenant, testCase.query);
-      assert.equal(response.status, 200, 'Real HTTP query must succeed');
-      const ids = validateReviewPage(response.json);
-      assert.equal(ids.length, 50, 'Five-thousand-order fixture must produce full first page');
-      assert.ok(response.json.data.every(row => row.title.startsWith('PilotLoad ')),
-        'All returned records must belong to synthetic fixture');
-      if (firstIds) assert.deepEqual(ids, firstIds,
-        'Stable data must produce identical ordered page IDs across HTTP samples');
-      else { firstIds = ids; firstPage = response.json; }
-      measurements.push(response.milliseconds);
+  const scales = validateLoadScales(HTTP_LOAD_SCALES);
+  let previousScale = 0;
+  for (const scale of scales) {
+    const lower = previousScale + 1;
+      const seed = await admin.query([
+        'INSERT INTO work_orders',
+        '(tenant_id,field_id,requested_by,type,status,priority,due_at,title,created_at)',
+        'SELECT $1::uuid,$2::uuid,$3::uuid,',
+        "CASE WHEN g%4=0 THEN 'application' WHEN g%4=1 THEN 'sowing'",
+        "WHEN g%4=2 THEN 'harvest' ELSE 'inspection' END,",
+        "'in_progress',",
+        "CASE WHEN g%6=0 THEN 'urgent' WHEN g%6=1 THEN 'high' ELSE 'normal' END,",
+        "CASE WHEN g%5=0 THEN NULL WHEN g%5=1 THEN now()+interval '3 days'",
+        "ELSE now()-interval '3 days' END,",
+        "'PilotLoad '||lpad(g::text,5,'0'),",
+        "now()-interval '1 hour' - g*interval '1 second'",
+        'FROM generate_series($4::integer,$5::integer) g'
+      ].join(' '), [tenant, field, reviewer, lower, scale]);
+      assert.equal(seed.rowCount, scale - previousScale, 'Exact synthetic delta orders required');
+      const reports = await admin.query([
+        'INSERT INTO work_order_executions',
+        '(tenant_id,work_order_id,submitted_by,started_at,finished_at,',
+        'worked_area_hectares,result_summary,review_status,reviewed_by,reviewed_at)',
+        'SELECT w.tenant_id,w.id,',
+        'CASE WHEN right(w.title,5)::int%5=1 THEN $2::uuid ELSE $3::uuid END,',
+        "now()-interval '4 hours',now()-interval '3 hours',",
+        "2.00,'Synthetic HTTP request load result',",
+        "CASE WHEN right(w.title,5)::int%5=4 THEN 'verified' ELSE 'submitted' END,",
+        'CASE WHEN right(w.title,5)::int%5=4 THEN $2::uuid ELSE NULL END,',
+        'CASE WHEN right(w.title,5)::int%5=4 THEN now() ELSE NULL END',
+        'FROM work_orders w',
+        "WHERE w.tenant_id=$1::uuid AND w.title LIKE 'PilotLoad %'",
+        'AND right(w.title,5)::int BETWEEN $4::integer AND $5::integer',
+        'AND right(w.title,5)::int%5<>0'
+      ].join(' '), [tenant, reviewer, submitter, lower, scale]);
+      assert.equal(reports.rowCount, (scale - previousScale) * 4 / 5, 'Reports must cover exact new interval');
+      // ANALYZE as database owner: update planner statistics after synthetic bulk
+      // insert before applying real HTTP queries through restricted runtime role.
+      await admin.query('ANALYZE work_orders');
+      await admin.query('ANALYZE work_order_executions');
+      console.log('REVIEW_HTTP_LOAD_ENV=' + JSON.stringify({
+        os: platform(), arch: arch(), cpus: cpus().length,
+        memoryMb: Math.round(totalmem()/1048576),
+        node: process.version, postgres: (await admin.query('SHOW server_version')).rows[0].server_version,
+        scale, executionsAdded: reports.rowCount, totalExecutions: scale * 4 / 5,
+        samples: HTTP_LOAD_SAMPLES,
+        service: 'real Express via Vite loopback proxy and Chromium cookie session'
+      }));
+      for (const testCase of (scale === HTTP_LOAD_SIZE ? HTTP_LOAD_CASES : HTTP_LOAD_LARGE_CASES)) {
+        const measurements = [];
+        let firstIds = null;
+        let firstPage = null;
+        for (let i = 0; i < HTTP_LOAD_SAMPLES; i++) {
+          const response = await httpPage(page, tenant, testCase.query);
+          assert.equal(response.status, 200, 'Real HTTP query must succeed');
+          const ids = validateReviewPage(response.json);
+          assert.equal(ids.length, 50, 'Scaled-order fixture must produce full first page');
+          assert.ok(response.json.data.every(row => row.title.startsWith('PilotLoad ')),
+            'All returned records must belong to synthetic fixture');
+          if (firstIds) assert.deepEqual(ids, firstIds,
+            'Stable data must produce identical ordered page IDs across HTTP samples');
+          else { firstIds = ids; firstPage = response.json; }
+          measurements.push(response.milliseconds);
+        }
+        assert.ok(firstPage.pagination.has_more, 'Every tested filter must have 2+ pages');
+        const next = await httpPage(page, tenant, testCase.query,
+          firstPage.pagination.next_cursor);
+        assert.equal(next.status, 200, 'Authenticated HMAC next page must load');
+        const secondIds = validateReviewPage(next.json);
+        assert.ok(secondIds.length > 0, 'Signed next page must contain records');
+        assert.ok(secondIds.every(id => !firstIds.includes(id)),
+          'Keyset pages may not repeat IDs');
+        const own = await admin.query(
+          "SELECT count(*)::int n FROM work_orders WHERE tenant_id=$1 AND title LIKE 'PilotLoad %' AND id=ANY($2::uuid[])",
+          [tenant, [...firstIds, ...secondIds]]);
+        assert.equal(own.rows[0].n, firstIds.length + secondIds.length,
+          'Authenticated API must return own synthetic tenant rows only');
+    
+        console.log('REVIEW_HTTP_LOAD=' + JSON.stringify({
+          scale, scenario: testCase.name, samples: HTTP_LOAD_SAMPLES,
+          p50Ms: percentile(measurements, .5), p95Ms: percentile(measurements, .95),
+          p99Ms: percentile(measurements, .99),
+          firstPageRows: firstIds.length, secondPageRows: secondIds.length,
+          secondPageMs: Math.round(next.milliseconds * 1000) / 1000,
+          orderStable: true, tenantIsolated: true
+        }));
+      }
+    
+    const count = (await admin.query(
+      "SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1 AND title LIKE 'PilotLoad %'",
+      [tenant])).rows[0].n;
+    assert.equal(count, scale, 'Synthetic order count must match measured scale');
+    if (scale > HTTP_LOAD_SIZE) {
+      // Exactly three simultaneous independently authenticated HTTP requests
+      // through the already-established HttpOnly cookie and actual Express.
+      // No timer sleeps or fake status responses. Not a production throughput SLO.
+      const group = await Promise.all(Array.from(
+        { length: HTTP_LOAD_CONCURRENCY },
+        () => httpPage(page, tenant, { state: 'blocked', sort: 'newest' })
+      ));
+      const ids = group.map(result => {
+        assert.equal(result.status, 200, 'Concurrent authenticated HTTP GET must succeed');
+        assert.ok(result.json.data.every(row => row.title.startsWith('PilotLoad ')),
+          'Concurrent response must not expose unrelated or foreign rows');
+        const rows = validateReviewPage(result.json);
+        assert.equal(rows.length, 50);
+        return rows;
+      });
+      for (const rows of ids.slice(1)) assert.deepEqual(rows, ids[0],
+        'Concurrent reads of immutable fixture must return identical ordering');
+      console.log('REVIEW_HTTP_CONCURRENT=' + JSON.stringify({
+        scale, concurrency: HTTP_LOAD_CONCURRENCY, scenario: 'blocked',
+        p50Ms: percentile(group.map(item => item.milliseconds), .5),
+        p95Ms: percentile(group.map(item => item.milliseconds), .95),
+        p99Ms: percentile(group.map(item => item.milliseconds), .99),
+        rows: ids[0].length, sameOrderedIds: true, realHttp: true
+      }));
     }
-    assert.ok(firstPage.pagination.has_more, 'Every tested filter must have 2+ pages');
-    const next = await httpPage(page, tenant, testCase.query,
-      firstPage.pagination.next_cursor);
-    assert.equal(next.status, 200, 'Authenticated HMAC next page must load');
-    const secondIds = validateReviewPage(next.json);
-    assert.ok(secondIds.length > 0, 'Signed next page must contain records');
-    assert.ok(secondIds.every(id => !firstIds.includes(id)),
-      'Keyset pages may not repeat IDs');
-    const own = await admin.query(
-      "SELECT count(*)::int n FROM work_orders WHERE tenant_id=$1 AND title LIKE 'PilotLoad %' AND id=ANY($2::uuid[])",
-      [tenant, [...firstIds, ...secondIds]]);
-    assert.equal(own.rows[0].n, firstIds.length + secondIds.length,
-      'Authenticated API must return own synthetic tenant rows only');
-
-    console.log('REVIEW_HTTP_LOAD=' + JSON.stringify({
-      scale: HTTP_LOAD_SIZE, scenario: testCase.name, samples: HTTP_LOAD_SAMPLES,
-      p50Ms: percentile(measurements, .5), p95Ms: percentile(measurements, .95),
-      p99Ms: percentile(measurements, .99),
-      firstPageRows: firstIds.length, secondPageRows: secondIds.length,
-      secondPageMs: Math.round(next.milliseconds * 1000) / 1000,
-      orderStable: true, tenantIsolated: true
-    }));
+    previousScale = scale;
   }
   const initial = await httpPage(page, tenant, { sort:'newest' });
   assert.equal(initial.status, 200);
@@ -210,5 +266,5 @@ export async function runHttpReviewLoad({ admin, page, tenant, field, reviewer, 
   const replay = await httpPage(page, tenant, {sort:'due_first'}, cursor);
   assert.equal(replay.status, 422, 'Signed cursor cannot be replayed with another sort');
   assert.equal(replay.json?.error?.code, 'ORDER_REVIEW_CURSOR_INVALID');
-  console.log('PASS: 5000 synthetic orders, nine real HTTP filters, repeated p50/p95/p99, stable signed next page, tamper/replay 422, tenant isolation.');
+  console.log('PASS: 5000/20000/50000 synthetic orders, bounded nine/five real HTTP filters, real three-way concurrent reads, stable signed next page, tamper/replay 422, tenant isolation; staging still NOT certified.');
 }
