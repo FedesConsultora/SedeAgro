@@ -16,7 +16,7 @@ export function summarizeNpmAudit(payload, scope) {
     throw new Error('npm audit vulnerability counts are invalid: ' + scope);
   }
   const affected = Object.entries(payload.vulnerabilities)
-    .filter(([, item]) => item?.severity === 'critical' || item?.severity === 'high')
+    .filter(([, item]) => ['critical', 'high', 'moderate'].includes(item?.severity))
     .map(([name, item]) => {
       if (!/^[a-zA-Z0-9@._/-]{1,150}$/.test(name)) {
         throw new Error('Unsafe npm package name in report');
