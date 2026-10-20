@@ -22,3 +22,21 @@ Una ejecución de 50k no prueba estabilidad de largo plazo, replicas, despliegue
 - matriz release #130 con seguridad, backup/restore privado, Android/iOS, rural offline y aceptación humana completas.
 
 La optimización SQL original no se modifica en este PR: el benchmark verifica el comportamiento productivo actual de manera reproducible.
+
+## Evidencia real del primer run escalado
+
+El [run premerge #39483684287](https://github.com/FedesConsultora/SedeAgro/actions/runs/39483684287) terminó **4/4 SUCCESS, intento 1**, HEAD `dfe05f92a048e4957a2a5dcddd602fdeafc399bd`. Entorno Linux x64, **4 CPUs lógicas**, ~15,6 GiB de RAM, Node 22.23.3, PostgreSQL/PostGIS 16.4 y 1 proceso Express en Chromium/Vite. Conteos insertados/acumulados: 5000/4000 partes, 20000/16000 partes y 50000/40000 partes.
+
+**Tiempos HTTP cliente en milisegundos (p95 de 7 muestras en cada escala, no p95 de tráfico real):**
+
+| Caso | 5k | 20k | 50k |
+| --- | ---: | ---: | ---: |
+| `blocked` | 22,191 | 36,852 | 79,038 |
+| `human_review` | 18,890 | 39,254 | 74,626 |
+| `composed` | 17,313 | 32,224 | 62,367 |
+
+**Tres GET simultáneas** de `blocked` sobre la misma cookie: p95 por petición = **61,052 ms con 20k** y **119,099 ms con 50k**. Las respuestas fueron HTTP 200 y devolvieron exactamente los mismos 50 IDs ordenados, sin datos de otro tenant. Las 9 combinaciones de 5k y las 5 de cada escala superior mantuvieron segunda página real sin duplicados; cursor adulterado o reutilizado con otro sort devolvió 422.
+
+Advertencias: con 7 muestras el p95 y el p99 por nearest-rank representan el máximo observado y NO estiman cuantiles estables de una población. La variabilidad del runner compartido, caché caliente, fixture sintética y la baja concurrencia impiden fijar SLA/GO. Estos tiempos incluyen HTTP loopback, Node, Express, Sequelize, PostGIS y su serialización; **no incluyen TLS/CDN/internet móvil/rural/VPS**, ni equivalen a una comparación con datos productivos.
+
+Este agregado documental cambia el HEAD de la rama: antes de fusionar se requiere volver a ejecutar el CI completo sobre el SHA nuevo y luego uno independiente sobre el commit fusionado en `main`.
