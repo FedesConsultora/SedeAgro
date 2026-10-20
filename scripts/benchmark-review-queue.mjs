@@ -164,6 +164,20 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
     'AND right(wo.title,5)::int%4<>0'
   ].join(' '), [...args, reviewer, submitter]);
+  // Rejected-only history remains awaiting_report: the live report projection
+  // intentionally ignores rejected rows. Preserve this boundary in parity.
+  await admin.query([
+    'INSERT INTO work_order_executions',
+    '(tenant_id,work_order_id,submitted_by,started_at,finished_at,',
+    'worked_area_hectares,result_summary,review_status,reviewed_by,reviewed_at,review_note)',
+    "SELECT wo.tenant_id,wo.id,$6::uuid,now()-interval '3 hours',",
+    "now()-interval '2 hours',2.00,",
+    "'Synthetic rejected-only historical report for SQL parity',",
+    "'rejected',$5::uuid,now(),'Synthetic rejection before resubmission'",
+    'FROM work_orders wo WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
+    'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
+    'AND right(wo.title,5)::int%8=0'
+  ].join(' '), [...args, reviewer, submitter]);
   // The human-review branch for application orders requires real evidence.
   await admin.query([
     'INSERT INTO evidence_assets',
