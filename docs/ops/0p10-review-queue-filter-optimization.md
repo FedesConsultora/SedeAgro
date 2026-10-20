@@ -29,3 +29,18 @@ El PR necesita 4/4 jobs SUCCESS en su SHA exacto y CI independiente postmerge 4/
 ## Restricciones / próximos riesgos
 
 Puede persistir costo proporcional a candidatos, pero con menor trabajo por candidato. Los grupos complejos `blocked` y `review` merecen un bloque ulterior y medición específica, sin forzar una reescritura que comprometa semántica. Siguen pendientes las seis alertas moderadas del backend (#137), QA foco modal (#86), staging TLS real, restore privado, Android/iOS y rollback operativo. **NO GO productivo por este PR**.
+
+## Primer resultado REAL emparejado de esta implementación
+
+Run premerge [#39434136121](https://github.com/FedesConsultora/SedeAgro/actions/runs/39434136121), primer intento **COMPLETED SUCCESS, 4/4 jobs**, PR HEAD `961c544d51d12b078f3dd3a9e86baf125ae8d3ab`. Runner Linux x64, 4 CPUs lógicas, 15984 MiB, Node 22.23.3, PostgreSQL 16.4. Dentro del **mismo run y dataset**:
+
+| Filtro | Órdenes candidatas | p95 PostgreSQL antes | p95 PostgreSQL después | Máximo de loops antes → después |
+| --- | ---: | ---: | ---: | ---: |
+| `no_report` / all | 240 | 1,040 ms | 0,137 ms | 240 → 1 |
+| `no_report` / all | 1200 | 5,664 ms | 0,790 ms | 1200 → 1 |
+| `closure` / all | 240 | 0,925 ms | 0,142 ms | 240 → 1 |
+| `closure` / all | 1200 | 4,664 ms | 0,543 ms | 1200 → 1 |
+
+El predicado optimizado permitió un plan `Hash Join` y evitó ejecutar la proyección LATERAL con `work_order_inputs` por cada candidata. Para `no_report` 1200, `Shared Hit Blocks` pasó de 5439 a 57 en el plan medido. Todos los casos tenían `parity:true` con igualdad exacta de IDs/orden en la página, no sólo igual conteo.
+
+**Interpretación:** el cociente entre esas dos mediciones de 7 muestras en CI ilustra una oportunidad real, pero **no prueba** aceleración universal ni mejora equivalente del endpoint HTTP completo en staging/VPS. Se debe verificar además CI independiente posmerge sobre SHA de integración y QA campo.
