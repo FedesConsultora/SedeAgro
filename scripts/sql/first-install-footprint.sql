@@ -17,6 +17,18 @@ SELECT
    WHERE n.nspname <> 'public'
      AND n.nspname <> 'information_schema'
      AND left(n.nspname, 3) <> 'pg_'
+     -- The pinned PostGIS image bootstraps these three auxiliary schemas,
+     -- sometimes without recording them as extension-owned namespaces.
+     -- Accept their empty baseline ONLY with the corresponding extension.
+     AND NOT (
+       (n.nspname = 'topology' AND EXISTS (
+         SELECT 1 FROM pg_extension e WHERE e.extname = 'postgis_topology'
+       ))
+       OR
+       (n.nspname IN ('tiger', 'tiger_data') AND EXISTS (
+         SELECT 1 FROM pg_extension e WHERE e.extname = 'postgis_tiger_geocoder'
+       ))
+     )
      AND NOT EXISTS (
        SELECT 1 FROM pg_depend dep
        WHERE dep.classid = 'pg_namespace'::regclass
