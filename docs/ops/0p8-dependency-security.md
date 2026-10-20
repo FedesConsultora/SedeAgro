@@ -18,9 +18,22 @@ En CI los comandos `npm audit` pueden salir con código 1 por vulnerabilidades, 
 
 **Política inicial:** bloquear cualquier aviso `high` o `critical` en dependencias runtime de backend y en dependencias del build frontend. Los avisos moderados quedan inventariados para una segunda revisión, sin presumir que sean inocuos. Solo los tests de 0P.8 y el CI real permiten declarar un gate válido.
 
-## Siguiente paso obligatorio para obtener verde
+## Parches aplicados en el PR
 
-Inspeccionar la salida de `dependency-security`, resolver paquetes vulnerables con parches compatibles, regenerar `package-lock.json` de los servicios afectados conservando todos los binarios nativos opcionales en cada plataforma, y repetir **los cuatro jobs** (incluidos Docker productivo, PostGIS real y Chromium). No ejecutar `npm audit fix --force` a ciegas ni reemplazar un aviso sin prueba por una excepción temporal.
+La auditoría inicial de un runner descartable identificó `proxy-addr 2.0.7` (crítico, IP spoofing con subredes de confianza IPv4 mapeadas a IPv6), y los avisos altos de `immutable 5.1.6`, `nanoid 3.3.12`, `postcss 8.5.15` y `source-map-js 1.2.1`.
+
+Usando únicamente `npm audit fix --package-lock-only` en carpetas temporales **fuera del workspace raíz** se generaron cambios revisables, después aplicados a los lockfiles versionados en commits separados:
+
+- Backend: `proxy-addr 2.0.8`, `express 4.22.3` y dependencias transitivas compatibles.
+- Frontend: `immutable 5.1.9`, `nanoid 3.3.20`, `postcss 8.5.31` y `source-map-js 1.2.2`, preservando los binding binarios opcionales de Rolldown/LightningCSS/Parcel.
+
+En el workflow preliminar del SHA `d52da55db60035c7427b1beaf02422c5b78c0721`, el job de seguridad indicó **0 críticos y 0 altos** en ambos ámbitos; backend retuvo **6 moderados**, frontend **0 moderados**. Estos resultados deben revalidarse en el SHA final premerge y posmerge. Los moderados quedan visibles por paquete/título para evaluación posterior; no se afirma ausencia total de vulnerabilidades.
+
+No se realizó actualización forzada de majors ni se degradó el criterio fail-closed. El gate seguirá rechazando avisos altos/críticos futuros.
+
+## Siguiente paso obligatorio para un GO
+
+Completar los cuatro jobs del SHA exacto (incluyendo Docker productivo, PostgreSQL/PostGIS + restauración, Chromium y auditoría de seguridad), revisar los seis avisos moderados con sus rutas de explotación y decidir formalmente aceptarlos o remediarlos. Ninguna prueba automatizada sustituye staging real, backup y restauración real, QA de campo o firma de release.
 
 ## Restricciones
 
