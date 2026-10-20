@@ -11,6 +11,10 @@ EXPOSE 3001
 CMD ["npm", "run", "dev"]
 
 FROM base AS prod
+ARG RELEASE_SHA
+ENV SEDEAGRO_BUILD_SHA=${RELEASE_SHA}
+RUN node -e 'if (!/^[0-9a-f]{40}$/.test(process.env.SEDEAGRO_BUILD_SHA || "")) process.exit(1)'
+LABEL org.opencontainers.image.revision="${RELEASE_SHA}"
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
