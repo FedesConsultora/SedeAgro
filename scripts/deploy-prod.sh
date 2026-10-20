@@ -80,8 +80,17 @@ fi
 # Backup must have been made and RESTORED on an isolated instance by the operator.
 # This read-only check binds that external approval to the archive digest and
 # exact release SHA. Refuse ALL migrations if it cannot be independently listed.
-echo "Verificando respaldo externo aprobado antes de migraciones..."
-bash scripts/verify-production-backup.sh
+# A fresh PostgreSQL/PostGIS volume cannot contain SedeAgro tables to back
+# up. Allow the one-time FIRST_DEPLOY approval only after proving via SQL that
+# the schema has no non-extension relations or foreign user schemas.
+# ALL upgrades must use a recent backup and a human-verified restore.
+if [[ -n "${SEDEAGRO_INITIAL_BOOTSTRAP_APPROVAL:-}" ]]; then
+  echo "Verificando instalación inicial sobre una base probadamente vacía..."
+  bash scripts/verify-fresh-install-db.sh
+else
+  echo "Verificando respaldo externo aprobado antes de migraciones..."
+  bash scripts/verify-production-backup.sh
+fi
 
 # Migrations execute with the schema owner, never with the HTTP server's limited role.
 echo "Aplicando migraciones y catálogo global con rol propietario..."

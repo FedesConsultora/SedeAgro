@@ -48,6 +48,8 @@ jobs:
           node --test scripts/test/production-preflight.test.mjs
           bash -n scripts/verify-production-backup.sh
           node --test scripts/test/production-backup-guards.test.mjs
+          bash -n scripts/verify-fresh-install-db.sh
+          node --test scripts/test/fresh-install-guards.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -58,12 +60,27 @@ jobs:
         run: npm --workspace frontend run test
       - name: Build React frontend
         run: npm --workspace frontend run build
+      - name: Prove real untouched PostGIS bootstrap footprint before migrations
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          if [[ "$result" != '0|0' ]]; then
+            printf 'BLOCKED: fresh disposable PostGIS has non-extension object/schema counts: %s\n' "$result" >&2
+            exit 1
+          fi
       - name: Migrate disposable PostGIS database
         env:
           DATABASE_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           NODE_ENV: test
           SEED_MODE: ci
         run: npm --workspace backend run db:prepare
+      - name: Prove real migrated PostGIS cannot use first-install bypass
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          [[ "$result" =~ ^[0-9]+\|[0-9]+$ ]] && test "$result" != '0|0'
       - name: Provision least-privilege runtime role
         run: |
           docker exec -i "${{ job.services.postgres.id }}" psql \
