@@ -51,6 +51,7 @@ jobs:
           bash -n scripts/verify-fresh-install-db.sh
           node --test scripts/test/fresh-install-guards.test.mjs
           node --test scripts/test/production-container-guards.test.mjs
+          node --test scripts/test/security-audit-report.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -219,3 +220,23 @@ jobs:
             actual="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
             test "$actual" = "$IMAGE_SHA"
           done
+
+  dependency-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert audit checkout is exact HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Audit locked backend runtime and frontend build dependencies
+        run: |
+          (cd backend && npm audit --omit=dev --json) > backend-audit.json || true
+          (cd frontend && npm audit --json) > frontend-audit.json || true
+          node scripts/security-audit-report.mjs backend-audit.json frontend-audit.json
