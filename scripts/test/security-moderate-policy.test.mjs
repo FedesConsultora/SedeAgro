@@ -20,9 +20,9 @@ const makeSummary = () => ({
 });
 const clock = new Date('2026-10-20T16:00:00.000Z');
 
-test('actual checked-in inventory covers exact six reported moderately vulnerable packages', () => {
+test('actual checked-in inventory covers two unaccepted Sequelize/uuid advisories', () => {
   const result = enforceModerateInventory(makeSummary(), baseline, makeLock(), clock);
-  assert.equal(result.openModerate, 6);
+  assert.equal(result.openModerate, 2);
   assert.equal(result.releaseAccepted, false);
   assert.equal(result.policy, 'inventory-only');
   assert.equal(result.reviewBy, '2026-11-20');
@@ -32,12 +32,12 @@ test('fixed vulnerabilities may disappear without triggering stale baseline fail
   const report = makeSummary();
   report.affected = report.affected.filter(item => item.package !== 'uuid');
   report.moderate = report.affected.length;
-  assert.equal(enforceModerateInventory(report, baseline, makeLock(), clock).openModerate, 5);
+  assert.equal(enforceModerateInventory(report, baseline, makeLock(), clock).openModerate, 1);
   report.affected = []; report.moderate = 0;
   assert.equal(enforceModerateInventory(report, baseline, makeLock(), clock).openModerate, 0);
 });
 
-test('blocks newly affected package even when same six total remain', () => {
+test('blocks newly affected package even when same two total remain', () => {
   const report = makeSummary();
   report.affected[0] = { package: 'unexpected-dep', severity: 'moderate', via: [] };
   assert.throws(() => enforceModerateInventory(report, baseline, makeLock(), clock),
@@ -67,7 +67,7 @@ test('blocks newly published CVE on an already listed package', () => {
 
 test('blocks a newly direct-vulnerable transitive package previously only indirect', () => {
   const report = makeSummary();
-  report.affected.find(item => item.package === 'argparse').via = ['New argparse advisory'];
+  report.affected.find(item => item.package === 'sequelize').via = ['New Sequelize advisory'];
   assert.throws(() => enforceModerateInventory(report, baseline, makeLock(), clock),
     /new\/modified upstream moderate advisory/);
 });
@@ -83,7 +83,7 @@ test('incomplete or duplicate audit summaries cannot be waived', () => {
 
 test('review deadline expires fail-closed; valid through deadline UTC day', () => {
   const reviewDay = new Date('2026-11-20T23:59:59.000Z');
-  assert.equal(enforceModerateInventory(makeSummary(), baseline, makeLock(), reviewDay).openModerate, 6);
+  assert.equal(enforceModerateInventory(makeSummary(), baseline, makeLock(), reviewDay).openModerate, 2);
   assert.throws(() => enforceModerateInventory(makeSummary(), baseline, makeLock(),
     new Date('2026-11-21T00:00:00.000Z')), /deadline expired/);
 });
@@ -125,7 +125,7 @@ test('formal remediated state requires zero MODERATE findings in live npm audit 
     /remediated policy requires an empty LIVE advisory report/);
   const partial = copy(baseline);
   partial.status = 'remediated';
-  partial.maxModerate = 6;
+  partial.maxModerate = 2;
   assert.throws(() => enforceModerateInventory(makeSummary(), partial, makeLock(), clock),
     /remediated policy requires an empty LIVE advisory report/);
   const fake = copy(remediated);
