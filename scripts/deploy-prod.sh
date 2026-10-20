@@ -13,9 +13,22 @@ if [[ ! -f .env || ! -f backend/.env ]]; then
   exit 1
 fi
 
-if [[ -z "${SKIP_GIT_PULL:-}" ]]; then
-  git pull --ff-only origin main
+# Never pull into a different branch or start a production operation from
+# modified tracked files. A skip-pull switch would leave the remote unverifiable.
+if [[ -n "${SKIP_GIT_PULL:-}" ]]; then
+  echo "BLOCKED: SKIP_GIT_PULL is not allowed for a production release." >&2
+  exit 2
 fi
+if [[ "$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)" != "main" ||
+      -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "BLOCKED: production checkout must be clean and on main BEFORE pull." >&2
+  exit 2
+fi
+git pull --ff-only origin main
+
+# Read-only, fail-closed gate AFTER fetch, BEFORE Docker build or migration.
+# Requires the exact approved SHA and an explicit matching deployment approval.
+bash scripts/production-preflight.sh
 
 # Compose reads .env independently; source it here for controlled role provisioning.
 set -a
