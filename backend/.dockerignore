@@ -1,5 +1,13 @@
 node_modules
-npm-debug.log
+npm-debug.log*
 .env
+.env.*
+.git
 coverage
 uploads
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+test-results
