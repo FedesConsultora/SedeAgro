@@ -140,7 +140,7 @@ export function summarizeExplain(explainValue) {
   };
 }
 
-async function seedScale(admin, { tenant, field, reviewer, submitter }, start, stop) {
+async function seedScale(admin, { tenant, field, reviewer, submitter, plannedInput, extraInput }, start, stop) {
   const args = [tenant, field, start, stop];
   await admin.query([
     'INSERT INTO work_orders (tenant_id,field_id,type,status,priority,title,created_at)',
@@ -178,6 +178,34 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
     'AND right(wo.title,5)::int%8=0'
   ].join(' '), [...args, reviewer, submitter]);
+  // Real rich-state fixture: no declaration vs planned input; reviewed or
+  // pending unplanned input. Other branches retain same reviewer/report scope.
+  await admin.query([
+    'INSERT INTO work_order_inputs(tenant_id,work_order_id,input_id)',
+    'SELECT wo.tenant_id,wo.id,$5::uuid',
+    'FROM work_orders wo',
+    'WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
+    'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
+    'AND right(wo.title,5)::int%20=3'
+  ].join(' '), [...args, plannedInput]);
+  await admin.query([
+    'INSERT INTO work_order_execution_exceptions',
+    '(tenant_id,work_order_id,work_order_execution_id,input_id,client_request_id,',
+    'submitted_by,quantity,input_name,unit,reason,review_status,reviewed_by,reviewed_at,review_note)',
+    "SELECT wo.tenant_id,wo.id,r.id,$5::uuid,gen_random_uuid(),",
+    "$6::uuid,2.0000,'Synthetic unplanned catalog item','kg',",
+    "'Real synthetic exception for parity coverage',",
+    "CASE WHEN right(wo.title,5)::int%20=7 THEN 'rejected' ELSE 'submitted' END,",
+    'CASE WHEN right(wo.title,5)::int%20=7 THEN $7::uuid ELSE NULL END,',
+    'CASE WHEN right(wo.title,5)::int%20=7 THEN now() ELSE NULL END,',
+    "CASE WHEN right(wo.title,5)::int%20=7 THEN 'Reviewed rejection for CI benchmark' ELSE NULL END",
+    'FROM work_orders wo',
+    'JOIN work_order_executions r ON r.tenant_id=wo.tenant_id',
+    "AND r.work_order_id=wo.id AND r.review_status='submitted'",
+    'WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
+    'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
+    'AND right(wo.title,5)::int%20 IN (7,11)'
+  ].join(' '), [...args, extraInput, submitter, reviewer]);
   // The human-review branch for application orders requires real evidence.
   await admin.query([
     'INSERT INTO evidence_assets',
@@ -187,7 +215,7 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     'ON r.tenant_id=wo.tenant_id AND r.work_order_id=wo.id',
     'WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid AND wo.type=\'application\'',
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
-    'AND right(wo.title,5)::int%4=3'
+    'AND right(wo.title,5)::int%20=15'
   ].join(' '), [...args, submitter]);
 }
 
@@ -232,13 +260,21 @@ async function createFixture(admin) {
         [tenants[label], farm.id, 'Synthetic field']);
       fields.push(field.id);
     }
+    const inputRows = (await admin.query([
+      'INSERT INTO agricultural_inputs(tenant_id,name,category,unit)',
+      "VALUES ($1,'CI planned input ${random}','fertilizer','kg'),",
+      "($1,'CI unplanned input ${random}','fertilizer','kg') RETURNING id"
+    ].join(' '), [tenants[0]])).rows;
+    assert.equal(inputRows.length, 2, 'Both planned and unexpected catalog fixtures required');
     await admin.query([
       'INSERT INTO work_orders(tenant_id,field_id,type,status,title)',
       "SELECT $1::uuid,$2::uuid,'sowing','in_progress','CI other-tenant '||n",
       'FROM generate_series(1,36) n'
     ].join(' '), [tenants[1], fields[1]]);
     return { tenant: tenants[0], otherTenant: tenants[1], field: fields[0],
-      reviewer: users[0], submitter: users[1], tenants, users };
+      reviewer: users[0], submitter: users[1],
+      plannedInput: inputRows[0].id, extraInput: inputRows[1].id,
+      tenants, users };
   } catch (error) {
     for (const tenant of tenants) {
       await admin.query('DELETE FROM tenants WHERE id=$1', [tenant]).catch(() => {});
