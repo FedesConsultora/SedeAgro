@@ -65,7 +65,10 @@ jobs:
           result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
             -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
             < scripts/sql/first-install-footprint.sql)"
-          test "$result" = '0|0'
+          if [[ "$result" != '0|0' ]]; then
+            printf 'BLOCKED: fresh disposable PostGIS has non-extension object/schema counts: %s\n' "$result" >&2
+            exit 1
+          fi
       - name: Migrate disposable PostGIS database
         env:
           DATABASE_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
