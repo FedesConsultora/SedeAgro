@@ -52,6 +52,7 @@ jobs:
           node --test scripts/test/fresh-install-guards.test.mjs
           node --test scripts/test/production-container-guards.test.mjs
           node --test scripts/test/security-audit-report.test.mjs scripts/test/security-moderate-policy.test.mjs
+          node --test scripts/test/benchmark-review-queue.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -95,6 +96,12 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: npm --workspace backend run test:db
+      - name: Profile review queue filters under real runtime FORCE RLS at two scales
+        env:
+          TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
+          TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
+          SEDEAGRO_PERF_PROBE: I_ACCEPT_DISPOSABLE_POSTGIS_PERF_ONLY
+        run: node scripts/benchmark-review-queue.mjs
       - name: Rehearse disposable PostGIS backup, restore and restored-db RLS
         env:
           CI_POSTGIS_CONTAINER: ${{ job.services.postgres.id }}
