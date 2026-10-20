@@ -1,26 +1,18 @@
-import { Umzug, SequelizeStorage } from 'umzug';
+import { fileURLToPath } from 'node:url';
 import { sequelize } from '../../core/db.js';
 import '../../models/index.js';
 import { demoSeedEnabled } from './seedPolicy.js';
+import { runTrackedMigrations } from './trackedMigrations.js';
 
 const command = process.argv[2] || 'up';
-
-const umzug = new Umzug({
-  migrations: {
-    // Only global catalogs are seeded by default; demo data is explicit opt-in.
-    glob: demoSeedEnabled() ? 'db/seeders/*.js' : 'db/seeders/*_seed_global_*.js'
-  },
-  context: sequelize.getQueryInterface(),
-  storage: new SequelizeStorage({ sequelize, tableName: 'sequelize_seeders' }),
-  logger: console
-});
-
-if (command === 'up') {
-  await umzug.up();
-} else if (command === 'down') {
-  await umzug.down();
-} else {
-  throw new Error(`Unknown seeder command: ${command}`);
+try {
+  await runTrackedMigrations({
+    sequelize,
+    directory: fileURLToPath(new URL('../../../db/seeders/', import.meta.url)),
+    tableName: 'sequelize_seeders',
+    command,
+    include: demoSeedEnabled() ? () => true : name => name.includes('_seed_global_')
+  });
+} finally {
+  await sequelize.close();
 }
-
-await sequelize.close();

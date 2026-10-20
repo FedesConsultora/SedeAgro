@@ -2,30 +2,12 @@
   "schema": 1,
   "scope": "backend-runtime",
   "reviewBy": "2026-11-20",
-  "maxModerate": 6,
+  "maxModerate": 2,
   "status": "unaccepted-for-release",
-  "notes": "Temporary technical inventory only; formal risk owner signoff and remediation remain required before GO.",
+  "notes": "Four Umzug CLI-chain advisories removed by eliminating Umzug from runtime. Sequelize 6.37.8 and uuid 8.3.2 remain unaccepted-for-release; remediation and actual npm audit zero needed before GO.",
   "packages": {
-    "@rushstack/ts-command-line": {
-      "version": "4.19.1",
-      "titles": []
-    },
-    "argparse": {
-      "version": "1.0.10",
-      "titles": []
-    },
     "sequelize": {
       "version": "6.37.8",
-      "titles": []
-    },
-    "sprintf-js": {
-      "version": "1.0.3",
-      "titles": [
-        "sprintf-js vulnerable to denial of service through unbounded precision specifiers"
-      ]
-    },
-    "umzug": {
-      "version": "3.8.3",
       "titles": []
     },
     "uuid": {

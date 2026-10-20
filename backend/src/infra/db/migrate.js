@@ -1,30 +1,22 @@
-import { Umzug, SequelizeStorage } from 'umzug';
+import { fileURLToPath } from 'node:url';
 import { sequelize } from '../../core/db.js';
 import '../../models/index.js';
+import { runTrackedMigrations } from './trackedMigrations.js';
 
 const command = process.argv[2] || 'up';
-
-const umzug = new Umzug({
-  migrations: {
-    glob: 'db/migrations/*.js'
-  },
-  context: sequelize.getQueryInterface(),
-  storage: new SequelizeStorage({ sequelize, tableName: 'sequelize_migrations' }),
-  logger: console
-});
-
-if (command === 'up') {
-  await umzug.up();
-} else if (command === 'down') {
-  await umzug.down();
-} else if (command === 'status') {
-  const [executed, pending] = await Promise.all([umzug.executed(), umzug.pending()]);
-  console.table([
-    ...executed.map((migration) => ({ name: migration.name, status: 'executed' })),
-    ...pending.map((migration) => ({ name: migration.name, status: 'pending' }))
-  ]);
-} else {
-  throw new Error(`Unknown migration command: ${command}`);
+try {
+  const result = await runTrackedMigrations({
+    sequelize,
+    directory: fileURLToPath(new URL('../../../db/migrations/', import.meta.url)),
+    tableName: 'sequelize_migrations',
+    command
+  });
+  if (command === 'status') {
+    console.table([
+      ...result.executed.map(name => ({ name, status: 'executed' })),
+      ...result.pending.map(name => ({ name, status: 'pending' }))
+    ]);
+  }
+} finally {
+  await sequelize.close();
 }
-
-await sequelize.close();
