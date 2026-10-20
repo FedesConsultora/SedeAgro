@@ -141,7 +141,7 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     "CASE WHEN right(wo.title,5)::int%4=1 THEN 'verified' ELSE 'submitted' END,",
     'CASE WHEN right(wo.title,5)::int%4=1 THEN $5::uuid ELSE NULL END,',
     'CASE WHEN right(wo.title,5)::int%4=1 THEN now() ELSE NULL END',
-    'FROM work_orders wo WHERE wo.tenant_id=$1::uuid',
+    'FROM work_orders wo WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
     'AND right(wo.title,5)::int%4<>0'
   ].join(' '), [...args, reviewer, submitter]);
@@ -152,7 +152,7 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     "SELECT wo.tenant_id,wo.id,r.id,'document','ci-perf/'||r.id,$5::uuid",
     'FROM work_orders wo JOIN work_order_executions r',
     'ON r.tenant_id=wo.tenant_id AND r.work_order_id=wo.id',
-    'WHERE wo.tenant_id=$1::uuid AND wo.type=\'application\'',
+    'WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid AND wo.type=\'application\'',
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
     'AND right(wo.title,5)::int%4=3'
   ].join(' '), [...args, submitter]);
