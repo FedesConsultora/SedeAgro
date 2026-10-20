@@ -66,7 +66,10 @@ test('Chromium modal acceptance waits for enabled state, still asserts real focu
   const helper = readFileSync(new URL('../../scripts/support/assert-dialog-focus.mjs', import.meta.url), 'utf8');
   assert.match(section, /waitForFunction\(/);
   assert.match(section, /create && !create.disabled/);
-  assert.match(section, /for \(let cycle = 1; cycle <= 4; cycle \+= 1\)/);
+  assert.match(section, /for \\(let cycle = 1; cycle <= focusCycles; cycle \\+= 1\\)/);
+  assert.match(section, /'farm-pending-last'/);
+  assert.match(section, /'farm-after-lookup-new-last'/);
+  assert.match(section, /'farm-after-lookup-retains-first'/);
   assert.match(section, /assertDialogFocus\(/);
   assert.match(section, /pressReverseTabAtDialogRoot\(/);
   assert.match(helper, /event.key !== 'Tab'/);
