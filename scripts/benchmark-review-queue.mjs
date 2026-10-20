@@ -26,6 +26,7 @@ const CASES = Object.freeze([
 const SIZES = Object.freeze([240, 1200]);
 const SAMPLES = 7;
 const flag = 'I_ACCEPT_DISPOSABLE_POSTGIS_PERF_ONLY';
+let diagnosticPhase = 'preflight';
 const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function assertDisposablePerfConfig(env) {
@@ -218,6 +219,7 @@ async function createFixture(admin) {
 }
 
 async function measure(app, fixture, scale) {
+  diagnosticPhase = 'runtime-rls-' + scale;
   await app.query('BEGIN READ ONLY');
   try {
     await app.query("SELECT set_config('app.current_tenant',$1,true)", [fixture.tenant]);
@@ -228,7 +230,9 @@ async function measure(app, fixture, scale) {
     const { rows: [invisible] } = await app.query(
       'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1', [fixture.otherTenant]);
     assert.equal(invisible.n, 0, 'A foreign tenant cannot leak through the benchmark role');
+    console.log('PERF_SANITY=' + JSON.stringify({ scale, ownRows: visible.n, foreignRows: invisible.n }));
     for (const testCase of CASES) {
+      diagnosticPhase = 'explain-' + scale + '-' + testCase.state + '-' + testCase.type;
       const parameters = [fixture.tenant, testCase.type];
       if (testCase.state !== 'all') parameters.push(REVIEW_QUEUE_STATE_GROUPS[testCase.state]);
       const sql = buildProbeSql(fixture.reviewer, testCase.state);
@@ -286,9 +290,11 @@ export async function main(env = process.env) {
       'WHERE r.rolname=current_user'
     ].join(' '))).rows[0];
     assert.ok(isSafeRuntimeDbRole(role), 'Privileged DB roles cannot profile RLS queries');
+    diagnosticPhase = 'synthetic-fixtures';
     fixture = await createFixture(admin);
     let prior = 0;
     for (const scale of SIZES) {
+      diagnosticPhase = 'seed-' + scale;
       await seedScale(admin, fixture, prior + 1, scale);
       await admin.query('ANALYZE work_orders');
       await admin.query('ANALYZE work_order_executions');
@@ -296,6 +302,7 @@ export async function main(env = process.env) {
       await measure(app, fixture, scale);
       prior = scale;
     }
+    diagnosticPhase = 'rls-reset';
     await app.query('SELECT count(*)::int AS n FROM work_orders')
       .then(({ rows }) => assert.equal(rows[0].n, 0,
         'Runtime tenant transaction setting must clear after COMMIT'));
@@ -322,7 +329,8 @@ export async function main(env = process.env) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main().catch(error => {
     // SQL driver stack traces may contain fixture values. Only sanitized error code.
-    console.error('BLOCKED: review queue PostGIS performance evidence incomplete: ' +
+    console.error('BLOCKED: review queue PostGIS performance evidence incomplete [' +
+      diagnosticPhase.replace(/[^a-z0-9-]/g, '') + ']: ' +
       String(error?.code || error?.name || 'UNKNOWN').replace(/[^A-Z_a-z0-9]/g, ''));
     process.exitCode = 1;
   });
