@@ -90,3 +90,17 @@ test('frontend build requires same-origin API and serves only compiled assets', 
   assert.match(prod, /COPY --from=build \/app\/dist \/usr\/share\/nginx\/html/);
   assert.doesNotMatch(prod, /COPY \. \./);
 });
+
+test('production containers embed exact approved SHA and expose OCI revision labels', () => {
+  const backend = read('backend/Dockerfile');
+  const frontend = read('frontend/Dockerfile');
+  const compose = read('docker-compose.yml');
+  for (const file of [backend, frontend]) {
+    assert.match(file, /ARG RELEASE_SHA/);
+    assert.match(file, /org\.opencontainers\.image\.revision/);
+    assert.match(file, /\^\[0-9a-f\]\{40\}\$/);
+  }
+  assert.match(backend, /ENV SEDEAGRO_BUILD_SHA=\$\{RELEASE_SHA\}/);
+  assert.equal((compose.match(/RELEASE_SHA: \$\{SEDEAGRO_RELEASE_SHA:\?/g) || []).length, 2);
+});
+
