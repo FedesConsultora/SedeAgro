@@ -14,7 +14,7 @@ export function enforceModerateInventory(summary, policy, lock, today = new Date
       !Number.isSafeInteger(summary.moderate) || summary.moderate < 0 ||
       !Array.isArray(summary.affected) ||
       !policy || policy.schema !== 1 || policy.scope !== summary.scope ||
-      policy.status !== 'unaccepted-for-release' ||
+      !['unaccepted-for-release', 'remediated'].includes(policy.status) ||
       !Number.isSafeInteger(policy.maxModerate) || policy.maxModerate < 0 ||
       !validDate(policy.reviewBy) || !policy.packages ||
       typeof policy.packages !== 'object' || Array.isArray(policy.packages) ||
@@ -37,6 +37,13 @@ export function enforceModerateInventory(summary, policy, lock, today = new Date
         item.titles.some(title => typeof title !== 'string' || title.length > 110) ||
         new Set(item.titles).size !== item.titles.length)) {
     throw new Error('BLOCKED: invalid or unreviewed backend moderate-risk baseline');
+  }
+  // "remediated" is an intentionally separate, future-only decision. Merely
+  // lowering an inventory count while advisories remain is not a release GO.
+  if (policy.status === 'remediated' &&
+      (policy.maxModerate !== 0 || registered.length !== 0 ||
+       summary.moderate !== 0)) {
+    throw new Error('BLOCKED: remediated policy requires an empty LIVE advisory report and baseline');
   }
   if (summary.moderate > policy.maxModerate) {
     throw new Error('BLOCKED: backend moderate advisories increased beyond reviewed inventory');
@@ -65,6 +72,7 @@ export function enforceModerateInventory(summary, policy, lock, today = new Date
   return {
     scope: summary.scope, openModerate: summary.moderate,
     maxModerate: policy.maxModerate, reviewBy: policy.reviewBy,
-    releaseAccepted: false, policy: 'inventory-only'
+    releaseAccepted: policy.status === 'remediated' && summary.moderate === 0,
+    policy: policy.status === 'remediated' ? 'remediated' : 'inventory-only'
   };
 }
