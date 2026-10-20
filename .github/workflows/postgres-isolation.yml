@@ -180,6 +180,8 @@ jobs:
   production-images:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      IMAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -189,10 +191,10 @@ jobs:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Build backend production image from local lockfile
-        run: docker build --target prod --tag sedeagro-backend-rc:${{ github.sha }} ./backend
+        run: docker build --target prod --build-arg RELEASE_SHA="$IMAGE_SHA" --tag sedeagro-backend-rc:$IMAGE_SHA ./backend
       - name: Verify backend image boots Node22 with production dependencies
         run: |
-          docker run --rm --entrypoint sh sedeagro-backend-rc:${{ github.sha }} -ec '
+          docker run --rm --entrypoint sh sedeagro-backend-rc:$IMAGE_SHA -ec '
             node -e "if (!process.version.startsWith(\"v22.\")) process.exit(1)"
             test -f /app/src/server.js
             test -f /app/db/migrations/202610190003_review_queue_view_moderation_audit.js
@@ -200,14 +202,20 @@ jobs:
             test ! -f /app/.env
           '
       - name: Build frontend production image from local lockfile
-        run: docker build --target prod --build-arg VITE_API_URL=/api --tag sedeagro-frontend-rc:${{ github.sha }} ./frontend
+        run: docker build --target prod --build-arg VITE_API_URL=/api --build-arg RELEASE_SHA="$IMAGE_SHA" --tag sedeagro-frontend-rc:$IMAGE_SHA ./frontend
       - name: Verify compiled frontend and production Nginx syntax
         run: |
-          docker run --rm --entrypoint sh sedeagro-frontend-rc:${{ github.sha }} -ec '
+          docker run --rm --entrypoint sh sedeagro-frontend-rc:$IMAGE_SHA -ec '
             test -s /usr/share/nginx/html/index.html
             test -s /usr/share/nginx/html/sw.js
             test ! -e /usr/share/nginx/html/.env
             test ! -e /usr/share/nginx/html/node_modules
           '
           docker run --rm --add-host sedeagro_backend:127.0.0.1 \
-            sedeagro-frontend-rc:${{ github.sha }} nginx -t
+            sedeagro-frontend-rc:$IMAGE_SHA nginx -t
+      - name: Prove both OCI labels match exact event HEAD
+        run: |
+          for image in "sedeagro-backend-rc:$IMAGE_SHA" "sedeagro-frontend-rc:$IMAGE_SHA"; do
+            actual="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
+            test "$actual" = "$IMAGE_SHA"
+          done
