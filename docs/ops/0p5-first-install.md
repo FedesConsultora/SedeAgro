@@ -46,7 +46,8 @@ unset SEDEAGRO_VERIFIED_BACKUP_FILE SEDEAGRO_VERIFIED_BACKUP_SHA256 SEDEAGRO_RES
 
 ## Pruebas y límites
 
-- Los tests automáticos `scripts/test/fresh-install-guards.test.mjs` simulan resultados SQL `0|0`, tablas previas, esquemas personalizados, SQL inválido y combinación de flags. No tocan DB/volúmenes reales.
-- El CI habitual ejecuta PostGIS real, RLS y restauración en otras pruebas, pero **no convierte esta simulación en una certificación de un VPS virgen**. El comportamiento sobre la instancia real debe verificarse antes de habilitar la ventana de instalación.
+- El SQL de lectura es un archivo único y revisable: `scripts/sql/first-install-footprint.sql`. Tanto el deploy como el CI ejecutan exactamente esta consulta, sin copiar variantes inconsistentes.
+- Los tests unitarios `scripts/test/fresh-install-guards.test.mjs` simulan resultados SQL `0|0`, tablas previas, esquemas personalizados, SQL inválido y combinación de flags. No tocan DB/volúmenes reales.
+- **CI ejecuta la consulta sobre una instancia real PostGIS descartable** antes de aplicar migraciones y exige `0|0`; después de migrar esa misma base exige una huella no nula. Esto prueba la distinción inicial/migrada sobre el esquema real de SedeAgro, **pero no certifica un VPS virgen ni una instalación de campo**.
 - El gate 0P.1 sigue exigiendo SHA exacto, rama limpia, secrets y configuración; 0P.3 verifica `/health/ready` después del arranque.
 - Esta mejora **no** equivale a código desplegado, QA físico en campo, pruebas reales de backup/restore de actualizaciones, certificado TLS, benchmark #105 ni accesibilidad #86.
