@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { arch, cpus, platform, totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { isSafeRuntimeDbRole } from '../backend/src/core/tenantDbSafety.js';
@@ -290,6 +291,13 @@ export async function main(env = process.env) {
       'WHERE r.rolname=current_user'
     ].join(' '))).rows[0];
     assert.ok(isSafeRuntimeDbRole(role), 'Privileged DB roles cannot profile RLS queries');
+    const pgVersion = (await app.query('SHOW server_version')).rows[0].server_version;
+    console.log('REVIEW_QUEUE_PG_ENV=' + JSON.stringify({
+      os: platform(), arch: arch(), logicalCpus: cpus().length,
+      systemMemoryMb: Math.round(totalmem() / 1048576),
+      nodeVersion: process.version, postgresVersion: pgVersion,
+      samplesPerCase: SAMPLES, scales: SIZES
+    }));
     diagnosticPhase = 'synthetic-fixtures';
     fixture = await createFixture(admin);
     let prior = 0;
