@@ -20,7 +20,7 @@ El gate 0P.3 obliga correctamente a verificar una copia restaurada **antes de mi
 `verify-fresh-install-db.sh` ejecuta únicamente un `SELECT` contra PostgreSQL desde el contenedor `db` con el rol propietario, usando la base identificada por `POSTGRES_DB`. Cuenta:
 
 1. **Todas** las relaciones no pertenecientes a extensiones (`pg_class`, `pg_namespace`, `pg_depend`) en esquemas de usuario: tablas ordinarias/particionadas/foráneas, vistas y vistas materializadas, sin confundir `spatial_ref_sys` y otros objetos legítimos propiedad de PostGIS con datos del producto.
-2. Esquemas personalizados no pertenecientes a extensiones, excepto `public`. Una base parcialmente migrada (como `app`) también debe quedar bloqueada, aunque no contenga filas.
+2. Esquemas personalizados no pertenecientes a extensiones, excepto `public`. La imagen real `postgis/postgis:16-3.4` crea también los esquemas vacíos `topology`, `tiger` y `tiger_data` como infraestructura: se aceptan **solamente cuando** figuran instaladas las extensiones `postgis_topology` y `postgis_tiger_geocoder` correspondientes. Las tablas ajenas a las extensiones dentro de esos esquemas **no** quedan exentas del conteo de relaciones. Cualquier otro esquema (incluido `app` de una migración incompleta) bloquea la instalación inicial.
 
 Solo acepta la salida exacta `0|0`, sin salidas extra ni errores de consulta. Un problema al conectar, un rol ausente, cualquier objeto previo o un identificador de DB/rol inseguro dan **BLOCKED** antes de migrar. El comando no ejecuta creación, borrado, modificaciones ni backups.
 
