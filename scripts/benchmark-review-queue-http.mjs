@@ -139,17 +139,17 @@ export async function runHttpReviewLoad({ admin, page, tenant, field, reviewer, 
     '(tenant_id,work_order_id,submitted_by,started_at,finished_at,',
     'worked_area_hectares,result_summary,review_status,reviewed_by,reviewed_at)',
     'SELECT w.tenant_id,w.id,',
-    'CASE WHEN right(w.title,5)::int%4=2 THEN $2::uuid ELSE $3::uuid END,',
+    'CASE WHEN right(w.title,5)::int%5=1 THEN $2::uuid ELSE $3::uuid END,',
     "now()-interval '4 hours',now()-interval '3 hours',",
     "2.00,'Synthetic HTTP request load result',",
-    "CASE WHEN right(w.title,5)::int%4=3 THEN 'verified' ELSE 'submitted' END,",
-    'CASE WHEN right(w.title,5)::int%4=3 THEN $2::uuid ELSE NULL END,',
-    'CASE WHEN right(w.title,5)::int%4=3 THEN now() ELSE NULL END',
+    "CASE WHEN right(w.title,5)::int%5=4 THEN 'verified' ELSE 'submitted' END,",
+    'CASE WHEN right(w.title,5)::int%5=4 THEN $2::uuid ELSE NULL END,',
+    'CASE WHEN right(w.title,5)::int%5=4 THEN now() ELSE NULL END',
     'FROM work_orders w',
     "WHERE w.tenant_id=$1::uuid AND w.title LIKE 'PilotLoad %'",
-    'AND right(w.title,5)::int%4<>0'
+    'AND right(w.title,5)::int%5<>0'
   ].join(' '), [tenant, reviewer, submitter]);
-  assert.equal(reports.rowCount, HTTP_LOAD_SIZE * 3 / 4);
+  assert.equal(reports.rowCount, HTTP_LOAD_SIZE * 4 / 5);
   // ANALYZE as database owner: update planner statistics after synthetic bulk
   // insert before applying real HTTP queries through restricted runtime role.
   await admin.query('ANALYZE work_orders');
