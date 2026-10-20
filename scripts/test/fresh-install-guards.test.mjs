@@ -95,6 +95,10 @@ test('script is read-only, checks extension membership, does not bypass RLS', ()
   assert.match(sql, /pg_depend/);
   assert.match(sql, /pg_extension/);
   assert.match(sql, /pg_namespace/);
+  assert.match(sql, /postgis_topology/);
+  assert.match(sql, /postgis_tiger_geocoder/);
+  assert.match(sql, /n\.nspname = 'topology'/);
+  assert.match(sql, /n\.nspname IN \('tiger', 'tiger_data'\)/);
   assert.match(sql, /relkind IN/);
   assert.match(sql, /left\(n.nspname, 3\)/);
   assert.doesNotMatch(source, /\bdocker compose (?:up|down|run)\b/);
