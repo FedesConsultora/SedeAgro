@@ -52,3 +52,18 @@ test('rejects malformed package names from remote audit response', () => {
     items: { 'private token=secret': { severity: 'high', via: [] } }
   }), 'backend-runtime'), /Unsafe npm package/);
 });
+
+test('metadata counts must correspond to actual npm advisory severities', () => {
+  assert.throws(() => summarizeNpmAudit(audit({
+    moderate: 6, items: { uuid: { severity: 'moderate', via: [] } }
+  }), 'backend-runtime'), /metadata disagrees/);
+  assert.throws(() => summarizeNpmAudit(audit({
+    items: { uuid: { severity: 'moderate', via: [] } }
+  }), 'frontend-build'), /metadata disagrees/);
+});
+
+test('unknown advisory severity cannot be trusted even if counters look clean', () => {
+  assert.throws(() => summarizeNpmAudit(audit({
+    items: { altered: { severity: 'unexpected', via: [] } }
+  }), 'backend-runtime'), /invalid advisory severity/);
+});
