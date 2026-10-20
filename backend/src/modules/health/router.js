@@ -15,7 +15,12 @@ export function createHealthRouter({
   // Readiness: the runtime database connection can currently authenticate.
   // Never leak connection strings, SQL errors, credentials or internal roles.
   router.get('/ready', async (_req, res) => {
-    const ready = await probe();
+    let ready = false;
+    try {
+      ready = (await probe()) === true;
+    } catch {
+      // A failing probe is always unavailable, never an unhandled 500 or 200.
+    }
     res.set('Cache-Control', 'no-store');
     res.status(ready ? 200 : 503).json({ ready });
   });
