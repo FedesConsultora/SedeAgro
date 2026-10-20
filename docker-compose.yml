@@ -33,6 +33,8 @@ services:
     build:
       context: ./backend
       target: prod
+      args:
+        RELEASE_SHA: ${SEDEAGRO_RELEASE_SHA:?Approved release SHA is required}
     container_name: sedeagro_backend
     restart: unless-stopped
     env_file:
@@ -56,6 +58,7 @@ services:
       target: prod
       args:
         VITE_API_URL: /api
+        RELEASE_SHA: ${SEDEAGRO_RELEASE_SHA:?Approved release SHA is required}
     container_name: sedeagro_frontend
     restart: unless-stopped
     depends_on:
