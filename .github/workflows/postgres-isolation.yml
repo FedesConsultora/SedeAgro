@@ -240,3 +240,12 @@ jobs:
           (cd backend && npm audit --omit=dev --json) > backend-audit.json || true
           (cd frontend && npm audit --json) > frontend-audit.json || true
           node scripts/security-audit-report.mjs backend-audit.json frontend-audit.json
+      - name: Suggest lockfile-only semver remediation (diagnostic, not committed)
+        if: failure()
+        run: |
+          cp backend/package-lock.json /tmp/sedeagro-backend-before.json
+          cp frontend/package-lock.json /tmp/sedeagro-frontend-before.json
+          (cd backend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
+          (cd frontend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
+          node scripts/security-lock-delta.mjs backend /tmp/sedeagro-backend-before.json backend/package-lock.json
+          node scripts/security-lock-delta.mjs frontend /tmp/sedeagro-frontend-before.json frontend/package-lock.json
