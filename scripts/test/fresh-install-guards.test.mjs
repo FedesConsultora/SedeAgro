@@ -90,11 +90,13 @@ test('rejects previously migrated, half-created or unfamiliar DB objects', t => 
 
 test('script is read-only, checks extension membership, does not bypass RLS', () => {
   const source = readFileSync(script, 'utf8');
-  assert.match(source, /pg_depend/);
-  assert.match(source, /pg_extension/);
-  assert.match(source, /pg_namespace/);
-  assert.match(source, /relkind IN/);
-  assert.match(source, /left\(n.nspname, 3\)/);
+  const sql = readFileSync(new URL('../sql/first-install-footprint.sql', import.meta.url), 'utf8');
+  assert.match(source, /first-install-footprint\.sql/);
+  assert.match(sql, /pg_depend/);
+  assert.match(sql, /pg_extension/);
+  assert.match(sql, /pg_namespace/);
+  assert.match(sql, /relkind IN/);
+  assert.match(sql, /left\(n.nspname, 3\)/);
   assert.doesNotMatch(source, /\bdocker compose (?:up|down|run)\b/);
-  assert.doesNotMatch(source, /\bDROP\b|\bALTER\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|pg_dump|pg_restore/);
+  assert.doesNotMatch(source + sql, /\bDROP\b|\bALTER\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|pg_dump|pg_restore/);
 });
