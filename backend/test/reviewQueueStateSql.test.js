@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { REVIEW_QUEUE_STATE_GROUPS, reviewQueueStateSql } from '../src/modules/workOrders/reviewQueueStateSql.js';
+import { REVIEW_QUEUE_STATE_GROUPS, reviewQueueStateSql, reviewQueueFilterPredicateSql } from '../src/modules/workOrders/reviewQueueStateSql.js';
 import { REVIEW_QUEUE_STATES, classifyReviewQueueItem } from '../src/modules/workOrders/reviewQueuePolicy.js';
 
 test('SQL filter groups partition the exact server-authoritative eight review states', () => {
@@ -49,4 +49,40 @@ test('global state categories preserve the existing advisory classification sema
   assert.ok(REVIEW_QUEUE_STATE_GROUPS.blocked.includes(state({report:{
     id:randomUUID(), review_status:'submitted', submitted_by:reviewer
   }})));
+});
+
+test('fast no-report and verified closure use exact correlated EXISTS without expensive inputs', () => {
+  const reviewer = randomUUID();
+  const noReport = reviewQueueFilterPredicateSql(reviewer, 'no_report');
+  const closure = reviewQueueFilterPredicateSql(reviewer, 'closure');
+  assert.match(noReport, /^NOT EXISTS \(/);
+  assert.match(noReport, /r\.review_status IN \('submitted', 'verified'\)/);
+  assert.match(closure, /^EXISTS \(/);
+  assert.match(closure, /r\.review_status = 'verified'/);
+  for (const sql of [noReport, closure]) {
+    assert.match(sql, /r\.tenant_id = "WorkOrder"\.tenant_id/);
+    assert.match(sql, /r\.work_order_id = "WorkOrder"\.id/);
+    assert.doesNotMatch(sql, /work_order_inputs|evidence_assets|work_order_execution_exceptions|LIMIT 1/);
+  }
+});
+test('complex review and blocked groups still evaluate complete precedent-aware CASE', () => {
+  const reviewer = randomUUID();
+  for (const state of ['blocked', 'review']) {
+    const predicate = reviewQueueFilterPredicateSql(reviewer, state);
+    assert.match(predicate, /work_order_executions/);
+    assert.match(predicate, /work_order_inputs/);
+    assert.match(predicate, /evidence_assets/);
+    assert.match(predicate, /work_order_execution_exceptions/);
+    assert.match(predicate, / IN \(/);
+    for (const member of REVIEW_QUEUE_STATE_GROUPS[state]) {
+      assert.ok(predicate.includes("'" + member + "'"), member);
+    }
+  }
+});
+test('review predicates reject invalid states and unsafe reviewer fragments', () => {
+  const reviewer = randomUUID();
+  assert.throws(() => reviewQueueFilterPredicateSql(reviewer, 'all'), /non-all/);
+  assert.throws(() => reviewQueueFilterPredicateSql(reviewer, 'unexpected'), /non-all/);
+  assert.throws(() => reviewQueueFilterPredicateSql(null, 'closure'), /UUID/);
+  assert.throws(() => reviewQueueFilterPredicateSql("' OR true --", 'no_report'), /UUID/);
 });
