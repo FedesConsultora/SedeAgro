@@ -27,6 +27,15 @@ test('fails closed on critical or high advisories with public package-only conte
   assert.ok(summary.affected.some(x => x.package === 'pkg' && x.fixAvailable));
 });
 
+test('moderate advisories stay visible without silently turning into a high-severity PASS', () => {
+  const result = summarizeNpmAudit(audit({ moderate: 1, items: {
+    parser: { severity: 'moderate', fixAvailable: true, via: [{ title: 'Review input parser handling' }] }
+  } }), 'backend-runtime');
+  assert.equal(result.blocked, false);
+  assert.equal(result.moderate, 1);
+  assert.deepEqual(result.affected.map(x => x.package), ['parser']);
+});
+
 test('rejects untrustworthy/incomplete audit reports rather than marking them green', () => {
   for (const payload of [
     null, {}, { error: { code: 'ENOTFOUND' } },
