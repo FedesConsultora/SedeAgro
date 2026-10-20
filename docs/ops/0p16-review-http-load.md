@@ -27,3 +27,23 @@ Los tests unitarios adversariales en `scripts/test/benchmark-review-queue-http.t
 - Los p95 y p99 de **solo 7 mediciones** son descriptivos, no percentiles robustos de carga y no autorizan fijar un SLO comercial. Sin presupuesto de latencia validado con usuarios/operación, no se aprueba rendimiento productivo.
 - #143 queda **ABIERTO**: faltan 20k/50k órdenes por tenant, distribuciones sesgadas con excepciones/insumos/evidencias, lecturas concurrentes, mezcla de tenants, comparativa SQL/HTTP en staging aislado, límites de infraestructura y decisión humana de SLO.
 - La certificación global #130 requiere separadamente TLS, backup/restauración REAL privado, rollback ensayado, Android/iOS y offline rural con evidencias; un workflow SUCCESS no demuestra GO de producción.
+
+## Evidencia de primera corrida real en GitHub (premerge)
+
+Run [#39468766435](https://github.com/FedesConsultora/SedeAgro/actions/runs/39468766435), SHA exacto PR `f15c6177e2cf63d71c4d69669e0d7d9ac170d610`, **COMPLETED SUCCESS** primer intento, cuatro jobs `SUCCESS`. CPU lógica 4, memoria 15.984 MiB, Linux x64, Node 22.23.3, PostgreSQL 16.4, 5.000 órdenes y 4.000 partes sintéticos. **Valores p95 del cliente Node a través de Vite/Express/PostgreSQL**, una muestra por request, 7 requests por escenario:
+
+| Escenario HTTP | p95 medido | p50 medido | Página 1/2 |
+| --- | ---: | ---: | --- |
+| newest_all | 15,215 ms | 11,369 ms | 50/50 |
+| no_report | 13,447 ms | 12,091 ms | 50/50 |
+| blocked | 12,872 ms | 11,934 ms | 50/50 |
+| human_review | 12,604 ms | 12,111 ms | 50/50 |
+| closure | 12,529 ms | 10,736 ms | 50/50 |
+| type_application | 11,120 ms | 10,031 ms | 50/50 |
+| priority_urgent | 13,271 ms | 10,785 ms | 50/50 |
+| due_overdue | 11,727 ms | 10,961 ms | 50/50 |
+| composed | 12,008 ms | 11,330 ms | 50/50 |
+
+Las nueve consultas registraron `orderStable:true` y `tenantIsolated:true`, HMAC cursor válido, sin registros repetidos entre páginas, y 422 real para cursor alterado o replay con distinto sort. Tras cambiar a la sesión del segundo tenant, Chromium mostró cero filas del primero.
+
+**Alcance limitado:** percentil p99 con 7 muestras coincide con el máximo (igual al p95 nearest-rank); no tiene validez como SLO. Las cifras son de **esa ejecución premerge**, no un promedio entre runs ni una promesa de producción. Se repetirá CI para el SHA de este documento y tras merge. Siguen pendientes 20k/50k, sesiones concurrentes, carga de tablas de insumos/excepciones/evidencias, latencia HTTPS, red real y validación de escala en staging.
