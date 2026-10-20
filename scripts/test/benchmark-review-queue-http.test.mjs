@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HTTP_LOAD_FLAG, HTTP_LOAD_CASES, HTTP_LOAD_SIZE, HTTP_LOAD_SAMPLES,
+  HTTP_LOAD_SCALES, HTTP_LOAD_LARGE_CASES, HTTP_LOAD_CONCURRENCY, validateLoadScales,
   assertHttpLoadConfig, percentile, validateReviewPage, makeReviewUrl
 } from '../benchmark-review-queue-http.mjs';
 
@@ -67,4 +68,34 @@ test('real-load query URL keeps static loopback target and bounds allowed filter
   assert.equal(HTTP_LOAD_CASES.length,9);
   assert.equal(HTTP_LOAD_SIZE,5000);
   assert.equal(HTTP_LOAD_SAMPLES,7);
+});
+
+test('increasing load only applies authorized additive synthetic 5k/20k/50k scales', () => {
+  assert.deepEqual(validateLoadScales(HTTP_LOAD_SCALES), [5000, 20000, 50000]);
+  assert.equal(HTTP_LOAD_CONCURRENCY, 3);
+  assert.deepEqual(HTTP_LOAD_LARGE_CASES.map(item => item.name),
+    ['newest_all', 'blocked', 'human_review', 'due_overdue', 'composed']);
+  for (const invalid of [
+    [5000], [20000, 50000], [5000, 5000],
+    [5000, 20000, 20000], [5000, 20000, 50001],
+    [5000, 30001], [5000, 20000, 50000, 55000],
+    [5000, 20000, '50000'], null
+  ]) assert.throws(() => validateLoadScales(invalid), /BLOCKED/);
+  const cloned = validateLoadScales(HTTP_LOAD_SCALES);
+  cloned[1] = 35000;
+  assert.equal(HTTP_LOAD_SCALES[1], 20000, 'Canonical CI scale is immutable');
+});
+
+test('larger-scale scenarios include costly state, composable filters, due sort and newest', () => {
+  assert.equal(HTTP_LOAD_LARGE_CASES.length, 5);
+  for (const item of HTTP_LOAD_LARGE_CASES) {
+    assert.ok(HTTP_LOAD_CASES.includes(item));
+    const url = new URL(makeReviewUrl(
+      'http://127.0.0.1:4177/api/v1/work-orders/review-queue', item.query));
+    assert.equal(url.searchParams.get('q'), 'PilotLoad');
+    assert.equal(url.hostname, '127.0.0.1');
+  }
+  assert.deepEqual(HTTP_LOAD_LARGE_CASES.find(item => item.name === 'composed').query,
+    { type: 'application', state: 'blocked', priority: 'urgent',
+      due: 'overdue', sort: 'due_first' });
 });
