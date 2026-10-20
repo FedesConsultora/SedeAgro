@@ -78,7 +78,7 @@ test('revision endpoint serves only a full image SHA and never claims missing pr
   const sha = 'b'.repeat(40);
   const app = express();
   app.use('/valid', createHealthRouter({ probe: async () => true, revision: sha }));
-  app.use('/missing', createHealthRouter({ probe: async () => true, revision: undefined }));
+  app.use('/missing', createHealthRouter({ probe: async () => true, revision: null }));
   app.use('/invalid', createHealthRouter({ probe: async () => true, revision: 'demo' }));
   const server = createServer(app);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
