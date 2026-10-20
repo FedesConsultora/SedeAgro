@@ -58,7 +58,11 @@ test('live farm and work order forms reject fabricated lookup choices', () => {
 });
 
 test('actual Chromium flow proves focus cycle and blocked live lookups', () => {
-  assert.match(browser, /for \(let cycle = 1; cycle <= 4; cycle \+= 1\)/);
+  assert.match(browser, /for \\(let cycle = 1; cycle <= focusCycles; cycle \\+= 1\\)/);
+  assert.match(browser, /getFocusStressCycles\\(\\)/);
+  assert.match(browser, /'farm-pending-last'/);
+  assert.match(browser, /'farm-after-lookup-new-last'/);
+  assert.match(browser, /'farm-after-lookup-restored-opener'/);
   assert.match(browser, /PASS: Chromium farm modal focus loop /);
   assert.match(browser, /'farm-ready-root-' \+ cycle/);
   assert.match(browser, /'farm-ready-last-' \+ cycle/);
