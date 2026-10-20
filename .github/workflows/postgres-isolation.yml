@@ -55,6 +55,7 @@ jobs:
           node --test scripts/test/production-security-gate.test.mjs
           node --test scripts/test/focus-stress-config.test.mjs
           node --test scripts/test/benchmark-review-queue.test.mjs
+          node --test scripts/test/benchmark-review-queue-http.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -133,6 +134,7 @@ jobs:
         env:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
+          SEDEAGRO_HTTP_LOAD_PROBE: I_ACCEPT_ONLY_GITHUB_DISPOSABLE_TEST_DATABASE
         run: node scripts/acceptance-browser-review-inbox.mjs
 
   browser-offline:
