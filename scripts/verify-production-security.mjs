@@ -66,7 +66,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   catch (error) {
     // Messages are sanitized and do not echo archive content or env secrets.
     console.error(String(error?.message || 'BLOCKED: invalid release security decision')
-      .replace(/[^\w .:@/-]/g, ''));
+      .replace(/[^a-zA-Z0-9 .:_@-]/g, ''));
     process.exitCode = 2;
   }
 }
