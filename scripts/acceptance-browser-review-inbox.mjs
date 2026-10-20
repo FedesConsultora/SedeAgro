@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import pg from 'pg';
 import { chromium } from 'playwright';
+import { runHttpReviewLoad } from './benchmark-review-queue-http.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const adminUrl = process.env.TEST_DATABASE_ADMIN_URL;
@@ -750,6 +751,14 @@ try {
   await moderatorPanel.getByText('Historial de revocaciones (últimas 50)').click();
   await moderatorPanel.getByText('Publicación obsoleta en esta campaña').waitFor();
   console.log('PASS: real Chromium admin revokes another publisher only after confirmation; audit survives reload and view stays private with owner');
+
+  // Final independent API benchmark after all UI scenarios, so adding 5000
+  // synthetic orders cannot change the earlier deterministic 50/61 assertions.
+  // The browser's REAL HttpOnly cookie is forwarded by Playwright APIContext.
+  await runHttpReviewLoad({
+    admin, page, tenant: ownerA.tenant.id, field,
+    reviewer: ownerA.user.id, submitter: extraAuthor
+  });
 
   // Same-cookie logout removes the entire tenant-scoped inbox. Logging in as
   // a different, real registered tenant must not revive old entries/cursors.
