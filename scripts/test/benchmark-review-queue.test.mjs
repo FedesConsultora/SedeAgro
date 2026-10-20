@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assertDisposablePerfConfig, percentile, buildProbeSql, summarizeExplain
+  assertDisposablePerfConfig, percentile, buildProbeSql, buildProbeQuery, buildProbeParams, summarizeExplain
 } from '../benchmark-review-queue.mjs';
 
 const safe = {
@@ -69,4 +69,23 @@ test('EXPLAIN aggregator consumes actual JSON plan and measures nested loops/buf
     Plan: { 'Node Type': 'Limit', 'Actual Rows': 0, 'Actual Loops': 1,
       Plans: [{ 'Actual Loops': 5 }] }
   }]), /malformed PostgreSQL plan node/);
+});
+
+test('baseline and optimized page queries retain same LIMIT and parameter contracts', () => {
+  const fixture = { tenant: reviewer };
+  const group = { state: 'no_report', type: 'application' };
+  const before = buildProbeQuery(reviewer, group.state, 'baseline');
+  const after = buildProbeQuery(reviewer, group.state, 'optimized');
+  assert.ok(before.includes('work_order_inputs'));
+  assert.ok(after.includes('NOT EXISTS'));
+  assert.ok(!after.includes('work_order_inputs'));
+  assert.ok(after.includes('LIMIT 51'));
+  assert.deepEqual(buildProbeParams(fixture, group, 'baseline'),
+    [reviewer, 'application', ['awaiting_report']]);
+  assert.deepEqual(buildProbeParams(fixture, group, 'optimized'),
+    [reviewer, 'application']);
+  assert.ok(buildProbeSql(reviewer, 'closure', 'optimized').includes('EXISTS'));
+  assert.ok(!buildProbeSql(reviewer, 'closure', 'optimized').includes('work_order_inputs'));
+  assert.ok(buildProbeSql(reviewer, 'blocked', 'optimized').includes('work_order_inputs'));
+  assert.throws(() => buildProbeSql(reviewer, 'review', 'invalid'), /Unrecognized/);
 });
