@@ -543,7 +543,7 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       ...(reviewState === 'all' && !titleQuery ? {} : {
         [Op.and]: [
           ...(reviewState === 'all' ? [] : [
-            where(literal(reviewQueueFilterPredicateSql(req.auth.user.id, reviewState)), {
+            where(literal(reviewQueueFilterPredicateSql(req.auth.user.id, reviewState, req.tenantId)), {
               [Op.eq]: true
             })
           ]),

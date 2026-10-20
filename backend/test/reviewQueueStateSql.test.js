@@ -68,7 +68,7 @@ test('fast no-report and verified closure use exact correlated EXISTS without ex
 test('complex review and blocked groups still evaluate complete precedent-aware CASE', () => {
   const reviewer = randomUUID();
   for (const state of ['blocked', 'review']) {
-    const predicate = reviewQueueFilterPredicateSql(reviewer, state);
+    const predicate = reviewQueueFilterPredicateSql(reviewer, state, randomUUID());
     assert.match(predicate, /work_order_executions/);
     assert.match(predicate, /work_order_inputs/);
     assert.match(predicate, /evidence_assets/);
@@ -85,4 +85,26 @@ test('review predicates reject invalid states and unsafe reviewer fragments', ()
   assert.throws(() => reviewQueueFilterPredicateSql(reviewer, 'unexpected'), /non-all/);
   assert.throws(() => reviewQueueFilterPredicateSql(null, 'closure'), /UUID/);
   assert.throws(() => reviewQueueFilterPredicateSql("' OR true --", 'no_report'), /UUID/);
+});
+
+test('complex SQL reads precomputed per-tenant aggregates under a validated UUID, not per-candidate LATERAL', () => {
+  const reviewer = randomUUID();
+  const tenant = randomUUID();
+  const sql = reviewQueueFilterPredicateSql(reviewer, 'review', tenant);
+  assert.match(sql, /^"WorkOrder"\.id IN \(/);
+  assert.match(sql, /orders\.tenant_id = '/);
+  assert.match(sql, /work_order_executions report/);
+  assert.match(sql, /report\.review_status = 'submitted'/);
+  assert.match(sql, /COUNT\(\*\)::integer AS item_count/);
+  assert.match(sql, /BOOL_OR\(ex\.review_status = 'rejected'\)/);
+  assert.match(sql, /BOOL_OR\(ex\.review_status <> 'approved'\)/);
+  assert.match(sql, /jsonb_array_length/);
+  assert.match(sql, /evidence_assets/);
+  assert.doesNotMatch(sql, /LATERAL|LIMIT 1/);
+  assert.ok(sql.includes("'" + tenant.toLowerCase() + "'::uuid"));
+  assert.ok(sql.includes("'" + reviewer.toLowerCase() + "'::uuid"));
+  assert.throws(() => reviewQueueFilterPredicateSql(reviewer, 'review'),
+    /tenant UUID required/);
+  assert.throws(() => reviewQueueFilterPredicateSql(reviewer, 'blocked', "bad' --"),
+    /tenant UUID required/);
 });

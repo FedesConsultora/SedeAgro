@@ -68,7 +68,7 @@ export function reviewQueueStateSql(reviewerId) {
 // ANY verified report has precedence over submitted in the legacy CASE.
 // A rejected report is deliberately not an active report: it still counts as
 // "no_report", matching reviewQueueStateSql's LATERAL filter.
-export function reviewQueueFilterPredicateSql(reviewerId, reviewState) {
+export function reviewQueueFilterPredicateSql(reviewerId, reviewState, tenantId = null) {
   if (typeof reviewerId !== 'string' || !UUID.test(reviewerId) ||
       !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, reviewState) ||
       reviewState === 'all') {
@@ -86,9 +86,60 @@ export function reviewQueueFilterPredicateSql(reviewerId, reviewState) {
   if (reviewState === 'closure') {
     return related("r.review_status = 'verified'");
   }
-  // All other categories depend on actor identity, the exact latest report,
-  // inputs, exceptions and evidence precedence. Keep the proven CASE unchanged.
+  // Multi-row set classification is only enabled with an authenticated UUID.
+  // Keep all candidate relations tenant-scoped even though FORCE RLS applies.
+  if (typeof tenantId !== 'string' || !UUID.test(tenantId)) {
+    throw new Error('Authenticated tenant UUID required for review-state SQL');
+  }
+  const tenant = "'" + tenantId.toLowerCase() + "'::uuid";
+  const reviewer = "'" + reviewerId.toLowerCase() + "'::uuid";
+  // The partial unique index ux_work_execution_one_active guarantees a single
+  // submitted OR verified row per tenant/order. This branch only needs the
+  // submitted row; verified and absent reports belong to other state groups.
+  // SQL aggregate tables are built ONCE for this tenant, rather than via
+  // nested correlated LATERAL reads for each candidate before LIMIT.
   const states = REVIEW_QUEUE_STATE_GROUPS[reviewState];
-  return reviewQueueStateSql(reviewerId) + ' IN (' +
-    states.map(value => "'" + value + "'").join(', ') + ')';
+  return `"WorkOrder".id IN (
+    SELECT orders.id
+    FROM work_orders orders
+    JOIN work_order_executions report
+      ON report.tenant_id = orders.tenant_id
+      AND report.work_order_id = orders.id
+      AND report.review_status = 'submitted'
+    LEFT JOIN (
+      SELECT wi.work_order_id, COUNT(*)::integer AS item_count
+      FROM work_order_inputs wi
+      WHERE wi.tenant_id = ${tenant}
+      GROUP BY wi.work_order_id
+    ) planned ON planned.work_order_id = orders.id
+    LEFT JOIN (
+      SELECT ex.work_order_execution_id,
+        BOOL_OR(ex.review_status = 'rejected') AS has_rejected,
+        BOOL_OR(ex.review_status <> 'approved') AS has_pending
+      FROM work_order_execution_exceptions ex
+      WHERE ex.tenant_id = ${tenant}
+      GROUP BY ex.work_order_execution_id
+    ) exceptional ON exceptional.work_order_execution_id = report.id
+    LEFT JOIN (
+      SELECT ev.work_order_execution_id, TRUE AS has_evidence
+      FROM evidence_assets ev
+      WHERE ev.tenant_id = ${tenant}
+        AND ev.work_order_execution_id IS NOT NULL
+      GROUP BY ev.work_order_execution_id
+    ) evidence ON evidence.work_order_execution_id = report.id
+    WHERE orders.tenant_id = ${tenant} AND orders.status = 'in_progress'
+      AND CASE
+        WHEN report.submitted_by = ${reviewer} THEN 'self_authored'
+        WHEN COALESCE(planned.item_count, 0) > 0
+          AND COALESCE(CASE
+            WHEN jsonb_typeof(report.input_declaration->'items') = 'array'
+            THEN jsonb_array_length(report.input_declaration->'items')
+            END, -1) <> planned.item_count THEN 'awaiting_inputs'
+        WHEN COALESCE(exceptional.has_rejected, FALSE) THEN 'rejected_exception'
+        WHEN COALESCE(exceptional.has_pending, FALSE) THEN 'pending_exception'
+        WHEN orders.type IN ('application', 'fertilization')
+          AND NOT COALESCE(evidence.has_evidence, FALSE) THEN 'awaiting_evidence'
+        ELSE 'human_review'
+      END IN (${states.map(value => "'" + value + "'").join(', ')})
+  )`;
 }
