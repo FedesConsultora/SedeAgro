@@ -79,5 +79,14 @@ for key in POSTGRES_PASSWORD APP_DB_PASSWORD; do
   esac
 done
 
+# A security-inventory CI success is not release acceptance. Refuse the
+# production deploy while any moderate backend advisory remains unresolved.
+# Run after Git/secret checks, still BEFORE Docker, backups or migrations.
+command -v node >/dev/null 2>&1 || fail "Node.js required for release security admission"
+if ! node "$ROOT/scripts/verify-production-security.mjs" \
+  "$ROOT/scripts/security-moderate-baseline.json" "$ROOT/backend/package-lock.json"; then
+  fail "security P0 unresolved; see issue #137 and approved release-security policy"
+fi
+
 printf 'PASS read-only production preflight: clean main/origin/main at %s, restricted env permissions, prod-only config and explicit approval.\n' "$SHA"
 printf 'NOT CERTIFIED: backup/restore of staging, live database readiness, mobile field acceptance or VPS cutover.\n'

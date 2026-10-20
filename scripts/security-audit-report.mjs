@@ -70,7 +70,11 @@ function main() {
   const baseline = JSON.parse(readFileSync(files[3], 'utf8'));
   const inventory = enforceModerateInventory(backendSummary, baseline, lock);
   console.log(JSON.stringify(inventory));
-  console.log('UNRESOLVED: moderate backend advisories require remediation or explicit GO risk acceptance.');
+  if (inventory.releaseAccepted !== true) {
+    console.log('UNRESOLVED: backend security inventory is NOT an admission for production; see #137.');
+  } else {
+    console.log('PASS: zero moderate backend advisories accepted by explicitly remediated baseline.');
+  }
   if (blocked) {
     console.error('BLOCKED: high/critical npm advisory in production runtime or frontend build lock.');
     process.exitCode = 1;
