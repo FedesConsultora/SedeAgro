@@ -243,7 +243,7 @@ async function measure(app, fixture, scale) {
         const started = performance.now();
         const result = await app.query(sql, parameters);
         clientTimes.push(performance.now() - started);
-        assert.equal(result.rowCount, 1, 'Postgres must return exactly one JSON plan');
+        assert.equal(result.rows.length, 1, 'Postgres EXPLAIN must return exactly one JSON plan row');
         const stats = summarizeExplain(result.rows[0]['QUERY PLAN']);
         assert.ok(stats.returnedRows >= 0 && stats.returnedRows <= 51);
         assert.ok(stats.executionMs >= 0 && stats.planningMs >= 0);
