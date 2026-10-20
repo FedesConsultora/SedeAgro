@@ -74,6 +74,28 @@ test('times out fast and never piles up database checks while an earlier call ha
   assert.equal(calls, 2);
 });
 
+test('revision endpoint serves only a full image SHA and never claims missing provenance', async (t) => {
+  const sha = 'b'.repeat(40);
+  const app = express();
+  app.use('/valid', createHealthRouter({ probe: async () => true, revision: sha }));
+  app.use('/missing', createHealthRouter({ probe: async () => true, revision: null }));
+  app.use('/invalid', createHealthRouter({ probe: async () => true, revision: 'demo' }));
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = 'http://127.0.0.1:' + server.address().port;
+  const success = await fetch(base + '/valid/revision');
+  assert.equal(success.status, 200);
+  assert.equal(success.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await success.json(), { revision: sha });
+  for (const endpoint of ['/missing/revision', '/invalid/revision']) {
+    const result = await fetch(base + endpoint);
+    assert.equal(result.status, 503);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await result.json(), { revision: null });
+  }
+});
+
 test('HTTP liveness remains 200 and readiness provides 503/200, no-store, no details', async (t) => {
   let healthy = false;
   let reject = false;

@@ -60,10 +60,20 @@ if [[ "$(request_status "$URL/health/ready")" != "200" ]]; then
   echo "Falla readiness PostgreSQL del backend en staging." >&2
   exit 1
 fi
+# Match the SHA baked into the backend image actually serving HTTPS.
+# A successful local checkout and matching SPA bytes alone are insufficient.
+if ! served_revision="$(curl --fail --silent --show-error --max-time 15 "$URL/health/revision")"; then
+  echo "No se pudo validar revision del backend servido por staging." >&2
+  exit 1
+fi
+if [[ "$served_revision" != "{\"revision\":\"$EXPECTED_SHA\"}" ]]; then
+  echo "BLOCKED: backend de staging sirve un SHA distinto o sin proveniencia." >&2
+  exit 1
+fi
 if [[ "$(request_status "$URL/api/v1/auth/me")" != "401" ]]; then
   echo "Una solicitud sin JWT debe devolver 401, no datos privados." >&2
   exit 1
 fi
-echo "PASS staging read-only: HTTPS, HSTS, CSP, anti-framing, liveness/readiness 200 y acceso anónimo 401."
-echo "ATENCIÓN: este script NO certifica RLS, restores, apps móviles ni el commit desplegado."
+echo "PASS staging read-only: HTTPS, HSTS, CSP, liveness/readiness 200, backend SHA exacto y acceso anónimo 401."
+echo "ATENCIÓN: verifica el SHA declarado por la imagen backend, no los digests OCI ni RLS, restores o QA móvil."
 echo "El SHA verificado corresponde al checkout local: $ACTUAL_SHA"

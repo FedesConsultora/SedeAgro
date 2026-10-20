@@ -46,6 +46,7 @@ function fixture(t) {
     '  exit 0',
     'fi',
     'case "$url" in',
+    '  */health/revision) printf \'{"revision":"%s"}\\n\' "$MOCK_BACKEND_SHA" ;;',
     '  */health/ready) echo "$MOCK_READY_STATUS" ;;',
     '  */health) echo 200 ;;',
     '  */api/v1/auth/me) echo "$MOCK_AUTH_STATUS" ;;',
@@ -55,7 +56,8 @@ function fixture(t) {
   ].join('\n'), { mode: 0o700 });
   chmodSync(curl, 0o700);
   const env = { ...process.env, PATH: bin + ':' + (process.env.PATH || '/usr/bin:/bin'),
-    MOCK_GIT_SHA: sha, MOCK_HSTS_MAX: '86400', MOCK_READY_STATUS: '200',
+    MOCK_GIT_SHA: sha, MOCK_BACKEND_SHA: sha,
+    MOCK_HSTS_MAX: '86400', MOCK_READY_STATUS: '200',
     MOCK_AUTH_STATUS: '401' };
   const attempt = (vars = {}, args = ['https://staging.example.test', sha]) =>
     spawnSync('bash', [join(repo, 'scripts/verify-pilot-staging.sh'), ...args],
@@ -67,7 +69,7 @@ test('staging smoke accepts validated HTTPS security headers and live DB readine
   const { attempt } = fixture(t);
   const result = attempt();
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /liveness\/readiness 200/);
+  assert.match(result.stdout, /backend SHA exacto/);
   assert.match(result.stdout, /El SHA verificado corresponde al checkout local/);
 });
 
@@ -77,6 +79,8 @@ test('rejects missing or too-short HSTS and unavailable PostgreSQL', (t) => {
     { MOCK_NO_HSTS: '1' },
     { MOCK_HSTS_MAX: '100' },
     { MOCK_READY_STATUS: '503' },
+    { MOCK_BACKEND_SHA: 'b'.repeat(40) },
+    { MOCK_BACKEND_SHA: 'not-available' },
     { MOCK_AUTH_STATUS: '200' }
   ]) {
     const result = attempt(override);
