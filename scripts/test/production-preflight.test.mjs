@@ -11,6 +11,11 @@ import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('../production-preflight.sh', import.meta.url));
 const source = readFileSync(script, 'utf8');
+const securityScript = fileURLToPath(new URL('../verify-production-security.mjs', import.meta.url));
+const securityCurrentPolicy = JSON.parse(readFileSync(new URL('../security-moderate-baseline.json', import.meta.url), 'utf8'));
+const securityCurrentLock = JSON.parse(readFileSync(new URL('../../backend/package-lock.json', import.meta.url), 'utf8'));
+const zeroRiskPolicy = { schema: 1, scope: 'backend-runtime', reviewBy: '2099-12-31', maxModerate: 0, status: 'remediated', packages: {} };
+const safeSyntheticLock = { lockfileVersion: 3, packages: { '': { dependencies: { pg: '^8.13.1' } }, 'node_modules/pg': { version: '8.16.0' } } };
 
 const rootEnv = [
   'POSTGRES_DB=sedeagro',
@@ -41,7 +46,7 @@ function must(command, args, cwd) {
   return result.stdout.trim();
 }
 
-function fixture(t) {
+function fixture(t, releasePolicy = zeroRiskPolicy, releaseLock = safeSyntheticLock) {
   const work = mkdtempSync(join(tmpdir(), 'sedeagro-release-gate-'));
   t.after(() => rmSync(work, { recursive: true, force: true }));
   const root = join(work, 'repo');
@@ -49,6 +54,10 @@ function fixture(t) {
   mkdirSync(join(root, 'scripts'), { recursive: true });
   mkdirSync(join(root, 'backend'), { recursive: true });
   copyFileSync(script, join(root, 'scripts/production-preflight.sh'));
+  copyFileSync(securityScript, join(root, 'scripts/verify-production-security.mjs'));
+  writeFileSync(join(root, 'scripts/security-moderate-baseline.json'), JSON.stringify(releasePolicy));
+  writeFileSync(join(root, 'backend/package-lock.json'), JSON.stringify(releaseLock));
+  writeFileSync(join(root, 'package.json'), '{"type":"module"}\n');
   writeFileSync(join(root, '.gitignore'), '.env\nbackend/.env\n');
   writeFileSync(join(root, 'README.md'), 'Synthetic disposable release fixture\n');
   writeFileSync(join(root, '.env'), rootEnv, { mode: 0o600 });
@@ -56,7 +65,7 @@ function fixture(t) {
   chmodSync(join(root, '.env'), 0o600);
   chmodSync(join(root, 'backend/.env'), 0o600);
   must('git', ['init', '-b', 'main', '-q', root], work);
-  must('git', ['-C', root, 'add', 'README.md', '.gitignore', 'scripts/production-preflight.sh'], work);
+  must('git', ['-C', root, 'add', 'README.md', '.gitignore', 'package.json', 'backend/package-lock.json', 'scripts/production-preflight.sh', 'scripts/verify-production-security.mjs', 'scripts/security-moderate-baseline.json'], work);
   must('git', ['-C', root, '-c', 'user.name=ReleaseFixture',
     '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'initial'], work);
   must('git', ['init', '--bare', '-q', origin], work);
@@ -178,4 +187,20 @@ test('does not source or evaluate release-critical env values', (t) => {
   assert.equal(existsSync(marker), false);
   assert.doesNotMatch(source, /(?:^|\n)\s*(?:source|\.)\s+.*\.env/m);
   assert.doesNotMatch(source, /\bdocker (?:compose|run|exec)\b/);
+});
+
+test('current six-moderate inventory refuses production despite correct SHA and owner deploy approval', (t) => {
+  const { attempt, sha } = fixture(t, securityCurrentPolicy, securityCurrentLock);
+  const out = attempt();
+  rejected(out, /security P0 unresolved/);
+  assert.match(out.stderr, /unresolved moderate advisories/);
+  assert.doesNotMatch(out.stdout, /PASS read-only production preflight/);
+  assert.equal(typeof sha, 'string');
+});
+
+test('synthetic remediated release must also eliminate every recorded vulnerable version', (t) => {
+  const lock = structuredClone(safeSyntheticLock);
+  lock.packages['node_modules/uuid'] = { version: '8.3.2' };
+  const { attempt } = fixture(t, zeroRiskPolicy, lock);
+  rejected(attempt(), /security P0 unresolved/);
 });
