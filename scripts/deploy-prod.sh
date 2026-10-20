@@ -77,6 +77,12 @@ if [[ "$ready" -ne 1 ]]; then
   exit 1
 fi
 
+# Backup must have been made and RESTORED on an isolated instance by the operator.
+# This read-only check binds that external approval to the archive digest and
+# exact release SHA. Refuse ALL migrations if it cannot be independently listed.
+echo "Verificando respaldo externo aprobado antes de migraciones..."
+bash scripts/verify-production-backup.sh
+
 # Migrations execute with the schema owner, never with the HTTP server's limited role.
 echo "Aplicando migraciones y catálogo global con rol propietario..."
 docker compose run --rm --no-deps \
@@ -98,6 +104,30 @@ docker compose exec -T db psql \
 
 echo "Recreando backend y frontend con credenciales de aplicación no privilegiadas..."
 docker compose up -d --no-deps backend frontend
+
+# Liveness /health is not sufficient: require actual runtime DB readiness.
+# Keep the global proxy reload after both the API and SPA pass. This does NOT
+# make an in-place Compose replacement an atomic / zero-downtime cutover.
+echo "Esperando readiness PostgreSQL real desde el frontend interno..."
+ready=0
+for _ in $(seq 1 30); do
+  if docker compose exec -T frontend \
+    wget -qO- http://sedeagro_backend:3001/health/ready 2>/dev/null |
+      grep -q '"ready":true'; then
+    ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$ready" -ne 1 ]]; then
+  echo "BLOCKED: nueva API no alcanzó /health/ready. No declarar deploy exitoso ni recargar proxy." >&2
+  exit 1
+fi
+if ! docker compose exec -T frontend \
+  wget -qO- http://127.0.0.1/index.html >/dev/null 2>&1; then
+  echo "BLOCKED: nueva SPA interna no respondió 200. No declarar deploy exitoso ni recargar proxy." >&2
+  exit 1
+fi
 
 echo "Recargando proxy global si existe..."
 if docker ps --format '{{.Names}}' | grep -q '^fedes-proxy$'; then
