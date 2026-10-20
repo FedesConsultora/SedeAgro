@@ -62,7 +62,7 @@ export function percentile(values, fraction) {
   return Math.round(ordered[Math.ceil(ordered.length * fraction) - 1] * 1000) / 1000;
 }
 
-export function buildProbeQuery(reviewerId, state, mode = 'baseline') {
+export function buildProbeQuery(reviewerId, state, mode = 'baseline', tenantId = reviewerId) {
   if (!uuidRe.test(reviewerId) || !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, state) ||
       !['baseline', 'optimized'].includes(mode)) {
     throw new Error('Unrecognized review performance probe');
@@ -70,7 +70,7 @@ export function buildProbeQuery(reviewerId, state, mode = 'baseline') {
   const selected = REVIEW_QUEUE_STATE_GROUPS[state];
   const predicate = selected === null ? '' : mode === 'baseline'
     ? ' AND ' + reviewQueueStateSql(reviewerId) + ' = ANY($3::text[])'
-    : ' AND (' + reviewQueueFilterPredicateSql(reviewerId, state) + ')';
+    : ' AND (' + reviewQueueFilterPredicateSql(reviewerId, state, tenantId) + ')';
   // Fixed sort/limit and same production state projection or optimized predicate.
   return [
     'SELECT "WorkOrder".id, "WorkOrder".created_at',
@@ -97,9 +97,9 @@ export function buildProbeParams(fixture, testCase, mode = 'baseline') {
   return params;
 }
 
-export function buildProbeSql(reviewerId, state, mode = 'baseline') {
+export function buildProbeSql(reviewerId, state, mode = 'baseline', tenantId = reviewerId) {
   return 'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' +
-    buildProbeQuery(reviewerId, state, mode);
+    buildProbeQuery(reviewerId, state, mode, tenantId);
 }
 
 export function summarizeExplain(explainValue) {
@@ -269,7 +269,7 @@ async function measure(app, fixture, scale) {
       for (const mode of ['baseline', 'optimized']) {
         diagnosticPhase = 'parity-' + scale + '-' + testCase.state + '-' + testCase.type + '-' + mode;
         const expected = await app.query(
-          buildProbeQuery(fixture.reviewer, testCase.state, mode),
+          buildProbeQuery(fixture.reviewer, testCase.state, mode, fixture.tenant),
           buildProbeParams(fixture, testCase, mode));
         snapshots[mode] = expected.rows.map(row => row.id);
       }
@@ -278,7 +278,7 @@ async function measure(app, fixture, scale) {
       for (const mode of ['baseline', 'optimized']) {
         diagnosticPhase = 'explain-' + scale + '-' + testCase.state + '-' + testCase.type + '-' + mode;
         const parameters = buildProbeParams(fixture, testCase, mode);
-        const sql = buildProbeSql(fixture.reviewer, testCase.state, mode);
+        const sql = buildProbeSql(fixture.reviewer, testCase.state, mode, fixture.tenant);
         const serverTimes = [];
         const clientTimes = [];
         const plans = [];
