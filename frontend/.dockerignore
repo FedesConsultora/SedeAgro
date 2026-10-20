@@ -1,0 +1,18 @@
+# Never pass private local data or generated output into the Vite build context.
+# The release uses only explicit VITE_API_URL build arguments.
+.git
+.gitignore
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+node_modules
+dist
+coverage
+playwright-report
+test-results
+*.log
+npm-debug.log*
+.DS_Store
