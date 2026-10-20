@@ -60,12 +60,24 @@ jobs:
         run: npm --workspace frontend run test
       - name: Build React frontend
         run: npm --workspace frontend run build
+      - name: Prove real untouched PostGIS bootstrap footprint before migrations
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          test "$result" = '0|0'
       - name: Migrate disposable PostGIS database
         env:
           DATABASE_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           NODE_ENV: test
           SEED_MODE: ci
         run: npm --workspace backend run db:prepare
+      - name: Prove real migrated PostGIS cannot use first-install bypass
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          [[ "$result" =~ ^[0-9]+\|[0-9]+$ ]] && test "$result" != '0|0'
       - name: Provision least-privilege runtime role
         run: |
           docker exec -i "${{ job.services.postgres.id }}" psql \
