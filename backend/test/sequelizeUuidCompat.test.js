@@ -18,7 +18,7 @@ test('Sequelize CommonJS resolver loads pinned patched uuid 11.1.1, not ESM-only
   assert.equal(require('sequelize/package.json').version, '6.37.8');
 });
 
-test('Sequelize UUIDV4 default generates canonical UUIDs with CJS patched uuid', () => {
+test('Sequelize UUIDV4 default generates canonical UUIDs with CJS patched uuid', async () => {
   const generator = Utils.toDefaultValue(DataTypes.UUIDV4);
   assert.equal(typeof generator, 'string');
   assert.match(generator, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
