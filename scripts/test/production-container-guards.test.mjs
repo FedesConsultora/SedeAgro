@@ -21,6 +21,24 @@ test('both production image builds install exactly their committed lockfile on N
   }
 });
 
+test('frontend lock contains every optional Rolldown native target with verified integrity', () => {
+  const lock = JSON.parse(read('frontend/package-lock.json'));
+  const root = JSON.parse(read('package-lock.json'));
+  const deps = lock.packages['node_modules/rolldown']?.optionalDependencies;
+  assert.ok(deps && Object.keys(deps).length >= 10);
+  for (const [name, version] of Object.entries(deps)) {
+    const key = 'node_modules/' + name;
+    const item = lock.packages[key];
+    const trusted = root.packages[key];
+    assert.ok(item, 'missing native optional dependency: ' + key);
+    assert.equal(item.version, version);
+    assert.equal(item.integrity, trusted?.integrity, key + ' differs from root lock integrity');
+    assert.ok(/^sha512-/.test(item.integrity), key + ' lacks integrity');
+  }
+  assert.ok(lock.packages['node_modules/@rolldown/binding-linux-x64-musl']);
+  assert.ok(lock.packages['node_modules/@rolldown/binding-linux-x64-gnu']);
+});
+
 test('production backend copies only explicit application directories', () => {
   const dockerfile = read('backend/Dockerfile');
   const prod = dockerfile.split('FROM base AS prod')[1];
