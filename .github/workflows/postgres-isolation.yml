@@ -50,6 +50,7 @@ jobs:
           node --test scripts/test/production-backup-guards.test.mjs
           bash -n scripts/verify-fresh-install-db.sh
           node --test scripts/test/fresh-install-guards.test.mjs
+          node --test scripts/test/production-container-guards.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -175,3 +176,38 @@ jobs:
             staging-release-manifest.json
           if-no-files-found: error
           retention-days: 14
+
+  production-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert image build checkout is exact event HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Build backend production image from local lockfile
+        run: docker build --target prod --tag sedeagro-backend-rc:${{ github.sha }} ./backend
+      - name: Verify backend image boots Node22 with production dependencies
+        run: |
+          docker run --rm --entrypoint sh sedeagro-backend-rc:${{ github.sha }} -ec '
+            node -e "if (!process.version.startsWith(\"v22.\")) process.exit(1)"
+            test -f /app/src/server.js
+            test -f /app/db/migrations/202610190003_review_queue_view_moderation_audit.js
+            node -e "import(\"express\")"
+            test ! -f /app/.env
+          '
+      - name: Build frontend production image from local lockfile
+        run: docker build --target prod --build-arg VITE_API_URL=/api --tag sedeagro-frontend-rc:${{ github.sha }} ./frontend
+      - name: Verify compiled frontend and production Nginx syntax
+        run: |
+          docker run --rm --entrypoint sh sedeagro-frontend-rc:${{ github.sha }} -ec '
+            test -s /usr/share/nginx/html/index.html
+            test -s /usr/share/nginx/html/sw.js
+            test ! -e /usr/share/nginx/html/.env
+            test ! -e /usr/share/nginx/html/node_modules
+          '
+          docker run --rm --add-host sedeagro_backend:127.0.0.1 \
+            sedeagro-frontend-rc:${{ github.sha }} nginx -t
