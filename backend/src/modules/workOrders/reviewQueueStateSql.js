@@ -60,3 +60,35 @@ export function reviewQueueStateSql(reviewerId) {
     ) planned
   )`;
 }
+
+// The two boundary groups can be proved without evaluating the full CASE
+// projection for every candidate before LIMIT.  The UNIQUE partial index
+// ux_work_execution_one_active admits at most one submitted/verified report
+// per (tenant_id, work_order_id).  Even without that invariant, existence of
+// ANY verified report has precedence over submitted in the legacy CASE.
+// A rejected report is deliberately not an active report: it still counts as
+// "no_report", matching reviewQueueStateSql's LATERAL filter.
+export function reviewQueueFilterPredicateSql(reviewerId, reviewState) {
+  if (typeof reviewerId !== 'string' || !UUID.test(reviewerId) ||
+      !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, reviewState) ||
+      reviewState === 'all') {
+    throw new Error('Authenticated reviewer UUID and non-all review state required');
+  }
+  const related = (condition) => `EXISTS (
+    SELECT 1 FROM work_order_executions r
+    WHERE r.tenant_id = "WorkOrder".tenant_id
+      AND r.work_order_id = "WorkOrder".id
+      AND ${condition}
+  )`;
+  if (reviewState === 'no_report') {
+    return 'NOT ' + related("r.review_status IN ('submitted', 'verified')");
+  }
+  if (reviewState === 'closure') {
+    return related("r.review_status = 'verified'");
+  }
+  // All other categories depend on actor identity, the exact latest report,
+  // inputs, exceptions and evidence precedence. Keep the proven CASE unchanged.
+  const states = REVIEW_QUEUE_STATE_GROUPS[reviewState];
+  return reviewQueueStateSql(reviewerId) + ' IN (' +
+    states.map(value => "'" + value + "'").join(', ') + ')';
+}

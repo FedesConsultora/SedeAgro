@@ -38,7 +38,7 @@ import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithException
 import { classifyReviewQueueItem, selectReviewQueueReports, REVIEW_QUEUE_PAGE_SIZE } from './reviewQueuePolicy.js';
 import { issueReviewCursor, parseReviewCursor, ReviewCursorError,
   REVIEW_QUEUE_WORK_TYPES, REVIEW_QUEUE_STATE_FILTERS, REVIEW_QUEUE_PRIORITIES } from './reviewQueueCursor.js';
-import { reviewQueueStateSql, REVIEW_QUEUE_STATE_GROUPS } from './reviewQueueStateSql.js';
+import { reviewQueueFilterPredicateSql, REVIEW_QUEUE_STATE_GROUPS } from './reviewQueueStateSql.js';
 import { REVIEW_QUEUE_DUE_WINDOWS, reviewQueueDueWhere } from './reviewQueueDueWindow.js';
 import { normalizeReviewTitleQuery, reviewQueueTitleWhere } from './reviewQueueTitleSearch.js';
 import { REVIEW_QUEUE_SORT_MODES, reviewQueueSortOrder,
@@ -543,8 +543,8 @@ workOrdersRouter.get('/review-queue', requireCapability('orders.write'), asyncHa
       ...(reviewState === 'all' && !titleQuery ? {} : {
         [Op.and]: [
           ...(reviewState === 'all' ? [] : [
-            where(literal(reviewQueueStateSql(req.auth.user.id)), {
-              [Op.in]: REVIEW_QUEUE_STATE_GROUPS[reviewState]
+            where(literal(reviewQueueFilterPredicateSql(req.auth.user.id, reviewState)), {
+              [Op.eq]: true
             })
           ]),
           ...(titleQuery ? [reviewQueueTitleWhere(titleQuery)] : [])

@@ -8,7 +8,7 @@ import { arch, cpus, platform, totalmem } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { isSafeRuntimeDbRole } from '../backend/src/core/tenantDbSafety.js';
-import { REVIEW_QUEUE_STATE_GROUPS, reviewQueueStateSql }
+import { REVIEW_QUEUE_STATE_GROUPS, reviewQueueStateSql, reviewQueueFilterPredicateSql }
   from '../backend/src/modules/workOrders/reviewQueueStateSql.js';
 
 const CASES = Object.freeze([
@@ -62,17 +62,17 @@ export function percentile(values, fraction) {
   return Math.round(ordered[Math.ceil(ordered.length * fraction) - 1] * 1000) / 1000;
 }
 
-export function buildProbeSql(reviewerId, state) {
-  if (!uuidRe.test(reviewerId) || !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, state)) {
+export function buildProbeQuery(reviewerId, state, mode = 'baseline') {
+  if (!uuidRe.test(reviewerId) || !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, state) ||
+      !['baseline', 'optimized'].includes(mode)) {
     throw new Error('Unrecognized review performance probe');
   }
   const selected = REVIEW_QUEUE_STATE_GROUPS[state];
-  const predicate = selected === null ? '' :
-    ' AND ' + reviewQueueStateSql(reviewerId) + ' = ANY($3::text[])';
-  // Identical state projection and fixed newest/timestamp keyset ordering as
-  // the API before its LIMIT 51. The selected columns are deliberately limited.
+  const predicate = selected === null ? '' : mode === 'baseline'
+    ? ' AND ' + reviewQueueStateSql(reviewerId) + ' = ANY($3::text[])'
+    : ' AND (' + reviewQueueFilterPredicateSql(reviewerId, state) + ')';
+  // Fixed sort/limit and same production state projection or optimized predicate.
   return [
-    'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)',
     'SELECT "WorkOrder".id, "WorkOrder".created_at',
     'FROM work_orders AS "WorkOrder"',
     'WHERE "WorkOrder".tenant_id = $1::uuid',
@@ -83,6 +83,23 @@ export function buildProbeSql(reviewerId, state) {
     "ORDER BY date_trunc('milliseconds', \"WorkOrder\".created_at) DESC,",
     '"WorkOrder".id DESC LIMIT 51'
   ].join(' ');
+}
+
+export function buildProbeParams(fixture, testCase, mode = 'baseline') {
+  if (!['baseline', 'optimized'].includes(mode) ||
+      !Object.hasOwn(REVIEW_QUEUE_STATE_GROUPS, testCase.state)) {
+    throw new Error('Unrecognized review performance parameters');
+  }
+  const params = [fixture.tenant, testCase.type];
+  if (mode === 'baseline' && testCase.state !== 'all') {
+    params.push(REVIEW_QUEUE_STATE_GROUPS[testCase.state]);
+  }
+  return params;
+}
+
+export function buildProbeSql(reviewerId, state, mode = 'baseline') {
+  return 'EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' +
+    buildProbeQuery(reviewerId, state, mode);
 }
 
 export function summarizeExplain(explainValue) {
@@ -146,6 +163,20 @@ async function seedScale(admin, { tenant, field, reviewer, submitter }, start, s
     'FROM work_orders wo WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
     'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
     'AND right(wo.title,5)::int%4<>0'
+  ].join(' '), [...args, reviewer, submitter]);
+  // Rejected-only history remains awaiting_report: the live report projection
+  // intentionally ignores rejected rows. Preserve this boundary in parity.
+  await admin.query([
+    'INSERT INTO work_order_executions',
+    '(tenant_id,work_order_id,submitted_by,started_at,finished_at,',
+    'worked_area_hectares,result_summary,review_status,reviewed_by,reviewed_at,review_note)',
+    "SELECT wo.tenant_id,wo.id,$6::uuid,now()-interval '3 hours',",
+    "now()-interval '2 hours',2.00,",
+    "'Synthetic rejected-only historical report for SQL parity',",
+    "'rejected',$5::uuid,now(),'Synthetic rejection before resubmission'",
+    'FROM work_orders wo WHERE wo.tenant_id=$1::uuid AND wo.field_id=$2::uuid',
+    'AND right(wo.title,5)::int BETWEEN $3::int AND $4::int',
+    'AND right(wo.title,5)::int%8=0'
   ].join(' '), [...args, reviewer, submitter]);
   // The human-review branch for application orders requires real evidence.
   await admin.query([
@@ -234,36 +265,50 @@ async function measure(app, fixture, scale) {
     console.log('PERF_SANITY=' + JSON.stringify({ scale, ownRows: visible.n, foreignRows: invisible.n }));
     for (const testCase of CASES) {
       diagnosticPhase = 'explain-' + scale + '-' + testCase.state + '-' + testCase.type;
-      const parameters = [fixture.tenant, testCase.type];
-      if (testCase.state !== 'all') parameters.push(REVIEW_QUEUE_STATE_GROUPS[testCase.state]);
-      const sql = buildProbeSql(fixture.reviewer, testCase.state);
-      const serverTimes = [];
-      const clientTimes = [];
-      const plans = [];
-      for (let repeat = 0; repeat < SAMPLES; repeat += 1) {
-        const started = performance.now();
-        const result = await app.query(sql, parameters);
-        clientTimes.push(performance.now() - started);
-        assert.equal(result.rows.length, 1, 'Postgres EXPLAIN must return exactly one JSON plan row');
-        const stats = summarizeExplain(result.rows[0]['QUERY PLAN']);
-        assert.ok(stats.returnedRows >= 0 && stats.returnedRows <= 51);
-        assert.ok(stats.executionMs >= 0 && stats.planningMs >= 0);
-        serverTimes.push(stats.executionMs);
-        plans.push(stats);
+      const snapshots = {};
+      for (const mode of ['baseline', 'optimized']) {
+        diagnosticPhase = 'parity-' + scale + '-' + testCase.state + '-' + testCase.type + '-' + mode;
+        const expected = await app.query(
+          buildProbeQuery(fixture.reviewer, testCase.state, mode),
+          buildProbeParams(fixture, testCase, mode));
+        snapshots[mode] = expected.rows.map(row => row.id);
       }
-      const last = plans.at(-1);
-      console.log('REVIEW_QUEUE_PG_PERF=' + JSON.stringify({
-        scale, state: testCase.state, type: testCase.type, samples: SAMPLES,
-        serverP50Ms: percentile(serverTimes, .5),
-        serverP95Ms: percentile(serverTimes, .95),
-        clientP50Ms: percentile(clientTimes, .5),
-        clientP95Ms: percentile(clientTimes, .95),
-        returnedRows: last.returnedRows, maxPlanLoops: Math.max(...plans.map(p=>p.maxLoops)),
-        maxSharedHitBlocks: Math.max(...plans.map(p=>p.sharedHitBlocks)),
-        maxSharedReadBlocks: Math.max(...plans.map(p=>p.sharedReadBlocks)),
-        maxTempWrittenBlocks: Math.max(...plans.map(p=>p.tempWrittenBlocks)),
-        planNodes: last.planNodes
-      }));
+      assert.deepEqual(snapshots.optimized, snapshots.baseline,
+        'Optimized review filter must return identical ordered page IDs');
+      for (const mode of ['baseline', 'optimized']) {
+        diagnosticPhase = 'explain-' + scale + '-' + testCase.state + '-' + testCase.type + '-' + mode;
+        const parameters = buildProbeParams(fixture, testCase, mode);
+        const sql = buildProbeSql(fixture.reviewer, testCase.state, mode);
+        const serverTimes = [];
+        const clientTimes = [];
+        const plans = [];
+        for (let repeat = 0; repeat < SAMPLES; repeat += 1) {
+          const started = performance.now();
+          const result = await app.query(sql, parameters);
+          clientTimes.push(performance.now() - started);
+          assert.equal(result.rows.length, 1, 'Postgres EXPLAIN must return exactly one JSON plan row');
+          const stats = summarizeExplain(result.rows[0]['QUERY PLAN']);
+          assert.ok(stats.returnedRows >= 0 && stats.returnedRows <= 51);
+          assert.ok(stats.executionMs >= 0 && stats.planningMs >= 0);
+          serverTimes.push(stats.executionMs);
+          plans.push(stats);
+        }
+        const last = plans.at(-1);
+        console.log('REVIEW_QUEUE_PG_PERF=' + JSON.stringify({
+          scale, state: testCase.state, type: testCase.type, mode,
+          parity: true, samples: SAMPLES,
+          serverP50Ms: percentile(serverTimes, .5),
+          serverP95Ms: percentile(serverTimes, .95),
+          clientP50Ms: percentile(clientTimes, .5),
+          clientP95Ms: percentile(clientTimes, .95),
+          returnedRows: last.returnedRows,
+          maxPlanLoops: Math.max(...plans.map(p => p.maxLoops)),
+          maxSharedHitBlocks: Math.max(...plans.map(p => p.sharedHitBlocks)),
+          maxSharedReadBlocks: Math.max(...plans.map(p => p.sharedReadBlocks)),
+          maxTempWrittenBlocks: Math.max(...plans.map(p => p.tempWrittenBlocks)),
+          planNodes: last.planNodes
+        }));
+      }
     }
     await app.query('COMMIT');
   } catch (error) {
@@ -314,7 +359,7 @@ export async function main(env = process.env) {
     await app.query('SELECT count(*)::int AS n FROM work_orders')
       .then(({ rows }) => assert.equal(rows[0].n, 0,
         'Runtime tenant transaction setting must clear after COMMIT'));
-    console.log('PASS: measured real PostGIS plans at two growing scales under FORCE RLS; no perf SLO inferred');
+    console.log('PASS: baseline and optimized pages agree exactly under FORCE RLS at both scales; measured plans, no production SLO inferred');
   } finally {
     if (connectedApp) {
       await app.query('ROLLBACK').catch(() => {});
