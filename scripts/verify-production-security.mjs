@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 const vulnerableVersions = Object.freeze({
   '@rushstack/ts-command-line': '4.19.1',
   argparse: '1.0.10',
-  sequelize: '6.37.8',
   'sprintf-js': '1.0.3',
   umzug: '3.8.3',
   uuid: '8.3.2'
@@ -45,6 +44,17 @@ export function verifyProductionSecurity(policy, lock, today = new Date()) {
     if (lock.packages['node_modules/' + name]?.version === version) {
       throw new Error('BLOCKED: known vulnerable dependency still locked: ' + name);
     }
+  }
+  // Sequelize 6.37.8 is not independently vulnerable: its moderate advisory
+  // propagated from the transitive uuid@8. The only reviewed compatible
+  // replacement is uuid@11.1.1 (last CommonJS-compatible major). Require it
+  // when Sequelize is installed; stale, nested or absent UUID fails closed.
+  if (lock.packages['node_modules/sequelize'] &&
+      (lock.packages['node_modules/uuid']?.version !== '11.1.1' ||
+       Object.keys(lock.packages).some(path =>
+         path.endsWith('/node_modules/uuid') &&
+         path !== 'node_modules/uuid'))) {
+    throw new Error('BLOCKED: Sequelize requires exactly reviewed patched uuid 11.1.1');
   }
   return { status: 'remediated', reviewBy: policy.reviewBy,
     checkedKnownVulnerableVersions: Object.keys(vulnerableVersions).length };

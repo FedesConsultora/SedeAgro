@@ -4,8 +4,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { enforceModerateInventory } from '../security-moderate-policy.mjs';
 
-const baseline = JSON.parse(readFileSync(
+const actualBaseline = JSON.parse(readFileSync(
   new URL('../security-moderate-baseline.json', import.meta.url), 'utf8'));
+// Synthetic historical two-advisory inventory to continuously exercise drift protection.
+const baseline = {
+  ...actualBaseline, status:'unaccepted-for-release', maxModerate:2,
+  packages:{
+    sequelize:{version:'6.37.8',titles:[]},
+    uuid:{version:'8.3.2',titles:['uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided']}
+  }
+};
 const copy = value => structuredClone(value);
 const makeLock = () => ({ lockfileVersion: 3, packages: Object.fromEntries(
   Object.entries(baseline.packages).map(([name, info]) =>
@@ -20,7 +28,7 @@ const makeSummary = () => ({
 });
 const clock = new Date('2026-10-20T16:00:00.000Z');
 
-test('actual checked-in inventory covers two unaccepted Sequelize/uuid advisories', () => {
+test('synthetic historical inventory rejects unaccepted Sequelize/uuid advisories', () => {
   const result = enforceModerateInventory(makeSummary(), baseline, makeLock(), clock);
   assert.equal(result.openModerate, 2);
   assert.equal(result.releaseAccepted, false);
@@ -140,4 +148,21 @@ test('current real inventory is NEVER a release admission despite CI audit passi
   dropped.affected = [];
   dropped.moderate = 0;
   assert.equal(enforceModerateInventory(dropped, baseline, makeLock(), clock).releaseAccepted, false);
+});
+
+test('checked-in remediated policy has zero legacy advisories and passes only a zero LIVE report', () => {
+  assert.equal(actualBaseline.status,'remediated');
+  assert.equal(actualBaseline.maxModerate,0);
+  assert.deepEqual(actualBaseline.packages,{});
+  const clean={scope:'backend-runtime',moderate:0,affected:[]};
+  const lock=JSON.parse(readFileSync(
+    new URL('../../backend/package-lock.json',import.meta.url),'utf8'));
+  const accepted=enforceModerateInventory(clean,actualBaseline,lock,clock);
+  assert.equal(accepted.releaseAccepted,true);
+  assert.equal(accepted.openModerate,0);
+  assert.equal(accepted.policy,'remediated');
+  assert.throws(() => enforceModerateInventory(makeSummary(), actualBaseline, lock, clock),
+    /empty LIVE advisory report/);
+  assert.throws(() => enforceModerateInventory(clean,
+    {...actualBaseline,maxModerate:1},lock,clock),/invalid or unreviewed/);
 });

@@ -2,19 +2,8 @@
   "schema": 1,
   "scope": "backend-runtime",
   "reviewBy": "2026-11-20",
-  "maxModerate": 2,
-  "status": "unaccepted-for-release",
-  "notes": "Four Umzug CLI-chain advisories removed by eliminating Umzug from runtime. Sequelize 6.37.8 and uuid 8.3.2 remain unaccepted-for-release; remediation and actual npm audit zero needed before GO.",
-  "packages": {
-    "sequelize": {
-      "version": "6.37.8",
-      "titles": []
-    },
-    "uuid": {
-      "version": "8.3.2",
-      "titles": [
-        "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided"
-      ]
-    }
-  }
+  "maxModerate": 0,
+  "status": "remediated",
+  "notes": "0P.14: backend production npm audit must prove zero critical/high/moderate LIVE at exact CI SHA, Sequelize v6 CommonJS resolved through uuid@11.1.1 verified override for both npm roots. This is code/security admission only; staging, real private restore, field QA and human GO remain independent.",
+  "packages": {}
 }

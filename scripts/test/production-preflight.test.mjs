@@ -13,6 +13,11 @@ const script = fileURLToPath(new URL('../production-preflight.sh', import.meta.u
 const source = readFileSync(script, 'utf8');
 const securityScript = fileURLToPath(new URL('../verify-production-security.mjs', import.meta.url));
 const securityCurrentPolicy = JSON.parse(readFileSync(new URL('../security-moderate-baseline.json', import.meta.url), 'utf8'));
+const historicalUnacceptedPolicy = {
+  ...securityCurrentPolicy, status:'unaccepted-for-release', maxModerate:2,
+  packages:{sequelize:{version:'6.37.8',titles:[]},
+    uuid:{version:'8.3.2',titles:['uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided']}}
+};
 const securityCurrentLock = JSON.parse(readFileSync(new URL('../../backend/package-lock.json', import.meta.url), 'utf8'));
 const zeroRiskPolicy = { schema: 1, scope: 'backend-runtime', reviewBy: '2099-12-31', maxModerate: 0, status: 'remediated', packages: {} };
 const safeSyntheticLock = { lockfileVersion: 3, packages: { '': { dependencies: { pg: '^8.13.1' } }, 'node_modules/pg': { version: '8.16.0' } } };
@@ -189,8 +194,8 @@ test('does not source or evaluate release-critical env values', (t) => {
   assert.doesNotMatch(source, /\bdocker (?:compose|run|exec)\b/);
 });
 
-test('current six-moderate inventory refuses production despite correct SHA and owner deploy approval', (t) => {
-  const { attempt, sha } = fixture(t, securityCurrentPolicy, securityCurrentLock);
+test('historical unaccepted moderate inventory refuses SHA-approved deploy', (t) => {
+  const { attempt, sha } = fixture(t, historicalUnacceptedPolicy, securityCurrentLock);
   const out = attempt();
   rejected(out, /security P0 unresolved/);
   assert.match(out.stderr, /unresolved moderate advisories/);
@@ -203,4 +208,11 @@ test('synthetic remediated release must also eliminate every recorded vulnerable
   lock.packages['node_modules/uuid'] = { version: '8.3.2' };
   const { attempt } = fixture(t, zeroRiskPolicy, lock);
   rejected(attempt(), /security P0 unresolved/);
+});
+
+test('real patched lock and zero-advisory reviewed policy pass read-only preflight in disposable repo', t => {
+  const { attempt }=fixture(t, securityCurrentPolicy, securityCurrentLock);
+  const result=attempt();
+  assert.equal(result.status,0,result.stderr);
+  assert.match(result.stdout,/PASS read-only production preflight/);
 });
