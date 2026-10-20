@@ -19,36 +19,14 @@ database="${POSTGRES_DB:-}"
   fail "valid database and owner identifiers required"
 command -v docker >/dev/null 2>&1 || fail "Docker Compose is required"
 
-# Count all non-extension-owned user relations and all non-extension-owned
-# schemas other than public. Exclude pg_catalog, pg_toast and internal schemas.
-# Extension-owned PostGIS relations (e.g. spatial_ref_sys) are allowed.
-# This deliberately rejects partial migrations or ANY unrelated custom data.
-sql="SELECT
-  (SELECT count(*) FROM pg_class c
-   JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname <> 'information_schema'
-     AND left(n.nspname, 3) <> 'pg_'
-     AND c.relkind IN ('r','p','f','m','v')
-     AND NOT EXISTS (
-       SELECT 1 FROM pg_depend dep
-       WHERE dep.classid = 'pg_class'::regclass
-         AND dep.refclassid = 'pg_extension'::regclass
-         AND dep.objid = c.oid AND dep.deptype = 'e'
-     ))
-  || '|' ||
-  (SELECT count(*) FROM pg_namespace n
-   WHERE n.nspname <> 'public'
-     AND n.nspname <> 'information_schema'
-     AND left(n.nspname, 3) <> 'pg_'
-     AND NOT EXISTS (
-       SELECT 1 FROM pg_depend dep
-       WHERE dep.classid = 'pg_namespace'::regclass
-         AND dep.refclassid = 'pg_extension'::regclass
-         AND dep.objid = n.oid AND dep.deptype = 'e'
-     ));"
+# The very same read-only SQL is executed against the disposable PostGIS
+# service by CI BEFORE and AFTER real SedeAgro migrations.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SQL_FILE="$ROOT/scripts/sql/first-install-footprint.sql"
+[[ -f "$SQL_FILE" && ! -L "$SQL_FILE" ]] || fail "inspection SQL is missing or a symlink"
 
 if ! footprint="$(docker compose exec -T db psql -X -A -t -q \
-  -v ON_ERROR_STOP=1 -U "$owner" -d "$database" -c "$sql" 2>/dev/null)"; then
+  -v ON_ERROR_STOP=1 -U "$owner" -d "$database" < "$SQL_FILE" 2>/dev/null)"; then
   fail "PostgreSQL inspection failed; cannot prove database is untouched"
 fi
 # Reject warnings, unexpected rows or non-empty schema. Psql normally emits
