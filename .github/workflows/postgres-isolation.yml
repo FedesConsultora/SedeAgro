@@ -51,7 +51,7 @@ jobs:
           bash -n scripts/verify-fresh-install-db.sh
           node --test scripts/test/fresh-install-guards.test.mjs
           node --test scripts/test/production-container-guards.test.mjs
-          node --test scripts/test/security-audit-report.test.mjs
+          node --test scripts/test/security-audit-report.test.mjs scripts/test/security-moderate-policy.test.mjs
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
@@ -242,10 +242,15 @@ jobs:
           cp frontend/package.json frontend/package-lock.json /tmp/sedeagro-audit-frontend/
           (cd /tmp/sedeagro-audit-backend && npm audit --omit=dev --json) > backend-audit.json || true
           (cd /tmp/sedeagro-audit-frontend && npm audit --json) > frontend-audit.json || true
-          node scripts/security-audit-report.mjs backend-audit.json frontend-audit.json
-      - name: Suggest isolated npm lockfile remediation (diagnostic, not committed)
-        if: failure()
+          node scripts/security-audit-report.mjs backend-audit.json frontend-audit.json \
+            backend/package-lock.json scripts/security-moderate-baseline.json
+      - name: Inspect isolated compatible npm lockfile fixes (diagnostic, never committed)
+        if: always()
         run: |
+          if [[ ! -f /tmp/sedeagro-audit-backend/package-lock.json || ! -f /tmp/sedeagro-audit-frontend/package-lock.json ]]; then
+            echo 'No audit inputs exist; original failure remains authoritative.'
+            exit 0
+          fi
           cp /tmp/sedeagro-audit-backend/package-lock.json /tmp/sedeagro-backend-before.json
           cp /tmp/sedeagro-audit-frontend/package-lock.json /tmp/sedeagro-frontend-before.json
           (cd /tmp/sedeagro-audit-backend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
