@@ -262,8 +262,8 @@ async function createFixture(admin) {
     }
     const inputRows = (await admin.query([
       'INSERT INTO agricultural_inputs(tenant_id,name,category,unit)',
-      "VALUES ($1,'CI planned input ${random}','fertilizer','kg'),",
-      "($1,'CI unplanned input ${random}','fertilizer','kg') RETURNING id"
+      "VALUES ($1,'CI planned input','fertilizer','kg'),",
+      "($1,'CI unplanned input','fertilizer','kg') RETURNING id"
     ].join(' '), [tenants[0]])).rows;
     assert.equal(inputRows.length, 2, 'Both planned and unexpected catalog fixtures required');
     await admin.query([
@@ -299,6 +299,27 @@ async function measure(app, fixture, scale) {
       'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1', [fixture.otherTenant]);
     assert.equal(invisible.n, 0, 'A foreign tenant cannot leak through the benchmark role');
     console.log('PERF_SANITY=' + JSON.stringify({ scale, ownRows: visible.n, foreignRows: invisible.n }));
+    const auditGroups = (await app.query([
+      'SELECT classifications.state, count(*)::int AS items FROM (',
+      'SELECT ' + reviewQueueStateSql(fixture.reviewer) + ' AS state',
+      'FROM work_orders AS "WorkOrder"',
+      'WHERE "WorkOrder".tenant_id=$1::uuid',
+      "AND \"WorkOrder\".status = 'in_progress'",
+      ') classifications GROUP BY classifications.state'
+    ].join(' '), [fixture.tenant])).rows;
+    const categories = new Map(auditGroups.map(item => [item.state, item.items]));
+    const required = Object.entries(REVIEW_QUEUE_STATE_GROUPS)
+      .filter(([state]) => state !== 'all')
+      .flatMap(([, values]) => values);
+    for (const state of required) {
+      assert.ok((categories.get(state) || 0) > 0,
+        'Benchmark dataset omitted expected review state: ' + state);
+    }
+    assert.equal([...categories.values()].reduce((a, b) => a + b, 0), scale,
+      'Full state fixture must classify each synthetic order exactly once');
+    console.log('PERF_STATES=' + JSON.stringify({
+      scale, counts: Object.fromEntries([...categories].sort(([a], [b]) => a.localeCompare(b)))
+    }));
     for (const testCase of CASES) {
       diagnosticPhase = 'explain-' + scale + '-' + testCase.state + '-' + testCase.type;
       const snapshots = {};
