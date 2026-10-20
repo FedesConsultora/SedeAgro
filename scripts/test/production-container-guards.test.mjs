@@ -39,6 +39,27 @@ test('frontend lock contains every optional Rolldown native target with verified
   assert.ok(lock.packages['node_modules/@rolldown/binding-linux-x64-gnu']);
 });
 
+test('platform-specific LightningCSS and Parcel native bindings stay locked', () => {
+  const lock = JSON.parse(read('frontend/package-lock.json'));
+  const root = JSON.parse(read('package-lock.json'));
+  for (const [base, prefix] of [
+    ['node_modules/lightningcss', 'node_modules/'],
+    ['node_modules/@parcel/watcher', 'node_modules/']
+  ]) {
+    const optional = lock.packages[base]?.optionalDependencies || {};
+    assert.ok(Object.keys(optional).length > 6);
+    for (const [name, version] of Object.entries(optional)) {
+      const key = prefix + name;
+      const entry = lock.packages[key];
+      assert.ok(entry, 'missing optional native binding: ' + key);
+      assert.equal(entry.version, version);
+      assert.equal(entry.integrity, root.packages[key]?.integrity);
+      assert.match(entry.integrity, /^sha512-/);
+    }
+  }
+  assert.ok(lock.packages['node_modules/lightningcss-linux-x64-musl']?.integrity);
+});
+
 test('production backend copies only explicit application directories', () => {
   const dockerfile = read('backend/Dockerfile');
   const prod = dockerfile.split('FROM base AS prod')[1];
