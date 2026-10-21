@@ -67,6 +67,8 @@ jobs:
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
+          bash -n scripts/ci-independent-recovery.sh
+          node --test scripts/test/ci-independent-recovery.test.mjs
           node --test scripts/test/disposable-restore-guards.test.mjs
           npm --workspace backend run test
       - name: Test offline browser queue
