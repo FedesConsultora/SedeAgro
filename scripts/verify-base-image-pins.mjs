@@ -59,10 +59,16 @@ function sourceLines(source, filename) {
   ensure(typeof source === 'string' && source.length > 0 &&
     source.length < 120000, 'source file unavailable or oversized');
   const results = [];
-  const regex = /^\s*(?:FROM\s+([^\s]+)|image:\s+([^\s#]+))/gm;
+  // Only Dockerfile FROM or Docker service image declarations. Action
+  // inputs such as "with: image:" are scanner arguments, not upstream bases.
+  const regex = filename.endsWith('/Dockerfile')
+    ? /^FROM\s+([^\s]+)/gm
+    : filename === '.github/workflows/postgres-isolation.yml'
+      ? /^ {8}image:\s+([^\s#]+)/gm
+      : /^ {4}image:\s+([^\s#]+)/gm;
   let match;
   while ((match = regex.exec(source)) !== null) {
-    const found = (match[1] || match[2]).trim();
+    const found = match[1].trim();
     // Internal Dockerfile stage name, not a separately pulled base image.
     if (filename === 'backend/Dockerfile' && found === 'base') continue;
     // These two service images are SedeAgro's own SHA-bound BUILDS, not bases.
