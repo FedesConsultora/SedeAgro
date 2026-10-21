@@ -248,34 +248,37 @@ function dockerImages(path, sha, scanned) {
         layers: diffIds.slice() });
     }
     inspectOCIIndex(fd, scanned.entries, referenced, images);
+    const auxiliary = [];
     for (const [name, entry] of scanned.entries) {
       if (entry.type === '5' || referenced.has(name) || name === 'repositories') continue;
-      if (/^blobs\/sha256\/[a-f0-9]{64}$/.test(name)) {
-        // Only safe, bounded diagnostic CATEGORY; no hash, paths or image
-        // metadata content is ever logged from private release archives.
-        check(entry.sha256 === name.slice(-64), 'orphan OCI blob filename/hash mismatch');
-        let category = 'binary-layer';
-        if (entry.size <= MAX_METADATA) {
-          try {
-            const payload = JSON.parse(readExactly(fd, entry.offset, entry.size).toString('utf8'));
-            category = payload?.rootfs ? 'image-config' :
-              payload?.schemaVersion === 2 && Array.isArray(payload?.layers) ? 'image-manifest' :
-              payload?.schemaVersion === 2 && Array.isArray(payload?.manifests) ? 'image-index' :
-              Array.isArray(payload) ? 'json-array' :
-              payload && typeof payload === 'object' ?
-                'json-keys-' + Object.keys(payload).sort()
-                  .slice(0, 8).map(key =>
-                    /^[A-Za-z_]{1,26}$/.test(key) &&
-                    !/(?:password|token|secret|auth|private|key|credential|user)/i.test(key)
-                      ? key : 'redacted').join('-') :
-                'json-primitive';
-          } catch { /* binary blob, not metadata */ }
-        }
-        fail('unreferenced OCI ' + category + ' blob in archive');
-      }
-      fail('unexpected unreferenced non-OCI payload in archive');
+      check(/^blobs\/sha256\/[a-f0-9]{64}$/.test(name),
+        'unexpected unreferenced non-OCI payload in archive');
+      check(entry.sha256 === name.slice(-64),
+        'detached OCI blob content-address mismatch');
+      // OCI layouts may contain unreferenced blobs. Admit only small,
+      // content-addressed, non-runtime image metadata of a known shape.
+      // Never allow an unattached layer, manifest, config or arbitrary blob.
+      check(entry.size > 0 && entry.size <= 64 * 1024,
+        'detached OCI blob is not bounded image metadata');
+      let payload;
+      try { payload = JSON.parse(readExactly(fd, entry.offset, entry.size).toString('utf8')); }
+      catch { fail('detached OCI blob is not structured JSON metadata'); }
+      check(payload && typeof payload === 'object' && !Array.isArray(payload) &&
+        Object.keys(payload).length > 0 && Object.keys(payload).length <= 12,
+      'detached OCI JSON metadata has invalid shape');
+      check(typeof payload.created === 'string' &&
+        payload.created.length <= 80 && payload.os === 'linux',
+      'detached OCI JSON metadata lacks expected build-platform and creation fields');
+      check(!payload.rootfs && !payload.config && !payload.layers &&
+        !payload.manifests && !payload.Env &&
+        !Object.keys(payload).some(k =>
+          /(?:secret|password|token|credential|private|environment)/i.test(k)),
+      'detached OCI payload could introduce unreferenced image data or sensitive fields');
+      check(auxiliary.length < 16, 'too many detached OCI metadata blobs');
+      auxiliary.push({ sha256: 'sha256:' + entry.sha256, bytes: entry.size });
     }
-    return images;
+    auxiliary.sort((a,b) => a.sha256.localeCompare(b.sha256));
+    return { images, auxiliary };
   } finally { closeSync(fd); }
 }
 async function hashArchive(path) {
@@ -287,12 +290,13 @@ async function hashArchive(path) {
 }
 export async function computeReceipt({ bundlePath, sha }) {
   const tar = inspectDockerSaveTar(bundlePath);
-  const images = dockerImages(bundlePath, sha, tar);
+  const { images, auxiliary } = dockerImages(bundlePath, sha, tar);
   return {
     schema: SCHEMA, head: sha, format: 'docker-save-tar',
     archive: { name: basename(bundlePath), bytes: tar.bytes,
       sha256: await hashArchive(bundlePath) },
-    images, registry_digest_certified: false,
+    images, auxiliary_oci_metadata: auxiliary,
+    registry_digest_certified: false,
     signed_provenance_certified: false, staging_deployment_certified: false
   };
 }
