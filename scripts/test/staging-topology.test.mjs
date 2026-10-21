@@ -1,4 +1,8 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+const baseLock = JSON.parse(readFileSync(new URL('../base-image-lock.json', import.meta.url), 'utf8'));
+const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].digest;
+
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +19,7 @@ const baseService = () => ({
 function config() {
   const db = baseService();
   Object.assign(db,{
-    image:'postgis/postgis:16-3.4',
+    image:locked('postgis'),
     environment:{
       POSTGRES_DB:'sedeagro_staging',
       POSTGRES_USER:'sedeagro_staging_owner',
@@ -25,7 +29,7 @@ function config() {
   });
   const redis=baseService();
   Object.assign(redis,{
-    image:'redis:7-alpine',
+    image:locked('redis'),
     volumes:[{type:'volume',source:'staging_redisdata',target:'/data'}]
   });
   const backend=baseService();
@@ -103,6 +107,18 @@ test('never silently joins shared production network or reuses fixed container n
     const c=config();mutate(c);
     assert.throws(()=>validateStagingTopology(c,{sha,host}),/BLOCKED/,
       'unsafe topology must fail closed: '+mutate.toString());
+  }
+});
+
+test('staging topology refuses mutable tag and unauthorized same-length registry digest',()=>{
+  for(const [service,key] of [['db','postgis'],['redis','redis']]){
+    const baseline=locked(key);
+    for(const value of [baseLock.images[key].tag,
+      baseLock.images[key].tag+'@sha256:'+'f'.repeat(64)]) {
+      const c=config(); c.services[service].image=value;
+      assert.notEqual(value,baseline);
+      assert.throws(()=>validateStagingTopology(c,{sha,host}),/BLOCKED/);
+    }
   }
 });
 

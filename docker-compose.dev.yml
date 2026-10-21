@@ -3,7 +3,7 @@ name: sedeagro-dev
 services:
   sedeagro-db:
     platform: linux/amd64
-    image: postgis/postgis:16-3.4
+    image: postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
     container_name: sedeagro_db_dev
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sedeagro}
@@ -20,7 +20,7 @@ services:
       retries: 20
 
   sedeagro-redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: sedeagro_redis_dev
     ports:
       - "6379:6379"

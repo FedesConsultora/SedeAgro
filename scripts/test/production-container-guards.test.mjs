@@ -7,7 +7,8 @@ const read = path => readFileSync(new URL('../../' + path, import.meta.url), 'ut
 test('both production image builds install exactly their committed lockfile on Node22', () => {
   for (const service of ['backend', 'frontend']) {
     const dockerfile = read(service + '/Dockerfile');
-    assert.match(dockerfile, /FROM node:22-alpine/);
+    assert.match(dockerfile, /FROM node:22-alpine@sha256:[a-f0-9]{64}/);
+    assert.doesNotMatch(dockerfile, /FROM node:22-alpine(?:\s|$)/m);
     assert.match(dockerfile, /COPY package\.json package-lock\.json \.\//);
     assert.match(dockerfile, /RUN npm ci(?: --omit=dev)?/);
     assert.doesNotMatch(dockerfile, /\bRUN npm install\b/);
@@ -85,7 +86,7 @@ test('frontend build requires same-origin API and serves only compiled assets', 
   const dockerfile = read('frontend/Dockerfile');
   assert.match(dockerfile, /ARG VITE_API_URL=\/api/);
   assert.match(dockerfile, /RUN npm run build/);
-  const prod = dockerfile.split('FROM nginx:1.27-alpine AS prod')[1];
+  const prod = dockerfile.split(/FROM nginx:1\.27-alpine@sha256:[a-f0-9]{64} AS prod/)[1];
   assert.ok(prod);
   assert.match(prod, /COPY --from=build \/app\/dist \/usr\/share\/nginx\/html/);
   assert.doesNotMatch(prod, /COPY \. \./);
@@ -93,7 +94,7 @@ test('frontend build requires same-origin API and serves only compiled assets', 
 
 test('production frontend Docker removes upstream Nginx sample files before copying manifest-bound dist', () => {
   const dockerfile = read('frontend/Dockerfile');
-  const prod = dockerfile.split('FROM nginx:1.27-alpine AS prod')[1];
+  const prod = dockerfile.split(/FROM nginx:1\.27-alpine@sha256:[a-f0-9]{64} AS prod/)[1];
   assert.ok(prod, 'expected final Nginx image stage');
   const clearing = prod.indexOf('RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html');
   const copying = prod.indexOf('COPY --from=build /app/dist /usr/share/nginx/html');

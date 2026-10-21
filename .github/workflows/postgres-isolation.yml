@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
         env:
           POSTGRES_DB: sedeagro_test
           POSTGRES_USER: sedeagro_owner
@@ -31,6 +31,13 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Confirm pinned PostGIS test service is actually linux/amd64
+        run: |
+          set -euo pipefail
+          container_id="${{ job.services.postgres.id }}"
+          image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
+          actual="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image_id")"
+          test "$actual" = 'linux/amd64'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -51,6 +58,9 @@ jobs:
           bash -n scripts/verify-fresh-install-db.sh
           node --test scripts/test/fresh-install-guards.test.mjs
           node --test scripts/test/production-container-guards.test.mjs
+          node --check scripts/verify-base-image-pins.mjs
+          node --test scripts/test/base-image-pins.test.mjs
+          node scripts/verify-base-image-pins.mjs --offline
           bash -n scripts/check-report-worker-compose.sh
           node --test scripts/test/report-worker-compose-health.test.mjs
           node --test scripts/test/security-audit-report.test.mjs scripts/test/security-moderate-policy.test.mjs
@@ -241,6 +251,11 @@ jobs:
             node scripts/verify-staging-topology.mjs \
               --sha "$IMAGE_SHA" --host "$SEDEAGRO_STAGING_HOST"
           # Parse-only; do not up/build/provision/migrate this staging stack.
+      - name: Validate four locked upstream OCI digests from Docker registry (read-only)
+        run: |
+          set -euo pipefail
+          node --check scripts/verify-base-image-pins.mjs
+          node scripts/verify-base-image-pins.mjs --online
       - name: Build backend production image from local lockfile
         run: docker build --target prod --build-arg RELEASE_SHA="$IMAGE_SHA" --tag sedeagro-backend-rc:$IMAGE_SHA ./backend
       - name: Verify backend image boots Node22 with production dependencies

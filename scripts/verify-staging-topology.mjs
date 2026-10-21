@@ -2,9 +2,12 @@
 // Run with: docker compose --env-file /dev/null -f docker-compose.staging.yml
 //            config --format json | node scripts/verify-staging-topology.mjs --sha SHA --host HOST
 // IMPORTANT: resolved Compose JSON contains secrets. Never echo or persist it.
+import { readFileSync } from 'node:fs';
+import { validateBaseImageLock } from './verify-base-image-pins.mjs';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 
+const BASE_REFS = validateBaseImageLock(JSON.parse(readFileSync(new URL('./base-image-lock.json', import.meta.url), 'utf8')));
 const SHA = /^[a-f0-9]{40}$/;
 const HOST = /^staging[.-][a-z0-9][a-z0-9.-]*[a-z0-9]$/;
 const SERVICES = ['db', 'redis', 'backend', 'frontend'];
@@ -78,8 +81,8 @@ export function validateStagingTopology(config, { sha, host } = {}) {
   }
 
   const { db, redis, backend, frontend } = config.services;
-  if (db.image !== 'postgis/postgis:16-3.4' ||
-      redis.image !== 'redis:7-alpine' ||
+  if (db.image !== BASE_REFS.postgis ||
+      redis.image !== BASE_REFS.redis ||
       db.environment?.POSTGRES_DB !== 'sedeagro_staging' ||
       db.environment?.POSTGRES_USER !== 'sedeagro_staging_owner' ||
       !credentials(db.environment?.POSTGRES_PASSWORD, 24) ||
