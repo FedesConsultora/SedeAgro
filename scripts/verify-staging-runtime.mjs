@@ -1,10 +1,13 @@
 // 0P.22: READ-ONLY inspection of containers actually running under the
 // isolated Compose project. Never runs compose up/down, exec, or prints Env.
+import { readFileSync } from 'node:fs';
+import { validateBaseImageLock } from './verify-base-image-pins.mjs';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { validateStagingHost } from './verify-staging-topology.mjs';
 
+const BASE_REFS = validateBaseImageLock(JSON.parse(readFileSync(new URL('./base-image-lock.json', import.meta.url), 'utf8')));
 const PROJECT = 'sedeagro-staging';
 const NETWORK = 'sedeagro-staging_staging_internal';
 const SHA = /^[a-f0-9]{40}$/;
@@ -74,7 +77,7 @@ export function validateStagingContainers(containers, { sha, host } = {}) {
       assert(c.Config.Image === 'sedeagro-staging-' + name + ':' + sha &&
         labels['org.opencontainers.image.revision'] === sha);
     } else {
-      assert(c.Config.Image === (name === 'db' ? 'postgis/postgis:16-3.4' : 'redis:7-alpine'));
+      assert(c.Config.Image === (name === 'db' ? BASE_REFS.postgis : BASE_REFS.redis));
     }
     if (name === 'backend') {
       const env = envValues(c.Config.Env);
