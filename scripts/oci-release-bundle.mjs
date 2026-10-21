@@ -264,20 +264,10 @@ function dockerImages(path, sha, scanned) {
               Array.isArray(payload) ? 'json-array' :
               payload && typeof payload === 'object' ?
                 'json-keys-' + Object.keys(payload).sort()
-                  .slice(0, 8).map(key => {
-                    const allowed = new Set(['mediaType','config','layers','manifests',
-                      'schemaVersion','annotations','digest','size','artifactType',
-                      'platform','architecture','os','index','descriptors','Image',
-                      'Config','RepoTags','Layers','Created','author','created',
-                      'history','rootfs','subject','referrers','repositories',
-                      'blobs','version','imageLayoutVersion',
-                      'Architecture','Created','DockerVersion','OS','Os','RootFS',
-                      'Variant','Config','ContainerConfig','History','Parent',
-                      'Id','ID','Image','RepoTags','RepoDigests','Container',
-                      'Docker','MediaType','Digest','Size','Type',
-                      'created_by','empty_layer','comment','author']);
-                    return allowed.has(key) ? key : 'other';
-                  }).join('-') :
+                  .slice(0, 8).map(key =>
+                    /^[A-Za-z_]{1,26}$/.test(key) &&
+                    !/(?:password|token|secret|auth|private|key|credential|user)/i.test(key)
+                      ? key : 'redacted').join('-') :
                 'json-primitive';
           } catch { /* binary blob, not metadata */ }
         }
