@@ -77,11 +77,11 @@ data_fingerprint() {
   local database="$1"
   docker exec -i "$CI_POSTGIS_CONTAINER" psql -X -A -t -q \
     -v ON_ERROR_STOP=1 -U "$OWNER" -d "$database" -f - \
-    < "$root/scripts/sql/restore-data-fingerprint.sql" | tr -d '\\r\\n'
+    < "$root/scripts/sql/restore-data-fingerprint.sql" | tr -d '\r\n'
 }
 before="$(fingerprint "$SOURCE_DB")"
 data_before="$(data_fingerprint "$SOURCE_DB")"
-[[ "$data_before" =~ ^([0-9]+)\\|([0-9]+)\\|[0-9a-f]{32}$ ]] || {
+[[ "$data_before" =~ ^([0-9]+)\|([0-9]+)\|[0-9a-f]{32}$ ]] || {
   echo 'BLOCKED: disposable source data fingerprint is malformed.' >&2
   exit 1
 }
