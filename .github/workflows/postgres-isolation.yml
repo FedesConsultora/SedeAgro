@@ -241,6 +241,15 @@ jobs:
             node scripts/verify-staging-topology.mjs \
               --sha "$IMAGE_SHA" --host "$SEDEAGRO_STAGING_HOST"
           # Parse-only; do not up/build/provision/migrate this staging stack.
+      - name: Resolve upstream base image digests for 0P.28 review (no pull or deploy)
+        run: |
+          set -euo pipefail
+          for ref in "node:22-alpine" "nginx:1.27-alpine" "postgis/postgis:16-3.4" "redis:7-alpine"; do
+            echo "BASE_IMAGE_PROBE_BEGIN=$ref"
+            docker buildx imagetools inspect "$ref" |
+              grep -E '^(Name:|MediaType:|Digest:|  Platform:)' | head -n 48
+            echo "BASE_IMAGE_PROBE_END=$ref"
+          done
       - name: Build backend production image from local lockfile
         run: docker build --target prod --build-arg RELEASE_SHA="$IMAGE_SHA" --tag sedeagro-backend-rc:$IMAGE_SHA ./backend
       - name: Verify backend image boots Node22 with production dependencies
