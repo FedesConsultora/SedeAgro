@@ -3,6 +3,7 @@
 import { sequelize, connectDb } from '../core/db.js';
 import '../models/index.js';
 import { logger } from '../core/logger.js';
+import { startReportWorkerHeartbeat } from './reportWorkerHeartbeat.js';
 import { assertWorkerTenant, markReportWorkerPresent, processNextReport, purgeExpiredReportFiles } from '../modules/reports/reportWorker.js';
 
 const tenantId = assertWorkerTenant(process.env.REPORT_WORKER_TENANT_ID);
@@ -14,7 +15,16 @@ let stopping = false;
 process.on('SIGTERM', () => { stopping = true; });
 process.on('SIGINT', () => { stopping = true; });
 await connectDb();
+let heartbeat;
 try {
+  // A long render can exceed the API's 20s heartbeat freshness window.
+  await markReportWorkerPresent(tenantId);
+  heartbeat = startReportWorkerHeartbeat({
+    write: () => markReportWorkerPresent(tenantId),
+    onFailure: ({ code, consecutiveFailures }) => logger.warn('report_worker_heartbeat_issue', {
+      code, consecutive_failures: consecutiveFailures
+    })
+  });
   let tick = 0;
   do {
     await markReportWorkerPresent(tenantId);
@@ -34,5 +44,6 @@ try {
     }
   } while (!once && !stopping);
 } finally {
+  if (heartbeat) await heartbeat.stop();
   await sequelize.close();
 }
