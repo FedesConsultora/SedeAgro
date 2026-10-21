@@ -249,6 +249,7 @@ function dockerImages(path, sha, scanned) {
     }
     inspectOCIIndex(fd, scanned.entries, referenced, images);
     const auxiliary = [];
+    let auxiliaryBytes = 0;
     for (const [name, entry] of scanned.entries) {
       if (entry.type === '5' || referenced.has(name) || name === 'repositories') continue;
       check(/^blobs\/sha256\/[a-f0-9]{64}$/.test(name),
@@ -274,7 +275,9 @@ function dockerImages(path, sha, scanned) {
         !Object.keys(payload).some(k =>
           /(?:secret|password|token|credential|private|environment)/i.test(k)),
       'detached OCI payload could introduce unreferenced image data or sensitive fields');
-      check(auxiliary.length < 16, 'too many detached OCI metadata blobs');
+      auxiliaryBytes += entry.size;
+      check(auxiliary.length < 256 && auxiliaryBytes <= 4 * 1024 * 1024,
+        'too many detached OCI metadata blobs or aggregate metadata size excessive');
       auxiliary.push({ sha256: 'sha256:' + entry.sha256, bytes: entry.size });
     }
     auxiliary.sort((a,b) => a.sha256.localeCompare(b.sha256));
