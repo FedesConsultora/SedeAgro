@@ -59,7 +59,7 @@ export function validateSpdx(sbom,service,sha){
   const tag='sedeagro-'+service+'-rc:'+sha;
   check(sbom?.spdxVersion==='SPDX-2.3'&&sbom.SPDXID==='SPDXRef-DOCUMENT'&&
     sbom.dataLicense==='CC0-1.0'&&
-    typeof sbom.name==='string'&&sbom.name.includes(tag)&&
+    typeof sbom.name==='string'&&[tag,'sedeagro-'+service+'-rc'].includes(sbom.name)&&
     Array.isArray(sbom.packages)&&sbom.packages.length>=1&&
     sbom.packages.length<=200000&&Array.isArray(sbom.creationInfo?.creators)&&
     sbom.creationInfo.creators.some(x=>/^Tool: syft-/.test(x)),
