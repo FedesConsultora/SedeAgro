@@ -247,6 +247,7 @@ test('workflow requires independent npm ci build AND real image byte parity',()=
   const job=workflow.split('  production-images:')[1]?.split('  dependency-security:')[0]||'';
   assert.match(job,/npm --prefix frontend ci/);
   assert.match(job,/npm --prefix frontend run build/);
+  assert.match(job,/VITE_API_URL=\/api npm --prefix frontend run build/);
   assert.match(job,/node scripts\/staging-release-manifest.mjs create/);
   assert.match(job,/node scripts\/staging-release-manifest.mjs verify/);
   assert.match(job,/node scripts\/verify-frontend-image-parity.mjs/);
