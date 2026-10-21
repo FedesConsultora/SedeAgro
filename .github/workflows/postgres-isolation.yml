@@ -270,7 +270,7 @@ jobs:
         run: |
           set -euo pipefail
           npm --prefix frontend ci
-          npm --prefix frontend run build
+          VITE_API_URL=/api npm --prefix frontend run build
           node scripts/staging-release-manifest.mjs create
           node scripts/staging-release-manifest.mjs verify
       - name: Compare all real frontend Docker image bytes and Nginx config to trusted CI manifest
