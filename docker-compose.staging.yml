@@ -1,0 +1,106 @@
+# 0P.22: STAGING ONLY. Never combine with docker-compose.yml, production
+# .env, or docker-compose.report-worker.yml. No implicit production resources.
+name: sedeagro-staging
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sedeagro_staging
+      POSTGRES_USER: sedeagro_staging_owner
+      POSTGRES_PASSWORD: ${SEDEAGRO_STAGING_OWNER_PASSWORD:?Private, unique staging-only PostgreSQL owner password required}
+    volumes:
+      - staging_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sedeagro_staging_owner -d sedeagro_staging"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - staging_internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - staging_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - staging_internal
+
+  backend:
+    image: sedeagro-staging-backend:${SEDEAGRO_STAGING_SHA:?Explicit staging SHA40 required}
+    build:
+      context: ./backend
+      target: prod
+      args:
+        RELEASE_SHA: ${SEDEAGRO_STAGING_SHA:?Explicit staging SHA40 required}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SEED_MODE: prod
+      PORT: "3001"
+      LOG_LEVEL: info
+      LOG_SQL: "0"
+      LOG_STACK: "0"
+      LOG_FORMAT: json
+      DATABASE_URL: postgres://sedeagro_staging_app:${SEDEAGRO_STAGING_APP_PASSWORD:?Staging runtime DB role secret required}@db:5432/sedeagro_staging
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${SEDEAGRO_STAGING_JWT_SECRET:?Distinct staging-only JWT signing secret required}
+      BASE_DOMAIN: ${SEDEAGRO_STAGING_HOST:?Unique staging HTTPS hostname required}
+      CORS_ORIGIN: https://${SEDEAGRO_STAGING_HOST:?Unique staging HTTPS hostname required}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/ready').then(r=>{if(r.status!==200)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 60s
+    networks:
+      staging_internal:
+        aliases:
+          # frontend/nginx.conf resolves this name inside STAGING ONLY.
+          - sedeagro_backend
+
+  frontend:
+    image: sedeagro-staging-frontend:${SEDEAGRO_STAGING_SHA:?Explicit staging SHA40 required}
+    build:
+      context: ./frontend
+      target: prod
+      args:
+        RELEASE_SHA: ${SEDEAGRO_STAGING_SHA:?Explicit staging SHA40 required}
+        VITE_API_URL: /api
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/index.html >/dev/null"]
+      interval: 15s
+      timeout: 8s
+      retries: 4
+      start_period: 45s
+    # NO public listener. Authorized HTTPS edge may proxy a dedicated
+    # loopback-only port on the same host after independent security approval.
+    ports:
+      - "127.0.0.1:4183:80"
+    networks:
+      - staging_internal
+
+volumes:
+  staging_pgdata:
+  staging_redisdata:
+
+networks:
+  staging_internal:
+    internal: true
