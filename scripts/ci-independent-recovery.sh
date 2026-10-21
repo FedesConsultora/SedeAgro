@@ -59,7 +59,7 @@ done
   fail 'missing CI-only immutable SQL inputs'
 
 [[ "$(docker inspect --format '{{.Config.Image}}' "$SOURCE_ID" 2>/dev/null)" == \
-  'postgis/postgis:16-3.4' ]] || fail 'source must be pinned disposable PostGIS container'
+  'postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5' ]] || fail 'source must be pinned disposable PostGIS container'
 
 isolated=''
 cleanup() {
@@ -87,11 +87,11 @@ isolated="$(docker run --detach --rm --pull never --network none \
   --env POSTGRES_DB="$BOOTSTRAP" \
   --env POSTGRES_USER="$OWNER" \
   --env POSTGRES_PASSWORD=temporary-ci-independent-recovery-password \
-  postgis/postgis:16-3.4)" || fail 'cannot create networkless PostGIS container'
+  postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5)" || fail 'cannot create networkless PostGIS container'
 [[ "$isolated" =~ ^[a-f0-9]{64}$ ]] || fail 'Docker returned invalid recovery container identity'
 [[ "$isolated" != "$SOURCE_ID" ]] || fail 'recovery must not reuse source container'
 [[ "$(docker inspect --format '{{.Config.Image}}' "$isolated")" == \
-  'postgis/postgis:16-3.4' &&
+  'postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5' &&
    "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$isolated")" == none &&
    "$(docker inspect --format '{{len .HostConfig.PortBindings}}' "$isolated")" == 0 ]] ||
   fail 'independent PostGIS lacks network/port isolation'
