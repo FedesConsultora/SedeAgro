@@ -1,0 +1,48 @@
+# Optional one-tenant reports worker. Never included in the normal production
+# compose invocation; requires an explicit -f and --profile from an operator.
+# Reuses the SAME backend source/lockfile and internal PostGIS service.
+services:
+  report-worker:
+    profiles:
+      - reports
+    build:
+      context: ./backend
+      target: prod
+      args:
+        RELEASE_SHA: ${SEDEAGRO_RELEASE_SHA:?Exact approved SHA required}
+    command: ["node", "scripts/report-worker-startup.mjs"]
+    restart: unless-stopped
+    user: "node"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    stop_grace_period: 150s
+    environment:
+      NODE_ENV: production
+      SEED_MODE: prod
+      LOG_SQL: "0"
+      LOG_STACK: "0"
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      SEDEAGRO_REPORT_WORKER_APPROVAL: ${SEDEAGRO_REPORT_WORKER_APPROVAL:?Worker start must be approved for SHA and tenant}
+      REPORT_WORKER_TENANT_ID: ${REPORT_WORKER_TENANT_ID:?One tenant UUID is required}
+      POSTGRES_USER: ${POSTGRES_USER:?Database owner name required}
+      POSTGRES_DB: ${POSTGRES_DB:?Database name required}
+      APP_DB_USER: ${APP_DB_USER:?Runtime database role required}
+      DATABASE_URL: postgres://${APP_DB_USER:?}:${APP_DB_PASSWORD:?Runtime DB password required}@db:5432/${POSTGRES_DB:?}
+      # NOT the API JWT signing key. Required solely by shared config/env.js;
+      # worker startup refuses any other value before loading application code.
+      JWT_SECRET: sedeagro-worker-no-api-auth-${SEDEAGRO_RELEASE_SHA:?}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - sedeagro_internal
+    # Deliberately no ports, no env_file, no migrations, no Redis, no external networks.

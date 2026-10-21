@@ -104,3 +104,27 @@ test('production containers embed exact approved SHA and expose OCI revision lab
   assert.equal((compose.match(/RELEASE_SHA: \$\{SEDEAGRO_RELEASE_SHA:\?/g) || []).length, 2);
 });
 
+
+
+test('opt-in report worker is not part of default Compose and stays tenant-internal', () => {
+  const compose = read('docker-compose.yml');
+  const optional = read('docker-compose.report-worker.yml');
+  const prodDockerfile = read('backend/Dockerfile');
+  assert.doesNotMatch(compose, /^  report-worker:/m,
+    'default production compose must not autoactivate the reports worker');
+  assert.match(optional, /^  report-worker:\n    profiles:\n      - reports/m);
+  assert.match(optional, /command: \["node", "scripts\/report-worker-startup\.mjs"\]/);
+  assert.match(prodDockerfile, /COPY scripts \.\/scripts/);
+  assert.match(optional, /restart: unless-stopped/);
+  assert.match(optional, /user: "node"/);
+  assert.match(optional, /read_only: true/);
+  assert.match(optional, /cap_drop:\n      - ALL/);
+  assert.match(optional, /no-new-privileges:true/);
+  assert.match(optional, /REPORT_WORKER_TENANT_ID: \$\{REPORT_WORKER_TENANT_ID:\?/);
+  assert.match(optional, /SEDEAGRO_REPORT_WORKER_APPROVAL: \$\{SEDEAGRO_REPORT_WORKER_APPROVAL:\?/);
+  assert.match(optional, /JWT_SECRET: sedeagro-worker-no-api-auth-\$\{SEDEAGRO_RELEASE_SHA:\?/);
+  assert.match(optional, /APP_DB_PASSWORD:\?/);
+  assert.match(optional, /networks:\n      - sedeagro_internal/);
+  assert.doesNotMatch(optional, /^\s+(?:ports|env_file|privileged|network_mode):/m);
+  assert.doesNotMatch(optional, /fedes-net/);
+});
