@@ -165,7 +165,10 @@ test('source code pins a second, networkless, disposable PostGIS and cleans up',
   assert.match(source,/restore-data-fingerprint\.sql/);
   assert.match(source,/ci-independent-recovery-rls\.sql/);
   assert.match(source,/provision-runtime-role\.sql/);
-  assert.doesNotMatch(source,/docker compose|deploy-prod\.sh|\bdropdb\b|\bcreatedb\b/);
+  assert.match(source,/--template=template0 "\$TARGET"/);
+  assert.match(source,/BOOTSTRAP='sedeagro_recovery_bootstrap'/);
+  assert.match(source,/TARGET='sedeagro_restore_test'/);
+  assert.doesNotMatch(source,/docker compose|deploy-prod\\.sh|\\bdropdb\\b/);
   assert.doesNotMatch(source,/docker (?:push|pull)|--publish|\-p 5432/);
 });
 
