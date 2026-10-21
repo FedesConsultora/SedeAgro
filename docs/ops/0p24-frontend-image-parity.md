@@ -10,7 +10,7 @@ Una imagen puede llevar un label correcto y contener JavaScript distinto, archiv
 
 La ejecución real del job `production-images` se amplía **después** de construir y revisar las imágenes finales:
 
-1. Prepara Node 22 en el runner descartable y ejecuta `npm --prefix frontend ci` usando exclusivamente el lockfile de frontend. Compila `npm --prefix frontend run build` como **referencia separada del Docker build**.
+1. Prepara Node 22 en el runner descartable y ejecuta `npm --prefix frontend ci` usando exclusivamente el lockfile de frontend. Compila `VITE_API_URL=/api npm --prefix frontend run build` como **referencia separada del Docker build**. Es indispensable usar **el mismo origen API** en ambas construcciones; de otra manera Vite puede emitir nombres con hash diferentes sin que exista manipulación del código. Además el job `browser-offline` fija `VITE_API_URL: /api` al producir el archivo descargable `sedeagro-staging-<SHA>` sobre `main`.
 2. Genera `staging-release-manifest.json` con el Git HEAD exacto usando `scripts/staging-release-manifest.mjs create`, lo valida de nuevo mediante `verify` y exige índice, service worker y assets versionados.
 3. Ejecuta `scripts/verify-frontend-image-parity.mjs --sha "$IMAGE_SHA"`, que admite únicamente `CI=true`, `GITHUB_ACTIONS=true` y un SHA40 idéntico al checkout y al que se utilizó para construir la imagen.
 4. Usa `docker image inspect` **únicamente** sobre el tag exacto `sedeagro-frontend-rc:<SHA>`, exige el label OCI de revisión exacto y registra su ID local SHA256 de imagen.
