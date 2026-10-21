@@ -170,6 +170,8 @@ jobs:
       - name: Install Chromium for offline browser gate
         run: npx playwright install chromium --with-deps
       - name: Build production SPA
+        env:
+          VITE_API_URL: /api
         run: npm --workspace frontend run build
       - name: Real-browser IndexedDB migration, encryption and offline reload
         run: node frontend/test/offlineBrowser.mjs
