@@ -365,7 +365,7 @@ async function main() {
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   main().catch(error => {
     // Docker and file errors may include secrets/paths; authored codes only.
-    const safe = /^OCI_BUNDLE_BLOCKED: [A-Za-z0-9 ,.:\-]+$/.test(error?.message || '') &&
+    const safe = /^OCI_BUNDLE_BLOCKED: [A-Za-z0-9 _,.:\-]+$/.test(error?.message || '') &&
       error.message.length <= 170 ? error.message : 'opaque input/IO failure';
     console.error('BLOCKED OCI release bundle: ' + safe);
     process.exitCode = 2;
