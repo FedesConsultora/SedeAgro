@@ -66,6 +66,8 @@ jobs:
           node --test scripts/test/staging-topology.test.mjs scripts/test/staging-runtime.test.mjs
           node --check scripts/verify-frontend-image-parity.mjs
           node --test scripts/test/frontend-image-parity.test.mjs
+          node --check scripts/oci-release-bundle.mjs
+          node --test scripts/test/oci-release-bundle.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -210,7 +212,7 @@ jobs:
 
   production-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       IMAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
@@ -281,6 +283,28 @@ jobs:
           node --check scripts/verify-frontend-image-parity.mjs
           node --test scripts/test/frontend-image-parity.test.mjs
           node scripts/verify-frontend-image-parity.mjs --sha "$IMAGE_SHA"
+      - name: Export paired exact-head Docker images and verify offline SHA256 archive
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/sedeagro-oci"
+          archive="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.tar"
+          receipt="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.json"
+          docker save --output "$archive" \
+            "sedeagro-backend-rc:$IMAGE_SHA" "sedeagro-frontend-rc:$IMAGE_SHA"
+          node scripts/oci-release-bundle.mjs create --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          node scripts/oci-release-bundle.mjs verify --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          # No docker load/run, registry publication or staging deployment.
+      - name: Preserve transportable OCI image pair for approved operator review (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sedeagro-oci-${{ github.sha }}
+          path: ${{ runner.temp }}/sedeagro-oci/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   dependency-security:
     runs-on: ubuntu-latest
