@@ -45,4 +45,4 @@ services:
         condition: service_healthy
     networks:
       - sedeagro_internal
-    # Deliberately no ports, no env_file, no migrations, no Redis, no fedes-net.
+    # Deliberately no ports, no env_file, no migrations, no Redis, no external networks.
