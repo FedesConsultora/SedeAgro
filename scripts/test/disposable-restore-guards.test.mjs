@@ -70,3 +70,31 @@ test('restored data requires matching migrations, FORCE RLS and full suite', () 
   assert.match(source, /npm --workspace backend run test:db/);
   assert.match(source, /TEST_DATABASE_APP_URL=/);
 });
+
+test('content parity checks actual public rows and sequences before restored API tests', () => {
+  const sql = readFileSync(new URL('../sql/restore-data-fingerprint.sql', import.meta.url), 'utf8');
+  assert.match(source, /data_before="\\$\\(data_fingerprint "\\$SOURCE_DB"\\)"/);
+  assert.match(source, /data_after="\\$\\(data_fingerprint "\\$RESTORED_DB"\\)"/);
+  assert.match(source, /"\\$data_after" != "\\$data_before"/);
+  assert.match(source, /restored application rows\\/sequence state differ/);
+  assert.match(source, /restore-data-fingerprint\\.sql/);
+  assert.match(sql, /current_database\\(\\) NOT IN/);
+  assert.match(sql, /current_setting\\('is_superuser'\\)/);
+  assert.match(sql, /CREATE TEMP TABLE/);
+  assert.match(sql, /row_to_json\\(t\\)::text/);
+  assert.match(sql, /string_agg\\(row_digest, '[^']*' ORDER BY row_digest\\)/);
+  assert.match(sql, /last_value::text.*is_called::text/);
+  assert.match(sql, /relispartition/);
+  assert.match(sql, /pg_catalog\\.pg_depend/);
+  assert.doesNotMatch(sql, /\\b(?:DROP DATABASE|TRUNCATE|DELETE FROM public|UPDATE public|CREATE TABLE public)\\b/i);
+});
+
+test('data fingerprint cannot run without explicit disposable database confirmation', () => {
+  const sql = readFileSync(new URL('../sql/restore-data-fingerprint.sql', import.meta.url), 'utf8');
+  assert.match(sql, /sedeagro_test/);
+  assert.match(sql, /sedeagro_restore_test/);
+  assert.match(sql, /RAISE EXCEPTION 'CI restore fingerprint refuses/);
+  const check = invoke(['--check-only'], valid);
+  assert.equal(check.status, 0, check.stderr);
+  assert.doesNotMatch(check.stdout, /[a-f0-9]{32}/);
+});
