@@ -270,11 +270,31 @@ function dockerImages(path, sha, scanned) {
       check(typeof payload.created === 'string' &&
         payload.created.length <= 80 && payload.os === 'linux',
       'detached OCI JSON metadata lacks expected build-platform and creation fields');
-      check(!payload.rootfs && !payload.config && !payload.layers &&
-        !payload.manifests && !payload.Env &&
+      check(!payload.layers && !payload.manifests && !payload.Env &&
         !Object.keys(payload).some(k =>
           /(?:secret|password|token|credential|private|environment)/i.test(k)),
-      'detached OCI payload could introduce unreferenced image data or sensitive fields');
+      'detached OCI metadata contains an unrelated manifest or sensitive field');
+      // Docker-save may retain content-addressed configs for build stages.
+      // They are NOT promoted to release images: verify their schema and
+      // account for their full bytes only as auxiliary receipt metadata.
+      if (payload.rootfs) {
+        check(payload.rootfs.type === 'layers' &&
+          Array.isArray(payload.rootfs.diff_ids) &&
+          payload.rootfs.diff_ids.length <= 256 &&
+          payload.rootfs.diff_ids.every(id => DIGEST.test(id)),
+        'invalid auxiliary image-config rootfs descriptor');
+      }
+      if (payload.config) {
+        check(typeof payload.config === 'object' &&
+          !Array.isArray(payload.config) &&
+          (!payload.config.Env ||
+            (Array.isArray(payload.config.Env) &&
+              payload.config.Env.length <= 100 &&
+              payload.config.Env.every(item =>
+                typeof item === 'string' && item.length <= 512 &&
+                !/(?:JWT_SECRET|POSTGRES_PASSWORD|APP_DB_PASSWORD|TOKEN|PRIVATE_KEY)=/i.test(item)))),
+        'unsafe auxiliary image-config environment');
+      }
       auxiliaryBytes += entry.size;
       check(auxiliary.length < 256 && auxiliaryBytes <= 4 * 1024 * 1024,
         'too many detached OCI metadata blobs or aggregate metadata size excessive');
