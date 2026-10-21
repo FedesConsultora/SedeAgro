@@ -70,6 +70,8 @@ jobs:
           node --test scripts/test/oci-release-bundle.test.mjs
           node --check scripts/ci-oci-import-rehearsal.mjs
           node --test scripts/test/ci-oci-import-rehearsal.test.mjs
+          node --check scripts/verify-oci-signed-provenance.mjs
+          node --test scripts/test/verify-oci-signed-provenance.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -353,11 +355,54 @@ jobs:
           node scripts/security-lock-delta.mjs backend /tmp/sedeagro-backend-before.json /tmp/sedeagro-audit-backend/package-lock.json
           node scripts/security-lock-delta.mjs frontend /tmp/sedeagro-frontend-before.json /tmp/sedeagro-audit-frontend/package-lock.json
 
+  attest-oci-bundle:
+    # Sign only the already-integrated, actually exported two-image artifact.
+    # The signing job is isolated from Docker builds and PRs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: production-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      IMAGE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require exact merged source commit before signing
+        run: test "$(git rev-parse HEAD)" = "$IMAGE_SHA"
+      - name: Fetch the producer's immutable release archive and receipt
+        uses: actions/download-artifact@v4
+        with:
+          name: sedeagro-oci-${{ github.sha }}
+          path: ${{ runner.temp }}/sedeagro-oci/
+      - name: Independently verify entire OCI archive before signing
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.tar"
+          receipt="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.json"
+          node scripts/oci-release-bundle.mjs verify --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+      - name: Sign GitHub OIDC/Sigstore SLSA provenance for exact TAR and receipt
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/sedeagro-oci/sedeagro-images-${{ github.sha }}.tar
+            ${{ runner.temp }}/sedeagro-oci/sedeagro-images-${{ github.sha }}.json
+
   offline-image-import:
     # This is a DIFFERENT disposable GitHub runner with its own Docker daemon.
     # Only integrated main artifacts are available; no staging or prod access.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: production-images
+    needs: [production-images, attest-oci-bundle]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -377,14 +422,20 @@ jobs:
         with:
           name: sedeagro-oci-${{ github.sha }}
           path: ${{ runner.temp }}/sedeagro-oci/
-      - name: Verify downloaded bytes without Docker and import images into clean runner
+      - name: Check GitHub Sigstore signatures and exact file bytes before Docker import
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.tar"
           receipt="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.json"
           node scripts/oci-release-bundle.mjs verify --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
+          node scripts/verify-oci-signed-provenance.mjs --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
           node scripts/ci-oci-import-rehearsal.mjs --mode fresh \
             --sha "$IMAGE_SHA" --bundle "$archive" --receipt "$receipt"
-          # No Docker build, run, push/pull or deploy. This proves import in
-          # a new daemon from the same GitHub Actions release artifact.
+          # Attestations are fetched from GitHub and verified via gh Sigstore
+          # policy; no registry, deployment or production Docker access.
+          # The receiver imports only after both file subjects pass signature
+          # and offline TAR checks. The run has a sixth success gate.

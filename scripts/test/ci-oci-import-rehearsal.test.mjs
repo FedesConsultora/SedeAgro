@@ -169,7 +169,7 @@ test('workflow does producer replay and separate main-only fresh runner download
   assert.match(prod,/ci-oci-import-rehearsal\.mjs --mode replace/);
   assert.match(prod,/oci-release-bundle\.mjs verify/);
   assert.match(prod,/github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
-  assert.match(fresh,/needs: production-images/);
+  assert.match(fresh,/needs: \[production-images, attest-oci-bundle\]/);
   assert.match(fresh,/github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
   assert.match(fresh,/actions\/download-artifact@v4/);
   assert.match(fresh,/ci-oci-import-rehearsal\.mjs --mode fresh/);
