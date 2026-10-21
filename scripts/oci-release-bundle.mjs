@@ -261,7 +261,19 @@ function dockerImages(path, sha, scanned) {
             category = payload?.rootfs ? 'image-config' :
               payload?.schemaVersion === 2 && Array.isArray(payload?.layers) ? 'image-manifest' :
               payload?.schemaVersion === 2 && Array.isArray(payload?.manifests) ? 'image-index' :
-              'other-json';
+              Array.isArray(payload) ? 'json-array' :
+              payload && typeof payload === 'object' ?
+                'json-keys-' + Object.keys(payload).sort()
+                  .slice(0, 8).map(key => {
+                    const allowed = new Set(['mediaType','config','layers','manifests',
+                      'schemaVersion','annotations','digest','size','artifactType',
+                      'platform','architecture','os','index','descriptors','Image',
+                      'Config','RepoTags','Layers','Created','author','created',
+                      'history','rootfs','subject','referrers','repositories',
+                      'blobs','version','imageLayoutVersion']);
+                    return allowed.has(key) ? key : 'other';
+                  }).join('-') :
+                'json-primitive';
           } catch { /* binary blob, not metadata */ }
         }
         fail('unreferenced OCI ' + category + ' blob in archive');
