@@ -61,6 +61,8 @@ jobs:
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
+          bash -n scripts/ci-rollback-rehearsal.sh
+          node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
           node --test scripts/test/disposable-restore-guards.test.mjs
           npm --workspace backend run test
