@@ -1,4 +1,8 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+const baseLock = JSON.parse(readFileSync(new URL('../base-image-lock.json', import.meta.url), 'utf8'));
+const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].digest;
+
 import assert from 'node:assert/strict';
 import { validateStagingContainers, inspectStagingRuntime } from '../verify-staging-runtime.mjs';
 
@@ -14,8 +18,8 @@ function container(name, letter) {
     RestartCount:0,
     State:{Running:true,Status:'running',Health:{Status:'healthy'}},
     Config:{
-      Image:name==='db'?'postgis/postgis:16-3.4':
-        name==='redis'?'redis:7-alpine':'sedeagro-staging-'+name+':'+sha,
+      Image:name==='db'?locked('postgis'):
+        name==='redis'?locked('redis'):'sedeagro-staging-'+name+':'+sha,
       Labels:{
         'com.docker.compose.project':project,
         'com.docker.compose.service':name,
@@ -99,6 +103,18 @@ test('wrong project/service/network or same host production volume fails closed'
   for(const mutate of mutations){
     const c=fixture(); mutate(c);
     assert.throws(()=>validateStagingContainers(c,{sha,host}),/BLOCKED/);
+  }
+});
+
+test('staging runtime denies mutable database/cache tags even for healthy containers',()=>{
+  for(const [name,key] of [['db','postgis'],['redis','redis']]){
+    const ref=locked(key);
+    for(const value of [baseLock.images[key].tag,
+      baseLock.images[key].tag+'@sha256:'+'e'.repeat(64)]){
+      const c=fixture(); c[name].Config.Image=value;
+      assert.notEqual(value,ref);
+      assert.throws(()=>validateStagingContainers(c,{sha,host}),/BLOCKED/);
+    }
   }
 });
 
