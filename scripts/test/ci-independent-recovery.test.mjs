@@ -98,7 +98,7 @@ function fixture(t,{fakeNetwork='bridge',unsafeArchive=false}={}){
     'printf "%s\\n" "$1" >> "$MOCK_DOCKER_CALLS"',
     'if [[ "$1" == inspect ]]; then',
     '  case "$*" in',
-    '    *Config.Image*) echo postgis/postgis:16-3.4 ;;',
+    '    *Config.Image*) echo postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5 ;;',
     '    *HostConfig.NetworkMode*) echo "$MOCK_DOCKER_NETWORK" ;;',
     '    *PortBindings*) echo 0 ;;',
     '    *Mounts*) echo "volume:/var/lib/postgresql/data " ;;',
