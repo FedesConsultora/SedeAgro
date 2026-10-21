@@ -61,6 +61,9 @@ jobs:
           node --check scripts/verify-frontend-headers.mjs
           node --check scripts/verify-deployed-staging.mjs
           node --test scripts/test/staging-remote-provenance.test.mjs
+          node --check scripts/verify-staging-topology.mjs
+          node --check scripts/verify-staging-runtime.mjs
+          node --test scripts/test/staging-topology.test.mjs scripts/test/staging-runtime.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -212,6 +215,20 @@ jobs:
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Verify fully isolated staging Compose using actual Docker Compose parser
+        env:
+          SEDEAGRO_STAGING_SHA: ${{ env.IMAGE_SHA }}
+          SEDEAGRO_STAGING_HOST: staging.ci.test
+          SEDEAGRO_STAGING_OWNER_PASSWORD: 8v7XqaWn3Fpr6Kjh9MNpQ5aZ2R4uLc
+          SEDEAGRO_STAGING_APP_PASSWORD: 4sFdYqB2Cj6YtK8nQv3WX9rmS5VbTp
+          SEDEAGRO_STAGING_JWT_SECRET: y6Qn4HprW83JaZ2Ky5QcP9VU6BNmR7dL
+        run: |
+          set -euo pipefail
+          docker compose --env-file /dev/null -f docker-compose.staging.yml \
+            config --format json |
+            node scripts/verify-staging-topology.mjs \
+              --sha "$IMAGE_SHA" --host "$SEDEAGRO_STAGING_HOST"
+          # Parse-only; do not up/build/provision/migrate this staging stack.
       - name: Build backend production image from local lockfile
         run: docker build --target prod --build-arg RELEASE_SHA="$IMAGE_SHA" --tag sedeagro-backend-rc:$IMAGE_SHA ./backend
       - name: Verify backend image boots Node22 with production dependencies
