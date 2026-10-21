@@ -44,6 +44,18 @@ test('all Dockerfiles, three Compose targets and PostGIS Actions service are pin
   assert.doesNotMatch(JSON.stringify(result),/POSTGRES_PASSWORD|JWT_SECRET/);
 });
 
+test('Syft scanner image inputs are not Docker services, but CI PostGIS service remains pinned',()=>{
+  const lock=load(),sources=fixture();
+  const original=sources['.github/workflows/postgres-isolation.yml'];
+  const extra=original+'\n      - name: A harmless SBOM scan param\n        with:\n          image: unpinned-local-image:abc\n';
+  assert.equal(validateBaseImageSources(lock,{...sources,
+    '.github/workflows/postgres-isolation.yml':extra}).source_files,9);
+  const removed=original.replace('        image: '+pinned('postgis'),'        image: postgis/postgis:16-3.4');
+  assert.notEqual(removed,original);
+  assert.throws(()=>validateBaseImageSources(lock,{...sources,
+    '.github/workflows/postgres-isolation.yml':removed}),/BASE_IMAGE_PIN_BLOCKED/);
+});
+
 test('tag-only fallback, changed digest or unreviewed image is blocked in EVERY target',()=>{
   const source=fixture(),lock=load();
   const cases=[

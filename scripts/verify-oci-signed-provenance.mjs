@@ -44,7 +44,7 @@ export function attestationArgs(path, sha) {
 }
 
 export function validateVerifiedAttestation(output, { name, digest } = {}) {
-  requireSafe(typeof name === 'string' && /^sedeagro-images-[a-f0-9]{40}\.(tar|json)$/.test(name) &&
+  requireSafe(typeof name === 'string' && /^(?:sedeagro-images-[a-f0-9]{40}\.(?:tar|json)|sedeagro-(?:backend|frontend)-[a-f0-9]{40}\.(?:spdx|trivy)\.json|sedeagro-security-[a-f0-9]{40}\.json)$/.test(name) &&
     SHA256.test(digest || ''), 'invalid subject name or expected sha256');
   let entries;
   try { entries = typeof output === 'string' ? JSON.parse(output) : output; }
