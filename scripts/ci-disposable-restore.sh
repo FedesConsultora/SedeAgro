@@ -151,6 +151,11 @@ if [[ "$data_after" != "$data_before" ]]; then
 fi
 echo 'PASS: restored migration versions, catalogs, FORCE RLS, application row contents and sequence state match original.'
 
+# 0P.21: BEFORE restored-db RLS/HTTP suite, rehearse a post-backup write
+# window against the disposable SOURCE and verify every fixture is reverted.
+# No backup restore or arbitrary DB targets are offered by this helper.
+bash "$root/scripts/ci-rollback-rehearsal.sh" --run
+
 # Privileges are intentionally stripped from the archive: provision a fresh
 # runtime role grant on the restored database before the API integration suite.
 docker exec -i "$CI_POSTGIS_CONTAINER" psql -X -q -U "$OWNER" \
