@@ -151,6 +151,18 @@ if [[ "$data_after" != "$data_before" ]]; then
 fi
 echo 'PASS: restored migration versions, catalogs, FORCE RLS, application row contents and sequence state match original.'
 
+# 0P.23: the SAME archive must restore successfully in a SECOND PostGIS
+# container with --network none, without any shared DB volume or TCP port.
+# This is a synthetic CI recovery drill, NOT a private off-VPS restore.
+CI_RECOVERY_ARCHIVE="$dump" \
+CI_RECOVERY_ARCHIVE_SHA256="$archive_sha" \
+CI_RECOVERY_EXPECTED_DATA="$data_before" \
+CI_RECOVERY_EXPECTED_CATALOG="$before" \
+SEDEAGRO_INDEPENDENT_RECOVERY=I_ACCEPT_NETWORKLESS_CI_RECOVERY \
+  bash "$root/scripts/ci-independent-recovery.sh" --run
+
+
+
 # 0P.21: BEFORE restored-db RLS/HTTP suite, rehearse a post-backup write
 # window against the disposable SOURCE and verify every fixture is reverted.
 # No backup restore or arbitrary DB targets are offered by this helper.
