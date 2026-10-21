@@ -24,6 +24,14 @@ services:
     mem_limit: 512m
     cpus: 1.0
     stop_grace_period: 150s
+    # Docker does not restart an unhealthy container automatically. An external
+    # monitor must alert on unhealthy and restart-count changes.
+    healthcheck:
+      test: ["CMD", "node", "scripts/report-worker-health.mjs"]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      start_period: 45s
     environment:
       NODE_ENV: production
       SEED_MODE: prod
