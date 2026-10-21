@@ -217,7 +217,7 @@ export function verifySecuritySignatures({sha,dir,ociReceiptPath,execute}){
     const raw=run(attestationArgs(resolve(dir,subject.name),sha));
     check(typeof raw==='string'&&raw.length>0&&raw.length<4*1024*1024,
       'GitHub verified attestation output missing');
-    validateVerifiedAttestation(raw,subject);
+    validateVerifiedAttestation(raw,{name:subject.name,digest:subject.sha256});
   }
   return{...evidence,status:'GITHUB_SIGNED_IMAGE_SECURITY_VERIFIED_RELEASE_NOT_CERTIFIED',
     source_signed:true};
