@@ -22,3 +22,9 @@
 - `node --test scripts/test/disposable-restore-guards.test.mjs`.
 - GitHub Actions: cuatro jobs verdes sobre HEAD exacto; en `tenant-rls`, backup y restore PostgreSQL/PostGIS descartables deben aprobar la nueva igualdad de contenidos y secuencias.
 - Tras merge normal, repetir CI independiente sobre nuevo `main`. No inferir resultado de un SHA anterior.
+
+## Gate de seguridad adicional descubierto durante el PR
+
+La primera ejecución de CI para 0P.18 reveló un **nuevo advisory HIGH** en el frontend build, asociado a `vite@8.0.16` y la cadena `launch-editor` (manipulación de argumentos de CLI/Windows), mientras el backend siguió en 0 critical/high/moderate. El gate `dependency-security` bloqueó correctamente la corrida aunque los otros tres jobs aprobaron, incluido el restore real con la nueva huella.
+
+En el mismo PR se incorporó una remediación compatible y separada en commits de seguridad: `vite@8.3.4` con lockfiles independientes frontend y raíz coherentes, usando las versiones/integridades SHA512 sugeridas por el `npm audit fix --package-lock-only` de diagnóstico en CI. No se usó `--force`, waivers ni supresión de CVEs. Los checks deben volver a pasar sobre el HEAD **posterior** a estos commits, no reutilizar el verde de restauración de la corrida anterior. Si una nueva auditoría reporta un HIGH, la integración queda bloqueada.
