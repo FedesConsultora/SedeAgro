@@ -194,10 +194,13 @@ function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  try { main(); } catch {
-    // Docker metadata, filenames, archive content and local environment can
-    // contain sensitive data; do not echo thrown errors to public CI logs.
-    console.error('BLOCKED frontend image parity: invalid CI release, image or bytes');
+  try { main(); } catch (error) {
+    // Only our fixed authored messages are safe for public CI logs. Raw
+    // Docker, filesystem, manifest, URLs or environment errors are redacted.
+    const reason = typeof error?.message === 'string' &&
+      error.message.startsWith('FRONTEND_IMAGE_PARITY_BLOCKED: ') &&
+      error.message.length <= 180 ? error.message : 'unclassified verification failure';
+    console.error('BLOCKED frontend image parity: ' + reason);
     process.exitCode = 2;
   }
 }
