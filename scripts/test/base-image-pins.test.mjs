@@ -13,7 +13,10 @@ const load = () => JSON.parse(read('scripts/base-image-lock.json'));
 const filenames = [
   'backend/Dockerfile', 'frontend/Dockerfile', 'docker-compose.yml',
   'docker-compose.dev.yml', 'docker-compose.staging.yml',
-  '.github/workflows/postgres-isolation.yml'
+  '.github/workflows/postgres-isolation.yml',
+  'scripts/ci-disposable-restore.sh',
+  'scripts/ci-independent-recovery.sh',
+  'scripts/ci-rollback-rehearsal.sh'
 ];
 const fixture = () => Object.fromEntries(filenames.map(p => [p, read(p)]));
 const digest = key => load().images[key].digest;
@@ -33,9 +36,9 @@ test('reviewed lock has exactly four nonempty digests, distinct sources and expe
 test('all Dockerfiles, three Compose targets and PostGIS Actions service are pinned', () => {
   const result=validateBaseImageSources(load(),fixture());
   assert.equal(result.status,'BASE_IMAGE_SOURCES_PINNED_REVIEW_REQUIRED');
-  assert.equal(result.source_files,6);
+  assert.equal(result.source_files,9);
   assert.equal(result.unique_base_images,4);
-  assert.equal(Object.values(result.references).reduce((a,b)=>a+b,0),11);
+  assert.equal(Object.values(result.references).reduce((a,b)=>a+b,0),16);
   assert.equal(result.registry_provenance_signed,false);
   assert.equal(result.staging_deployed,false);
   assert.doesNotMatch(JSON.stringify(result),/POSTGRES_PASSWORD|JWT_SECRET/);
@@ -49,7 +52,10 @@ test('tag-only fallback, changed digest or unreviewed image is blocked in EVERY 
     ['docker-compose.yml','redis'],
     ['docker-compose.dev.yml','postgis'],
     ['docker-compose.staging.yml','redis'],
-    ['.github/workflows/postgres-isolation.yml','postgis']
+    ['.github/workflows/postgres-isolation.yml','postgis'],
+    ['scripts/ci-disposable-restore.sh','postgis'],
+    ['scripts/ci-independent-recovery.sh','postgis'],
+    ['scripts/ci-rollback-rehearsal.sh','postgis']
   ];
   for(const [file,key] of cases) {
     const original=pinned(key);
