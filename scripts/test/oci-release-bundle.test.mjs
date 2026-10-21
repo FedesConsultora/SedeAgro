@@ -176,6 +176,35 @@ test('rejects detached OCI metadata blobs that are not reachable from the index'
     /OCI_BUNDLE_BLOCKED/);
 });
 
+test('allows only bounded self-hashed OCI auxiliary JSON and includes digest in receipt',async t=>{
+  const metadata=JSON.stringify({created:'2026-10-21T00:00:00Z',os:'linux',
+    marker:'Docker save auxiliary metadata'});
+  const digestValue=hash(Buffer.from(metadata));
+  const f=fixture(t,{ociIndex:true,extra:[{
+    name:'blobs/sha256/'+digestValue,data:metadata
+  }]});
+  const receipt=await computeReceipt({bundlePath:f.bundlePath,sha:SHA});
+  assert.deepEqual(receipt.auxiliary_oci_metadata,[{
+    sha256:'sha256:'+digestValue,bytes:Buffer.byteLength(metadata)
+  }]);
+});
+
+test('rejects detached OCI JSON containing secrets, unrelated config or wrong platform',async t=>{
+  for(const metadata of [
+    {created:'2026-10-21',os:'linux',password:'not_allowed'},
+    {created:'2026-10-21',os:'linux',rootfs:{type:'layers',diff_ids:[]}},
+    {created:'2026-10-21',os:'windows'},
+    {created:'2026-10-21',os:'linux',layers:[]}
+  ]){
+    const encoded=JSON.stringify(metadata);
+    const f=fixture(t,{ociIndex:true,extra:[{
+      name:'blobs/sha256/'+hash(Buffer.from(encoded)),data:encoded
+    }]});
+    await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
+      /OCI_BUNDLE_BLOCKED/);
+  }
+});
+
 test('offline CLI validates downloaded bytes without CI/Docker or network',async t=>{
   const {f}=await validReceipt(t);
   const proc=spawnSync(process.execPath,[cli,'verify','--sha',SHA,
