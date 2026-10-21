@@ -249,11 +249,24 @@ function dockerImages(path, sha, scanned) {
     }
     inspectOCIIndex(fd, scanned.entries, referenced, images);
     for (const [name, entry] of scanned.entries) {
-      if (entry.type === '5') continue;
-      check(referenced.has(name) || name === 'repositories',
-        /^blobs\/sha256\/[a-f0-9]{64}$/.test(name) ?
-          'unreferenced OCI digest blob in archive' :
-          'unexpected unreferenced payload in archive');
+      if (entry.type === '5' || referenced.has(name) || name === 'repositories') continue;
+      if (/^blobs\/sha256\/[a-f0-9]{64}$/.test(name)) {
+        // Only safe, bounded diagnostic CATEGORY; no hash, paths or image
+        // metadata content is ever logged from private release archives.
+        check(entry.sha256 === name.slice(-64), 'orphan OCI blob filename/hash mismatch');
+        let category = 'binary-layer';
+        if (entry.size <= MAX_METADATA) {
+          try {
+            const payload = JSON.parse(readExactly(fd, entry.offset, entry.size).toString('utf8'));
+            category = payload?.rootfs ? 'image-config' :
+              payload?.schemaVersion === 2 && Array.isArray(payload?.layers) ? 'image-manifest' :
+              payload?.schemaVersion === 2 && Array.isArray(payload?.manifests) ? 'image-index' :
+              'other-json';
+          } catch { /* binary blob, not metadata */ }
+        }
+        fail('unreferenced OCI ' + category + ' blob in archive');
+      }
+      fail('unexpected unreferenced non-OCI payload in archive');
     }
     return images;
   } finally { closeSync(fd); }
