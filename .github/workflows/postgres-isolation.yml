@@ -68,6 +68,8 @@ jobs:
           node --test scripts/test/frontend-image-parity.test.mjs
           node --check scripts/oci-release-bundle.mjs
           node --test scripts/test/oci-release-bundle.test.mjs
+          node --check scripts/ci-oci-import-rehearsal.mjs
+          node --test scripts/test/ci-oci-import-rehearsal.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -295,7 +297,15 @@ jobs:
             --bundle "$archive" --receipt "$receipt"
           node scripts/oci-release-bundle.mjs verify --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
-          # No docker load/run, registry publication or staging deployment.
+          # All TAR bytes, config IDs and layer diffIDs were verified before
+          # allowing the next CI-only image-store mutation.
+      - name: Rehearse re-import of the verified two-image archive in disposable Docker
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.tar"
+          receipt="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.json"
+          node scripts/ci-oci-import-rehearsal.mjs --mode replace \
+            --sha "$IMAGE_SHA" --bundle "$archive" --receipt "$receipt"
       - name: Preserve transportable OCI image pair for approved operator review (main only)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
@@ -342,3 +352,39 @@ jobs:
           (cd /tmp/sedeagro-audit-frontend && npm audit fix --package-lock-only --ignore-scripts --no-fund >/dev/null 2>&1) || true
           node scripts/security-lock-delta.mjs backend /tmp/sedeagro-backend-before.json /tmp/sedeagro-audit-backend/package-lock.json
           node scripts/security-lock-delta.mjs frontend /tmp/sedeagro-frontend-before.json /tmp/sedeagro-audit-frontend/package-lock.json
+
+  offline-image-import:
+    # This is a DIFFERENT disposable GitHub runner with its own Docker daemon.
+    # Only integrated main artifacts are available; no staging or prod access.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: production-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IMAGE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Assert fresh runner checks out exact accepted main SHA
+        run: test "$(git rev-parse HEAD)" = "$IMAGE_SHA"
+      - name: Download previously exported image pair into private ephemeral directory
+        uses: actions/download-artifact@v4
+        with:
+          name: sedeagro-oci-${{ github.sha }}
+          path: ${{ runner.temp }}/sedeagro-oci/
+      - name: Verify downloaded bytes without Docker and import images into clean runner
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.tar"
+          receipt="$RUNNER_TEMP/sedeagro-oci/sedeagro-images-$IMAGE_SHA.json"
+          node scripts/oci-release-bundle.mjs verify --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          node scripts/ci-oci-import-rehearsal.mjs --mode fresh \
+            --sha "$IMAGE_SHA" --bundle "$archive" --receipt "$receipt"
+          # No Docker build, run, push/pull or deploy. This proves import in
+          # a new daemon from the same GitHub Actions release artifact.
