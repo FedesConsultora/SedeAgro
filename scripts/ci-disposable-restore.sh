@@ -41,6 +41,7 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test -f "$root/scripts/provision-runtime-role.sql" || exit 2
 test -f "$root/backend/package.json" || exit 2
+test -f "$root/scripts/sql/restore-data-fingerprint.sql" || exit 2
 
 sql() {
   local database="$1" query="$2"
@@ -69,7 +70,25 @@ fingerprint() {
       WHERE n.nspname='public' AND c.relkind IN ('r','p')
         AND c.relrowsecurity AND c.relforcerowsecurity)::text"
 }
+# A schema footprint alone can miss lost or mutated rows with matching
+# counts. Hash actual row content (including duplicates) and sequence state.
+# This runner is deliberately locked to the two GitHub disposable DB names.
+data_fingerprint() {
+  local database="$1"
+  docker exec -i "$CI_POSTGIS_CONTAINER" psql -X -A -t -q \
+    -v ON_ERROR_STOP=1 -U "$OWNER" -d "$database" -f - \
+    < "$root/scripts/sql/restore-data-fingerprint.sql" | tr -d '\\r\\n'
+}
 before="$(fingerprint "$SOURCE_DB")"
+data_before="$(data_fingerprint "$SOURCE_DB")"
+[[ "$data_before" =~ ^([0-9]+)\\|([0-9]+)\\|[0-9a-f]{32}$ ]] || {
+  echo 'BLOCKED: disposable source data fingerprint is malformed.' >&2
+  exit 1
+}
+(( ${BASH_REMATCH[1]} >= 20 )) || {
+  echo 'BLOCKED: disposable source has too few application tables.' >&2
+  exit 1
+}
 IFS=: read -r _ migrations plans crops rls forced <<< "$before"
 if [[ "$migrations" -lt 10 || "$plans" -lt 1 || "$crops" -lt 1 ||
       "$rls" -lt 20 || "$rls" != "$forced" ]]; then
@@ -121,11 +140,16 @@ docker exec -i "$CI_POSTGIS_CONTAINER" pg_restore \
   --no-owner --no-acl < "$dump"
 
 after="$(fingerprint "$RESTORED_DB")"
+data_after="$(data_fingerprint "$RESTORED_DB")"
 if [[ "$after" != "$before" ]]; then
   echo 'BLOCKED: restored migrations/catalog/RLS footprint differs from source.' >&2
   exit 1
 fi
-echo 'PASS: restored migration versions, catalogs and FORCE RLS match original.'
+if [[ "$data_after" != "$data_before" ]]; then
+  echo 'BLOCKED: restored application rows/sequence state differ from source.' >&2
+  exit 1
+fi
+echo 'PASS: restored migration versions, catalogs, FORCE RLS, application row contents and sequence state match original.'
 
 # Privileges are intentionally stripped from the archive: provision a fresh
 # runtime role grant on the restored database before the API integration suite.
