@@ -98,6 +98,8 @@ test('rejects wrong image config id, tag, architecture and revision before recei
 test('refuses SPDX missing name/source syft creator, package IDs or relationships',()=>{
   const valid=spdx('frontend');
   assert.equal(validateSpdx(valid,'frontend',sha),1);
+  assert.equal(validateSpdx({...valid,name:'sedeagro-frontend-rc'},'frontend',sha),1);
+  assert.throws(()=>validateSpdx({...valid,name:'sedeagro-backend-rc'},'frontend',sha),/IMAGE_SECURITY_BLOCKED/);
   for(const bad of [
     {...valid,name:'other-image'},
     {...valid,creationInfo:{creators:['Tool: stranger']}},
