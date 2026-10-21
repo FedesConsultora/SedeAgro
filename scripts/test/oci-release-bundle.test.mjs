@@ -168,11 +168,12 @@ test('rejects OCI image manifest with a broken layer descriptor digest',async t=
     /OCI blob digest or size mismatch/);
 });
 test('rejects detached OCI metadata blobs that are not reachable from the index',async t=>{
+  const extraContent='extra metadata';
   const f=fixture(t,{ociIndex:true,extra:[{
-    name:'blobs/sha256/'+'e'.repeat(64),data:'extra metadata'
+    name:'blobs/sha256/'+hash(Buffer.from(extraContent)),data:extraContent
   }]});
   await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
-    /unreferenced OCI digest blob/);
+    /unreferenced OCI binary-layer blob/);
 });
 
 test('offline CLI validates downloaded bytes without CI/Docker or network',async t=>{
