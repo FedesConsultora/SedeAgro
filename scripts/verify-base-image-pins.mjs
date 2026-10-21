@@ -27,6 +27,12 @@ const FILES = {
   'docker-compose.staging.yml': { postgis: 1, redis: 1 },
   '.github/workflows/postgres-isolation.yml': { postgis: 1 }
 };
+const RECOVERY_SHELL_FILES = {
+  'scripts/ci-disposable-restore.sh': 1,
+  'scripts/ci-independent-recovery.sh': 3,
+  'scripts/ci-rollback-rehearsal.sh': 1
+};
+const ALL_FILES = [...Object.keys(FILES), ...Object.keys(RECOVERY_SHELL_FILES)];
 
 function block(reason) { throw new Error('BASE_IMAGE_PIN_BLOCKED: ' + reason); }
 function ensure(ok, reason) { if (!ok) block(reason); }
@@ -72,7 +78,7 @@ function sourceLines(source, filename) {
 export function validateBaseImageSources(lock, sources) {
   const refs = validateBaseImageLock(lock);
   ensure(sources && Object.keys(sources).sort().join(',') ===
-    Object.keys(FILES).sort().join(','), 'source file coverage incomplete');
+    ALL_FILES.slice().sort().join(','), 'source file coverage incomplete');
   const policyValues = Object.values(refs);
   const counts = {};
   for (const [filename, expected] of Object.entries(FILES)) {
@@ -89,11 +95,22 @@ export function validateBaseImageSources(lock, sources) {
       'base image count or role changed in ' + filename);
     counts[filename] = actual.length;
   }
+  for (const [filename, expectedCount] of Object.entries(RECOVERY_SHELL_FILES)) {
+    const source = sources[filename];
+    ensure(typeof source === 'string' && source.length > 0 &&
+      source.length < 120000, 'CI recovery guard file missing or oversized');
+    const actual = [...source.matchAll(/postgis\/postgis:[^\s'"()]+/g)]
+      .map(match => match[0]);
+    ensure(actual.length === expectedCount &&
+      actual.every(reference => reference === refs.postgis),
+    'CI recovery references unpinned or incorrect PostGIS image in ' + filename);
+    counts[filename] = actual.length;
+  }
   return {
     status: 'BASE_IMAGE_SOURCES_PINNED_REVIEW_REQUIRED',
     target_platform: lock.platform,
     unique_base_images: policyValues.length,
-    source_files: Object.keys(FILES).length,
+    source_files: ALL_FILES.length,
     references: counts,
     registry_provenance_signed: false,
     staging_deployed: false
@@ -135,7 +152,7 @@ export function inspectPinnedDigests(lock, execute = args =>
     staging_deployed: false };
 }
 function readSources() {
-  return Object.fromEntries(Object.keys(FILES).map(path =>
+  return Object.fromEntries(ALL_FILES.map(path =>
     [path, readFileSync(resolve(ROOT, path), 'utf8')]));
 }
 
