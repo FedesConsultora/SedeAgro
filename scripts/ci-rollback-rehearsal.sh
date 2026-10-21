@@ -43,7 +43,9 @@ fingerprint() {
 base="$(fingerprint "$BACKUP_DB")"
 [[ "$base" == "$(fingerprint "$SOURCE_DB")" ]] ||
   fail 'initial restored and source fingerprints are unequal'
-migrations="$(sql "SELECT string_agg(name,E'\\n' ORDER BY name) FROM sequelize_migrations")"
+migrations="$(docker exec "$container" psql -X -A -t -q -v ON_ERROR_STOP=1 \
+  -U "$OWNER" -d "$SOURCE_DB" -c 'SELECT name FROM sequelize_migrations ORDER BY name' |
+  tr -d '\r')"
 [[ -n "$migrations" ]] || fail 'missing tracked migrations'
 
 # The trap protects CI test state if any assertion fails mid-fixture.
