@@ -64,6 +64,8 @@ jobs:
           node --check scripts/verify-staging-topology.mjs
           node --check scripts/verify-staging-runtime.mjs
           node --test scripts/test/staging-topology.test.mjs scripts/test/staging-runtime.test.mjs
+          node --check scripts/verify-frontend-image-parity.mjs
+          node --test scripts/test/frontend-image-parity.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -260,6 +262,22 @@ jobs:
             actual="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
             test "$actual" = "$IMAGE_SHA"
           done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Independently build trusted frontend artifact from isolated frontend lockfile
+        run: |
+          set -euo pipefail
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+          node scripts/staging-release-manifest.mjs create
+          node scripts/staging-release-manifest.mjs verify
+      - name: Compare all real frontend Docker image bytes and Nginx config to trusted CI manifest
+        run: |
+          set -euo pipefail
+          node --check scripts/verify-frontend-image-parity.mjs
+          node --test scripts/test/frontend-image-parity.test.mjs
+          node scripts/verify-frontend-image-parity.mjs --sha "$IMAGE_SHA"
 
   dependency-security:
     runs-on: ubuntu-latest
