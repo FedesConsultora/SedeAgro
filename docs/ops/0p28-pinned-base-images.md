@@ -27,6 +27,7 @@ El digest es de **índice multiplataforma** donde lo indica la tabla, no necesar
 - `docker-compose.dev.yml`: mismas bases para desarrollo; PostGIS conserva `platform: linux/amd64` para compatibilidad, y Redis puede resolver plataforma host desde su índice.
 - `docker-compose.staging.yml`: dos servicios externos a la aplicación fijados; se preserva el proyecto/red/volúmenes aislados, el puerto frontend loopback y la política de no desplegar automáticamente.
 - `.github/workflows/postgres-isolation.yml`: PostGIS descartable de GitHub Actions también fijado con el mismo digest; se comprueba que el contenedor arrancado ejecuta una imagen `linux/amd64`.
+- `scripts/ci-disposable-restore.sh`, `scripts/ci-independent-recovery.sh` y `scripts/ci-rollback-rehearsal.sh`: todos los controles de backup/restauración y rollback sintéticos de PostGIS exigen **el mismo digest fijado** antes de cualquier operación de datos; el segundo contenedor de recuperación sin red también se crea con `tag@sha256`, nunca con un tag mutable.
 
 El worker optativo de reportes continúa reutilizando el mismo Dockerfile backend bloqueado; no se añade un servicio base nuevo.
 
@@ -34,7 +35,7 @@ El worker optativo de reportes continúa reutilizando el mismo Dockerfile backen
 
 La política central `scripts/base-image-lock.json` tiene cuatro tags permitidos, sus digests `sha256`, media types y plataforma objetivo `linux/amd64`. El verificador `scripts/verify-base-image-pins.mjs` incluye dos modos:
 
-1. `--offline`: recorre **los seis archivos de consumo** y exige el número exacto de referencias de cada familia y que todas sean literalmente `tag@digest` igual a la política. Un nuevo `FROM`, un `image: ...:latest`, una sustitución de digest o una omisión de PostGIS en CI quedan bloqueados. Corre con Node 22 sin Docker, credenciales, red ni ejecución de contenedores.
+1. `--offline`: recorre **los nueve archivos de consumo y recuperación** y exige el número exacto de referencias de cada familia y que todas sean literalmente `tag@digest` igual a la política. Un nuevo `FROM`, un `image: ...:latest`, una sustitución de digest o una omisión de PostGIS en CI quedan bloqueados. Corre con Node 22 sin Docker, credenciales, red ni ejecución de contenedores.
 2. `--online`: además del control anterior, exclusivo de GitHub Actions, resuelve **cada `tag@digest` ya fijado**, no el tag mutable, con `docker buildx imagetools inspect`. Compara digest y media type exactos. Exige que los tres índices multiplataforma incluyan `linux/amd64`. PostGIS, con manifest único que no declara plataforma en el índice, se comprueba por separado mediante el contenedor PostGIS real y saludable usado en `tenant-rls` (Docker inspecciona el OS/arquitectura de la imagen por ID).
 
 Pruebas adversarias `scripts/test/base-image-pins.test.mjs` ejercitan regresiones en todos los consumidores, digest alterado, fuente desconocida, nuevas etapas, recuentos incorrectos, tipo de manifest diferente, salida del registry falsificada, ausencia de plataforma amd64 y negativa fuera de CI. Los guardas previos de producción y staging también fueron adaptados para exigir las nuevas referencias. Ningún resultado CLI debe mostrar secretos del Compose.
