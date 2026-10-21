@@ -286,6 +286,77 @@ jobs:
             actual="$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")"
             test "$actual" = "$IMAGE_SHA"
           done
+      # 0P.29: only final runtime images, not the source workspace or
+      # build-stage filesystem. Local Docker daemon contains both exact HEAD tags.
+      - name: Prepare private SBOM and vulnerability evidence directory
+        run: install -d -m 700 "$RUNNER_TEMP/sedeagro-security"
+      - name: Generate real backend image SPDX SBOM using Syft v1.55.0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # pinned v0
+        with:
+          image: sedeagro-backend-rc:${{ env.IMAGE_SHA }}
+          format: spdx-json
+          syft-version: v1.55.0
+          output-file: ${{ runner.temp }}/sedeagro-security/sedeagro-backend-${{ env.IMAGE_SHA }}.spdx.json
+          upload-artifact: 'false'
+          upload-release-assets: 'false'
+          dependency-snapshot: 'false'
+      - name: Generate real frontend image SPDX SBOM using Syft v1.55.0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # pinned v0
+        with:
+          image: sedeagro-frontend-rc:${{ env.IMAGE_SHA }}
+          format: spdx-json
+          syft-version: v1.55.0
+          output-file: ${{ runner.temp }}/sedeagro-security/sedeagro-frontend-${{ env.IMAGE_SHA }}.spdx.json
+          upload-artifact: 'false'
+          upload-release-assets: 'false'
+          dependency-snapshot: 'false'
+      - name: Scan built backend OS and libraries with Trivy v0.76.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # pinned v0.36.0
+        with:
+          scan-type: image
+          image-ref: sedeagro-backend-rc:${{ env.IMAGE_SHA }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: 'false'
+          format: json
+          output: ${{ runner.temp }}/sedeagro-security/sedeagro-backend-${{ env.IMAGE_SHA }}.trivy.json
+          exit-code: '0'
+          version: v0.76.1
+          cache: 'false'
+          timeout: 10m
+      - name: Scan built frontend OS and libraries with Trivy v0.76.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # pinned v0.36.0
+        with:
+          scan-type: image
+          image-ref: sedeagro-frontend-rc:${{ env.IMAGE_SHA }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: 'false'
+          format: json
+          output: ${{ runner.temp }}/sedeagro-security/sedeagro-frontend-${{ env.IMAGE_SHA }}.trivy.json
+          exit-code: '0'
+          version: v0.76.1
+          cache: 'false'
+          timeout: 10m
+      - name: Probe bounded SBOM and vulnerability scan coverage before policy
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const root = process.env.RUNNER_TEMP + '/sedeagro-security/';
+          for (const service of ['backend', 'frontend']) {
+            const prefix = root + 'sedeagro-' + service + '-' + process.env.IMAGE_SHA;
+            const sbom = JSON.parse(readFileSync(prefix + '.spdx.json', 'utf8'));
+            const scan = JSON.parse(readFileSync(prefix + '.trivy.json', 'utf8'));
+            const vuln = (scan.Results || []).flatMap(x => x.Vulnerabilities || []);
+            const tally = Object.fromEntries(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']
+              .map(severity => [severity, vuln.filter(v => v.Severity === severity).length]));
+            console.log(JSON.stringify({ service, packages: sbom.packages?.length,
+              spdx: sbom.spdxVersion, artifact: scan.ArtifactName,
+              type: scan.ArtifactType, findings: tally, results: scan.Results?.length }));
+          }
+          NODE
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
