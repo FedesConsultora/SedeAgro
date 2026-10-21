@@ -270,7 +270,12 @@ function dockerImages(path, sha, scanned) {
                       'platform','architecture','os','index','descriptors','Image',
                       'Config','RepoTags','Layers','Created','author','created',
                       'history','rootfs','subject','referrers','repositories',
-                      'blobs','version','imageLayoutVersion']);
+                      'blobs','version','imageLayoutVersion',
+                      'Architecture','Created','DockerVersion','OS','Os','RootFS',
+                      'Variant','Config','ContainerConfig','History','Parent',
+                      'Id','ID','Image','RepoTags','RepoDigests','Container',
+                      'Docker','MediaType','Digest','Size','Type',
+                      'created_by','empty_layer','comment','author']);
                     return allowed.has(key) ? key : 'other';
                   }).join('-') :
                 'json-primitive';
