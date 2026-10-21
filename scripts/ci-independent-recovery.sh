@@ -57,7 +57,7 @@ done
    -f "$root/scripts/provision-runtime-role.sql" ]] ||
   fail 'missing CI-only immutable SQL inputs'
 
-[[ "$(docker inspect --format '{{.Config.Image}}' "$SOURCE_ID" 2>/dev/null)" ==
+[[ "$(docker inspect --format '{{.Config.Image}}' "$SOURCE_ID" 2>/dev/null)" == \
   'postgis/postgis:16-3.4' ]] || fail 'source must be pinned disposable PostGIS container'
 
 isolated=''
@@ -89,7 +89,7 @@ isolated="$(docker run --detach --rm --pull never --network none \
   postgis/postgis:16-3.4)" || fail 'cannot create networkless PostGIS container'
 [[ "$isolated" =~ ^[a-f0-9]{64}$ ]] || fail 'Docker returned invalid recovery container identity'
 [[ "$isolated" != "$SOURCE_ID" ]] || fail 'recovery must not reuse source container'
-[[ "$(docker inspect --format '{{.Config.Image}}' "$isolated")" ==
+[[ "$(docker inspect --format '{{.Config.Image}}' "$isolated")" == \
   'postgis/postgis:16-3.4' &&
    "$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$isolated")" == none &&
    "$(docker inspect --format '{{len .HostConfig.PortBindings}}' "$isolated")" == 0 ]] ||
