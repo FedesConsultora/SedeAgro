@@ -34,7 +34,7 @@ for cmd in docker npm mktemp sha256sum grep; do
   command -v "$cmd" >/dev/null || { echo "Missing $cmd" >&2; exit 2; }
 done
 image="$(docker inspect --format '{{.Config.Image}}' "$CI_POSTGIS_CONTAINER")"
-if [[ "$image" != 'postgis/postgis:16-3.4' ]]; then
+if [[ "$image" != 'postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5' ]]; then
   echo 'BLOCKED: this is not the pinned disposable PostGIS service image.' >&2
   exit 2
 fi
