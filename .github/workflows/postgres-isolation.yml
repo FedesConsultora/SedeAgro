@@ -251,6 +251,7 @@ jobs:
           docker run --rm --entrypoint sh sedeagro-frontend-rc:$IMAGE_SHA -ec '
             test -s /usr/share/nginx/html/index.html
             test -s /usr/share/nginx/html/sw.js
+            test ! -e /usr/share/nginx/html/50x.html
             test ! -e /usr/share/nginx/html/.env
             test ! -e /usr/share/nginx/html/node_modules
           '
