@@ -1,0 +1,28 @@
+{
+  "schema": "sedeagro-base-images-v1",
+  "platform": "linux/amd64",
+  "reviewed_from": "GitHub Actions 39662011784 production-images upstream registry manifest inspection",
+  "reviewed_on": "2026-10-21",
+  "images": {
+    "node": {
+      "tag": "node:22-alpine",
+      "digest": "sha256:ce8d97f7cfc7c5386421eb932df20a29df99b1a7f469f6157d5c9956702ffadc",
+      "media_type": "application/vnd.oci.image.index.v1+json"
+    },
+    "nginx": {
+      "tag": "nginx:1.27-alpine",
+      "digest": "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
+      "media_type": "application/vnd.oci.image.index.v1+json"
+    },
+    "postgis": {
+      "tag": "postgis/postgis:16-3.4",
+      "digest": "sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5",
+      "media_type": "application/vnd.docker.distribution.manifest.v2+json"
+    },
+    "redis": {
+      "tag": "redis:7-alpine",
+      "digest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+      "media_type": "application/vnd.oci.image.index.v1+json"
+    }
+  }
+}
