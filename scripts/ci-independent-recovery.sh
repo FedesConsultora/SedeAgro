@@ -108,7 +108,7 @@ for _ in $(seq 1 60); do
   # succeed during that temporary phase. Require PID 1 to be the FINAL
   # exec'd postgres server before connecting, or pg_restore can get FATAL:
   # "terminating connection due to administrator command" mid-stream.
-  pid1="$(docker exec "$isolated" cat /proc/1/comm 2>/dev/null | tr -d '\\r\\n' || true)"
+  pid1="$(docker exec "$isolated" cat /proc/1/comm 2>/dev/null || true)"
   if [[ "$pid1" == postgres ]] &&
      docker exec "$isolated" pg_isready -U "$OWNER" -d "$BOOTSTRAP" >/dev/null 2>&1; then
     ready=1
