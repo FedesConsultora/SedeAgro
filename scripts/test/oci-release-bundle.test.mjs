@@ -205,6 +205,18 @@ test('rejects detached OCI JSON containing secrets, unrelated config or wrong pl
   }
 });
 
+test('caps accumulated OCI detached metadata at 256 blobs and 4 MiB total',async t=>{
+  const extras=Array.from({length:257},(_,i)=>{
+    const encoded=JSON.stringify({
+      created:'2026-10-21T00:00:00Z',os:'linux',entry:i
+    });
+    return {name:'blobs/sha256/'+hash(Buffer.from(encoded)),data:encoded};
+  });
+  const f=fixture(t,{ociIndex:true,extra:extras});
+  await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
+    /too many detached OCI metadata blobs/);
+});
+
 test('offline CLI validates downloaded bytes without CI/Docker or network',async t=>{
   const {f}=await validReceipt(t);
   const proc=spawnSync(process.execPath,[cli,'verify','--sha',SHA,
