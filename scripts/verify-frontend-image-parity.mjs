@@ -53,8 +53,9 @@ function readTree(directory) {
     for (const entry of readdirSync(where, { withFileTypes: true })) {
       const abs = join(where, entry.name);
       const stat = lstatSync(abs);
-      expect(!stat.isSymbolicLink() && stat.nlink === 1 &&
-        (stat.isDirectory() || stat.isFile()), 'no symlink, hard link or special file');
+      expect(!stat.isSymbolicLink() &&
+        (stat.isDirectory() || (stat.isFile() && stat.nlink === 1)),
+      'no symlink, hard-linked file or special file');
       const name = relative(root, abs).split(sep).join('/');
       expect(name.length <= 240 && !name.includes('//') &&
         !name.split('/').some(part => part === '.' || part === '..'),
