@@ -17,7 +17,7 @@ container="${CI_POSTGIS_CONTAINER:-}"
 for cmd in docker node tr; do
   command -v "$cmd" >/dev/null 2>&1 || fail 'missing CI tool'
 done
-[[ "$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null)" == postgis/postgis:16-3.4 ]] ||
+[[ "$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null)" == postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5 ]] ||
   fail 'not the CI PostGIS image'
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [[ -f "$root/scripts/sql/restore-data-fingerprint.sql" &&
