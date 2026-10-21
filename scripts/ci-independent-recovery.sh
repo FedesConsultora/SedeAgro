@@ -102,14 +102,21 @@ mounts="$(docker inspect --format '{{range .Mounts}}{{.Type}}:{{.Destination}} {
   fail 'independent PostGIS has unexpected persistent or bind mounts'
 
 ready=0
-for _ in $(seq 1 45); do
-  if docker exec "$isolated" pg_isready -U "$OWNER" -d "$BOOTSTRAP" >/dev/null 2>&1; then
+for _ in $(seq 1 60); do
+  # The official PostGIS entrypoint first launches a TEMPORARY postmaster
+  # during initdb, then sends it an administrator shutdown. pg_isready may
+  # succeed during that temporary phase. Require PID 1 to be the FINAL
+  # exec'd postgres server before connecting, or pg_restore can get FATAL:
+  # "terminating connection due to administrator command" mid-stream.
+  pid1="$(docker exec "$isolated" cat /proc/1/comm 2>/dev/null | tr -d '\\r\\n' || true)"
+  if [[ "$pid1" == postgres ]] &&
+     docker exec "$isolated" pg_isready -U "$OWNER" -d "$BOOTSTRAP" >/dev/null 2>&1; then
     ready=1
     break
   fi
   sleep 1
 done
-[[ "$ready" == 1 ]] || fail 'networkless PostGIS failed readiness'
+[[ "$ready" == 1 ]] || fail 'final independent PostGIS server never achieved stable readiness'
 
 # The PostGIS image automatically seeds extensions in POSTGRES_DB. Never
 # restore the archive into that pre-seeded database: pg_restore would collide
