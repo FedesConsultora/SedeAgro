@@ -342,6 +342,35 @@ jobs:
           version: v0.76.1
           cache: 'false'
           timeout: 10m
+      - name: Check nonsecret Syft/Trivy output structure before strict security admission
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          for (const service of ['backend','frontend']) {
+            const tag='sedeagro-'+service+'-rc:'+process.env.IMAGE_SHA;
+            const base=process.env.RUNNER_TEMP+'/sedeagro-security/sedeagro-'+service+'-'+process.env.IMAGE_SHA;
+            const spdx=JSON.parse(readFileSync(base+'.spdx.json','utf8'));
+            const scan=JSON.parse(readFileSync(base+'.trivy.json','utf8'));
+            const docker=JSON.parse(execFileSync('docker',
+              ['image','inspect','--format','{{json .}}',tag],{encoding:'utf8'}));
+            const results=scan.Results||[];
+            console.log(JSON.stringify({service,
+              image_tag:tag,spdx_name:spdx.name,
+              spdxVersion:spdx.spdxVersion,spdxLicense:spdx.dataLicense,
+              spdxId:spdx.SPDXID,creator_syft:(spdx.creationInfo?.creators||[])
+                .some(v=>v.startsWith('Tool: syft-')),
+              packageCount:spdx.packages?.length,
+              relationshipsCount:spdx.relationships?.length,
+              trivyVersion:scan.SchemaVersion,scanType:scan.ArtifactType,
+              trivyArtifact:scan.ArtifactName,
+              dockerId:docker.Id,trivyId:scan.Metadata?.ImageID,
+              resultCount:results.length,
+              missingVulnerabilityArrays:results.filter(r=>!Array.isArray(r.Vulnerabilities)).length,
+              findings:results.flatMap(r=>r.Vulnerabilities||[]).length
+            }));
+          }
+          NODE
       - name: Bind both Syft and Trivy reports to immutable Docker image IDs and classify release risk
         run: |
           set -euo pipefail
