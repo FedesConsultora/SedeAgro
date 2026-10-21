@@ -91,6 +91,17 @@ test('frontend build requires same-origin API and serves only compiled assets', 
   assert.doesNotMatch(prod, /COPY \. \./);
 });
 
+test('production frontend Docker removes upstream Nginx sample files before copying manifest-bound dist', () => {
+  const dockerfile = read('frontend/Dockerfile');
+  const prod = dockerfile.split('FROM nginx:1.27-alpine AS prod')[1];
+  assert.ok(prod, 'expected final Nginx image stage');
+  const clearing = prod.indexOf('RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html');
+  const copying = prod.indexOf('COPY --from=build /app/dist /usr/share/nginx/html');
+  assert.ok(clearing >= 0 && copying > clearing,
+    'the exact public image document root must be wiped before the trusted Vite artifacts are copied');
+  assert.doesNotMatch(prod, /COPY \. \./, 'never copy unreviewed build context into final image');
+});
+
 test('production containers embed exact approved SHA and expose OCI revision labels', () => {
   const backend = read('backend/Dockerfile');
   const frontend = read('frontend/Dockerfile');
