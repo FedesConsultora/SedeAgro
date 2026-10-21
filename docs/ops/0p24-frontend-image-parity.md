@@ -20,6 +20,12 @@ La ejecución real del job `production-images` se amplía **después** de constr
 
 Los errores no imprimen contenido de archivos, configuración Docker ni variables de entorno. El resumen solo informa `release_sha`, ID de imagen local, conteos, bytes verificados y SHA256 del Nginx. El resultado exitoso tiene estado **`CI_IMAGE_PARITY_REVIEW_REQUIRED`**, NO una aprobación productiva.
 
+## Defecto productivo hallado por el primer gate real
+
+La primera ejecución de CI reveló **un problema verificable de empaquetado** que no habían detectado las pruebas de existencia de `index.html`/`sw.js`: la imagen base `nginx:1.27-alpine` instala archivos web propios (por ejemplo `50x.html`). El antiguo `COPY --from=build /app/dist /usr/share/nginx/html` sobrescribía el index pero **no eliminaba** esos archivos preexistentes. El validador nuevo los rechazó, correctamente, por no existir en el manifiesto de Vite.
+
+La corrección acotada en `frontend/Dockerfile` elimina y recrea **solo el document root de la imagen en la fase final de build**, antes de copiar los assets Vite. No elimina nada del host ni del VPS. Una regresión comprueba el orden de esas instrucciones; GitHub Actions también exige que el contenedor final no tenga `/usr/share/nginx/html/50x.html` y que la lista completa de archivos coincida con el manifiesto generado de modo independiente. **No se relajó el verificador** para ignorar archivos extra.
+
 ## Pruebas adversarias y aceptación
 
 - Byte faltante o alterado en JS, CSS o `sw.js`, incluso si el tamaño total no cambia.
