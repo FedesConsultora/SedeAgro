@@ -82,11 +82,14 @@ export function verifyCopiedFrontend({ htmlDir, nginxCopy, manifest, sha, nginxR
   const actual = readTree(htmlDir);
   expect(actual.size === expected.size,
     'frontend image has missing or unmanifested files');
+  expect([...expected.keys()].every(name => actual.has(name)),
+    'frontend hashed asset path set differs from the CI manifest');
   for (const [name, expectedFile] of expected) {
     const found = actual.get(name);
-    expect(found && found.size === expectedFile.size &&
-      found.sha256 === expectedFile.sha256,
-    'frontend bytes, size or declared path differ from the trusted CI manifest');
+    expect(found.size === expectedFile.size,
+      'frontend file size differs from the CI manifest');
+    expect(found.sha256 === expectedFile.sha256,
+      'frontend file SHA256 differs from the CI manifest');
   }
   const nginxStat = lstatSync(nginxCopy);
   const referenceStat = lstatSync(nginxReference);
