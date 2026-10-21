@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync, hardLinkSync, lstatSync, mkdirSync, mkdtempSync,
+  existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync,
   readFileSync, rmSync, symlinkSync, writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -87,7 +87,7 @@ test('blocks symlinks, hardlinks, and special files rather than following them',
   symlinkSync(join(f.htmlDir,'index.html'),linked);
   assert.throws(()=>verifyCopiedFrontend({...f,manifest:manifest(),sha}),/PARITY_BLOCKED/);
   rmSync(linked);
-  hardLinkSync(join(f.htmlDir,'index.html'),linked);
+  linkSync(join(f.htmlDir,'index.html'),linked);
   assert.throws(()=>verifyCopiedFrontend({...f,manifest:manifest(),sha}),/PARITY_BLOCKED/);
 });
 
