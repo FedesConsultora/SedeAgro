@@ -21,5 +21,8 @@ FROM nginx:1.27-alpine AS prod
 ARG RELEASE_SHA
 LABEL org.opencontainers.image.revision="${RELEASE_SHA}"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Remove upstream Nginx sample HTML/error pages before publishing the
+# manifest-bound Vite build. COPY alone leaves stock 50x.html behind.
+RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
