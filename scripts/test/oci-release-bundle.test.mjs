@@ -173,7 +173,7 @@ test('rejects detached OCI metadata blobs that are not reachable from the index'
     name:'blobs/sha256/'+hash(Buffer.from(extraContent)),data:extraContent
   }]});
   await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
-    /unreferenced OCI binary-layer blob/);
+    /OCI_BUNDLE_BLOCKED/);
 });
 
 test('offline CLI validates downloaded bytes without CI/Docker or network',async t=>{
