@@ -129,6 +129,69 @@ function memberJson(fd, entries, path) {
   catch { fail('invalid Docker manifest/config JSON'); }
 }
 function tag(service, sha) { return 'sedeagro-' + service + '-rc:' + sha; }
+// Modern Docker-save exports both legacy manifest.json AND an OCI index.
+// OCI image-manifest blobs must be authenticated and tied to the same two
+// verified image configs, not blindly whitelisted as extra tar payloads.
+function requireOCIBlob(fd, entries, referenced, descriptor) {
+  check(descriptor && typeof descriptor === 'object' &&
+    DIGEST.test(descriptor.digest || '') &&
+    Number.isSafeInteger(descriptor.size) && descriptor.size > 0,
+  'invalid OCI content descriptor');
+  const path = 'blobs/sha256/' + descriptor.digest.slice(7);
+  const file = entries.get(path);
+  check(file?.type === '0' && file.size === descriptor.size &&
+    'sha256:' + file.sha256 === descriptor.digest,
+  'OCI blob digest or size mismatch');
+  referenced.add(path);
+  return path;
+}
+function inspectOCIIndex(fd, entries, referenced, images) {
+  const hasIndex = entries.has('index.json');
+  const hasLayout = entries.has('oci-layout');
+  check(hasIndex === hasLayout, 'OCI index and layout must be present together');
+  if (!hasIndex) return;
+  const layout = memberJson(fd, entries, 'oci-layout');
+  check(layout?.imageLayoutVersion === '1.0.0',
+    'unsupported OCI archive layout');
+  const index = memberJson(fd, entries, 'index.json');
+  check(index?.schemaVersion === 2 && Array.isArray(index.manifests) &&
+    index.manifests.length === images.length,
+  'OCI index must describe exactly the two release images');
+  referenced.add('oci-layout');
+  referenced.add('index.json');
+  const seenConfigs = new Set();
+  const seenManifestBlobs = new Set();
+  for (const descriptor of index.manifests) {
+    check(['application/vnd.oci.image.manifest.v1+json',
+      'application/vnd.docker.distribution.manifest.v2+json']
+      .includes(descriptor?.mediaType),
+    'OCI index references unexpected artifact type');
+    const path = requireOCIBlob(fd, entries, referenced, descriptor);
+    check(!seenManifestBlobs.has(path), 'duplicate OCI image manifest');
+    seenManifestBlobs.add(path);
+    const imageManifest = memberJson(fd, entries, path);
+    check(imageManifest.schemaVersion === 2 &&
+      Array.isArray(imageManifest.layers) &&
+      imageManifest.config && DIGEST.test(imageManifest.config.digest || ''),
+    'invalid OCI image manifest');
+    const matching = images.find(i => i.config_id === imageManifest.config.digest);
+    check(matching && !seenConfigs.has(matching.config_id),
+      'OCI image manifest does not refer to exactly one release config');
+    seenConfigs.add(matching.config_id);
+    requireOCIBlob(fd, entries, referenced, imageManifest.config);
+    check(imageManifest.layers.length === matching.layers.length,
+      'OCI and Docker-save rootfs layer counts differ');
+    for (const layer of imageManifest.layers) {
+      check(typeof layer.mediaType === 'string' &&
+        /(?:image\.layer\.v1\.tar|rootfs\.diff\.tar)/.test(layer.mediaType),
+      'OCI layer is not a filesystem tar layer');
+      requireOCIBlob(fd, entries, referenced, layer);
+    }
+  }
+  check(seenConfigs.size === images.length,
+    'OCI image index is missing backend or frontend release');
+}
+
 function dockerImages(path, sha, scanned) {
   check(HEX40.test(sha || ''), 'expected exact git SHA40');
   const fd = openSync(path, 'r');
@@ -184,11 +247,13 @@ function dockerImages(path, sha, scanned) {
         architecture: config.architecture, os: config.os,
         layers: diffIds.slice() });
     }
+    inspectOCIIndex(fd, scanned.entries, referenced, images);
     for (const [name, entry] of scanned.entries) {
       if (entry.type === '5') continue;
-      check(referenced.has(name) ||
-        ['repositories', 'index.json', 'oci-layout'].includes(name),
-      'unexpected file or unused image layer in archive');
+      check(referenced.has(name) || name === 'repositories',
+        /^blobs\/sha256\/[a-f0-9]{64}$/.test(name) ?
+          'unreferenced OCI digest blob in archive' :
+          'unexpected unreferenced payload in archive');
     }
     return images;
   } finally { closeSync(fd); }
