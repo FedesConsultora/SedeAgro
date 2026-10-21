@@ -28,6 +28,7 @@ EXPECTED_DATA="${CI_RECOVERY_EXPECTED_DATA:-}"
 EXPECTED_CATALOG="${CI_RECOVERY_EXPECTED_CATALOG:-}"
 OWNER='sedeagro_owner'
 TARGET='sedeagro_restore_test'
+BOOTSTRAP='sedeagro_recovery_bootstrap'
 APP='sedeagro_app'
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -83,7 +84,7 @@ trap 'exit 143' TERM
 isolated="$(docker run --detach --rm --pull never --network none \
   --pids-limit 256 --memory 1g \
   --label 'sedeagro.ci.independent-recovery=synthetic-only' \
-  --env POSTGRES_DB="$TARGET" \
+  --env POSTGRES_DB="$BOOTSTRAP" \
   --env POSTGRES_USER="$OWNER" \
   --env POSTGRES_PASSWORD=temporary-ci-independent-recovery-password \
   postgis/postgis:16-3.4)" || fail 'cannot create networkless PostGIS container'
@@ -102,13 +103,25 @@ mounts="$(docker inspect --format '{{range .Mounts}}{{.Type}}:{{.Destination}} {
 
 ready=0
 for _ in $(seq 1 45); do
-  if docker exec "$isolated" pg_isready -U "$OWNER" -d "$TARGET" >/dev/null 2>&1; then
+  if docker exec "$isolated" pg_isready -U "$OWNER" -d "$BOOTSTRAP" >/dev/null 2>&1; then
     ready=1
     break
   fi
   sleep 1
 done
 [[ "$ready" == 1 ]] || fail 'networkless PostGIS failed readiness'
+
+# The PostGIS image automatically seeds extensions in POSTGRES_DB. Never
+# restore the archive into that pre-seeded database: pg_restore would collide
+# with extensions already present. Create an empty, fixed restore target from
+# template0 INSIDE THE NEW DISPOSABLE CONTAINER only.
+existing="$(docker exec "$isolated" psql -X -A -t -q -v ON_ERROR_STOP=1 \
+  -U "$OWNER" -d "$BOOTSTRAP" -c \
+  "SELECT count(*) FROM pg_database WHERE datname = '$TARGET'" | tr -d '\r\n')" ||
+  fail 'cannot verify independent restore target freshness'
+[[ "$existing" == 0 ]] || fail 'independent restore target already exists'
+docker exec "$isolated" createdb -U "$OWNER" -O "$OWNER" \
+  --template=template0 "$TARGET" || fail 'cannot create clean disposable restore target'
 
 # Prove custom-archive TOC readability on another PostGIS instance.
 toc="$(docker exec -i "$isolated" pg_restore --list < "$ARCHIVE")" ||
