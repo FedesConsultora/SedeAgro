@@ -192,7 +192,7 @@ test('allows only bounded self-hashed OCI auxiliary JSON and includes digest in 
 test('rejects detached OCI JSON containing secrets, unrelated config or wrong platform',async t=>{
   for(const metadata of [
     {created:'2026-10-21',os:'linux',password:'not_allowed'},
-    {created:'2026-10-21',os:'linux',rootfs:{type:'layers',diff_ids:[]}},
+    {created:'2026-10-21',os:'linux',rootfs:{type:'layers',diff_ids:['not-a-digest']}},
     {created:'2026-10-21',os:'windows'},
     {created:'2026-10-21',os:'linux',layers:[]}
   ]){
@@ -203,6 +203,24 @@ test('rejects detached OCI JSON containing secrets, unrelated config or wrong pl
     await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
       /OCI_BUNDLE_BLOCKED/);
   }
+});
+
+test('accepts historic Docker stage configs only as SHA256-accounted auxiliary metadata',async t=>{
+  const metadata=JSON.stringify({
+    created:'2026-10-21T00:00:00Z',
+    os:'linux',
+    rootfs:{type:'layers',diff_ids:['sha256:'+'a'.repeat(64)]},
+    config:{Env:['PATH=/usr/bin','NODE_ENV=production']},
+    history:[]
+  });
+  const extraDigest=hash(Buffer.from(metadata));
+  const f=fixture(t,{ociIndex:true,extra:[{
+    name:'blobs/sha256/'+extraDigest,data:metadata
+  }]});
+  const computed=await computeReceipt({bundlePath:f.bundlePath,sha:SHA});
+  assert.deepEqual(computed.auxiliary_oci_metadata,[{
+    sha256:'sha256:'+extraDigest,bytes:Buffer.byteLength(metadata)
+  }]);
 });
 
 test('caps accumulated OCI detached metadata at 256 blobs and 4 MiB total',async t=>{
