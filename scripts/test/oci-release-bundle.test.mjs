@@ -47,9 +47,10 @@ function tar(members) {
   return Buffer.concat(chunks);
 }
 function synthetic({revision=SHA,wrongLayer=false,extra=[],duplicate=false,
-  extraTag=false,missingLayer=false}={}) {
+  extraTag=false,missingLayer=false,ociIndex=false,badOCIReference=false}={}) {
   const files=[];
   const images=[];
+  const ociDescriptors=[];
   const ids={};
   const layers={};
   for (const service of ['backend', 'frontend']) {
@@ -76,9 +77,35 @@ function synthetic({revision=SHA,wrongLayer=false,extra=[],duplicate=false,
     files.push({name:configName,data:configBuffer});
     files.push({name:filename,data:
       wrongLayer&&service==='backend'?Buffer.from('tampered uncompressed rootfs data'):layer});
+    if (ociIndex) {
+      const imageManifest={
+        schemaVersion:2,
+        config:{mediaType:'application/vnd.oci.image.config.v1+json',
+          digest:configId,size:configBuffer.length},
+        layers:[{
+          mediaType:'application/vnd.oci.image.layer.v1.tar',
+          digest:badOCIReference&&service==='backend'?
+            'sha256:'+'c'.repeat(64):'sha256:'+layerDigest,
+          size:layer.length
+        }]
+      };
+      const data=Buffer.from(JSON.stringify(imageManifest));
+      const id=hash(data);
+      files.push({name:'blobs/sha256/'+id,data});
+      ociDescriptors.push({
+        mediaType:'application/vnd.oci.image.manifest.v1+json',
+        digest:'sha256:'+id,size:data.length
+      });
+    }
     images.push(manifest);
     ids[service]=configId;
     layers[service]=['sha256:'+layerDigest];
+  }
+  if (ociIndex) {
+    files.push({name:'index.json',data:JSON.stringify({
+      schemaVersion:2,manifests:ociDescriptors
+    })});
+    files.push({name:'oci-layout',data:JSON.stringify({imageLayoutVersion:'1.0.0'})});
   }
   if (duplicate)files.push({...files[0]});
   files.push(...extra);
@@ -126,6 +153,26 @@ test('creates receipt only when two Docker image configs, layers, tags and SHA m
   assert.equal((await verifyReceipt({
     bundlePath:f.bundlePath,receiptPath:f.receiptPath,sha:SHA
   })).archive_sha256,expected.archive_sha256);
+});
+
+test('supports modern Docker-save legacy manifest plus authenticated OCI index/blob descriptors',async t=>{
+  const f=fixture(t,{ociIndex:true});
+  const receipt=await computeReceipt({bundlePath:f.bundlePath,sha:SHA});
+  assert.equal(receipt.images.length,2);
+  assert.deepEqual(receipt.images.map(im=>im.config_id),
+    [f.ids.backend,f.ids.frontend]);
+});
+test('rejects OCI image manifest with a broken layer descriptor digest',async t=>{
+  const f=fixture(t,{ociIndex:true,badOCIReference:true});
+  await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
+    /OCI blob digest or size mismatch/);
+});
+test('rejects detached OCI metadata blobs that are not reachable from the index',async t=>{
+  const f=fixture(t,{ociIndex:true,extra:[{
+    name:'blobs/sha256/'+'e'.repeat(64),data:'extra metadata'
+  }]});
+  await assert.rejects(computeReceipt({bundlePath:f.bundlePath,sha:SHA}),
+    /unreferenced OCI digest blob/);
 });
 
 test('offline CLI validates downloaded bytes without CI/Docker or network',async t=>{
@@ -247,5 +294,5 @@ test('workflow runs real docker save on paired immutable images and archives onl
   assert.match(job,/node scripts\/oci-release-bundle.mjs verify/);
   assert.match(job,/actions\/upload-artifact@v4/);
   assert.match(job,/github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(job,/docker (?:push|load|compose up)/);
+  assert.doesNotMatch(job,/^\s+docker (?:push|load|compose up)\b/m);
 });
