@@ -26,7 +26,7 @@ export function ReportsPage() {
     <div className="page-grid">
       <WorkspaceHeading eyebrow="Análisis por lote" title="Reportes" />
 
-      {dataMode === 'live' && !loading && !error && <ReportJobsPanel key={reportPrincipal || 'unavailable'} fields={fields} />}
+      {dataMode === 'live' && !loading && !error && <ReportJobsPanel fields={fields} key={reportPrincipal || 'unavailable'} />}
 
       {/* Search bar */}
       <div className="data-table-toolbar" style={{ borderBottom: 'none', padding: 0 }}>
