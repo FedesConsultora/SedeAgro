@@ -65,7 +65,7 @@ test('reports page scopes card and async job panel by current live permissions',
   assert.match(page, /reportAccessContext\(session, dataMode\)/);
   assert.match(page, /key=\{reportPrincipal/);
   assert.match(jobs, /reportAccessContext\(session, dataMode\)/);
-  assert.match(jobs, /current\.current\.scope === origin\.scope/);
+  assert.match(jobs, /current\.current\?\.scope === origin\.scope/);
 });
 
 test('field summary never commits an old HTTP response or exports outside original authority', () => {
