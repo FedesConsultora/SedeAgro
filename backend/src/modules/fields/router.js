@@ -34,7 +34,10 @@ const irrigationSchema = z.object({
   ended_at: z.coerce.date().optional(),
   source: z.enum(['manual', 'sensor', 'import']).default('manual'),
   notes: z.string().optional()
-});
+}).refine(
+  event => !event.ended_at || event.ended_at.getTime() >= event.started_at.getTime(),
+  { path: ['ended_at'], message: 'La fecha de finalización no puede ser anterior al inicio.' }
+);
 
 fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
@@ -56,6 +59,17 @@ fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, re
 }));
 
 fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), asyncHandler(async (req, res) => {
+  // Composite foreign keys enforce tenant isolation, but a missing or foreign
+  // farm must be a scoped 404, not a raw database constraint failure.
+  const farm = await Farm.findOne({
+    where: { id: req.body.farm_id, tenant_id: req.tenantId },
+    attributes: ['id'],
+    transaction: req.dbTransaction
+  });
+  if (!farm) {
+    throw new HttpError(404, 'Establecimiento no encontrado en esta empresa.',
+      undefined, 'FIELD_FARM_NOT_FOUND');
+  }
   const field = await Field.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: field });
 }));
