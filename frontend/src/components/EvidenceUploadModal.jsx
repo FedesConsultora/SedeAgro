@@ -77,7 +77,7 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
         <label className="form-field">
           <span>Archivo real *</span>
-          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf"
             disabled={saving || dataMode !== 'live'}
             onChange={(e) => {
               const selected = e.target.files?.[0] || null;
@@ -91,7 +91,7 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
           {file.name} · {(file.size / 1024).toFixed(0)} KiB
         </p>}
         <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
-          Fotos JPEG, PNG o WebP de origen hasta 12 MiB (se convierten a JPEG de hasta 512 KiB
+          Fotos JPEG, PNG, WebP, HEIC o HEIF de origen hasta 12 MiB (requieren decodificador del navegador; se convierten a JPEG de hasta 512 KiB
           sin metadatos originales) y PDF de hasta 2 MiB. Los PDF conservan su contenido y metadatos.
           Los archivos se guardan en la base privada de la empresa; no se envían a servicios externos.
         </p>
