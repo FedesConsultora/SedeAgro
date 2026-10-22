@@ -37,6 +37,43 @@ test('upload must be confirmed by server report id and supported MIME', () => {
   assert.throws(() => validateExecutionEvidenceResponse({ data: file }, 'x1', 'wrong'), /no se pudo confirmar/i);
 });
 
+test('execution private upload ACK must match report, actor and exact prepared bytes', () => {
+  const reportId = 'e9a37f0c-30bd-42bc-ac4e-e22613240054';
+  const actorId = 'a0e95ddf-24d8-43c9-b934-6d2974656936';
+  const payload = { kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'inspeccion.jpg', content_base64: '/9j/' };
+  // The work-order API intentionally omits client_upload_id and digest
+  // from its public receipt; do not manufacture them in the client.
+  const asset = { id: '777a9aa2-fcca-49d3-8280-85e22aa55765',
+    work_order_execution_id: reportId, uploaded_by: actorId,
+    kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'inspeccion.jpg', size_bytes: 3 };
+  const expected = { actorId, payload };
+  for (const replayed of [false, true]) {
+    assert.equal(validateExecutionEvidenceResponse(
+      { data: asset, replayed }, reportId, null, expected
+    ).id, asset.id);
+  }
+  for (const mutation of [
+    { id: '' }, { work_order_execution_id: 'wrong' },
+    { uploaded_by: 'another' }, { original_name: 'unexpected.jpg' },
+    { kind: 'document' }, { mime_type: 'image/png' },
+    { size_bytes: 4 }, { size_bytes: '3' }
+  ]) {
+    assert.throws(() => validateExecutionEvidenceResponse({
+      data: { ...asset, ...mutation }, replayed: false
+    }, reportId, null, expected), /no se pudo confirmar/i);
+  }
+  for (const response of [null, { data: asset }, { data: asset, replayed: null }]) {
+    assert.throws(() => validateExecutionEvidenceResponse(response, reportId, null, expected),
+      /no se pudo confirmar/i);
+  }
+  assert.throws(() => validateExecutionEvidenceResponse({
+    data: asset, replayed: true
+  }, reportId, null, { ...expected, payload: { ...payload, content_base64: '' } }),
+  /no se pudo confirmar/i);
+});
+
 test('private download refuses changed evidence id, mime or length', async () => {
   const bytes = Buffer.from('%PDF-1.4\n%%EOF\n');
   const response = { data: { id: 'id1', mime_type: 'application/pdf',
@@ -54,6 +91,7 @@ test('UI is attached to real execution reports, preserves retry id and uses one 
   const jsx = readFileSync(new URL('../src/components/WorkOrderExecutionEvidence.jsx', import.meta.url), 'utf8');
   const panel = readFileSync(new URL('../src/components/WorkOrderExecutionPanel.jsx', import.meta.url), 'utf8');
   assert.match(jsx, /client_upload_id: uploadKey/);
+  assert.match(jsx, /validateExecutionEvidenceResponse\\(response, report\\.id, null, /);
   assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
   assert.match(jsx, /uploadFence\.current\.isCurrent\(ticket\)/);
   assert.match(jsx, /const uploadInFlight = useRef\(null\)/);
