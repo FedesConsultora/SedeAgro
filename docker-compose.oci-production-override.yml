@@ -1,0 +1,13 @@
+# 0P.35 — production topology overlay, READ-ONLY CI REVIEW ONLY.
+# NEVER run docker compose up/start/run with this file in this release.
+# Existing deploy-prod.sh remains fail-closed (Security Owner approval missing).
+# Compose !reset removes the base build recipe, without duplicating DB/Redis.
+services:
+  backend:
+    build: !reset null
+    image: ${SEDEAGRO_OCI_BACKEND_IMAGE:?Exact signed backend release image required}
+    pull_policy: never
+  frontend:
+    build: !reset null
+    image: ${SEDEAGRO_OCI_FRONTEND_IMAGE:?Exact signed frontend release image required}
+    pull_policy: never
