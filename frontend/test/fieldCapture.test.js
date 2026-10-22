@@ -30,7 +30,7 @@ test('field camera accepts compatible 12MiB sources but preserves the 512KiB enc
   assert.equal(OFFLINE_PHOTO_MIME_TYPES.includes('image/heif'), false);
   assert.throws(() => cameraPhotoPlan({
     name: 'photo.svg', type: 'image/svg+xml', size: 1024
-  }), /JPEG, PNG o WebP/i);
+  }), /JPEG, PNG, WebP/i);
 });
 
 test('native HEIC/HEIF decoder may open browser pixels without sending original bytes', async () => {
