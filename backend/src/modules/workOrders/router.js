@@ -218,6 +218,33 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
 }));
 
 workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
+  // Two independent tenant-scoped FKs do not prove that this campaign-field
+  // actually belongs to the field on the order. Resolve both under the
+  // request's FORCE RLS transaction before any persistent order is created.
+  const field = await Field.findOne({
+    where: { id: req.body.field_id, tenant_id: req.tenantId },
+    attributes: ['id'],
+    transaction: req.dbTransaction
+  });
+  if (!field) {
+    throw new HttpError(404, 'Lote no encontrado.', undefined, 'WORK_ORDER_FIELD_NOT_FOUND');
+  }
+  if (req.body.campaign_field_id) {
+    const campaignField = await CampaignField.findOne({
+      where: { id: req.body.campaign_field_id, tenant_id: req.tenantId },
+      attributes: ['id', 'field_id'],
+      transaction: req.dbTransaction,
+      lock: req.dbTransaction.LOCK.UPDATE
+    });
+    if (!campaignField) {
+      throw new HttpError(404, 'Lote de campaña no encontrado.',
+        undefined, 'WORK_ORDER_CAMPAIGN_FIELD_NOT_FOUND');
+    }
+    if (campaignField.field_id !== field.id) {
+      throw new HttpError(422, 'El lote de campaña no corresponde al lote de la orden.',
+        undefined, 'WORK_ORDER_CAMPAIGN_FIELD_MISMATCH');
+    }
+  }
   const order = await WorkOrder.create({
     ...req.body,
     status: 'draft',
