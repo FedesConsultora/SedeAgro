@@ -8,7 +8,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 
 sedeagro_acquire_production_deploy_lock() {
-  local dir="${1:-}" file mode fd before after
+  local dir="${1:-}" file mode fd before after executable previous_umask
   if [[ $# -ne 1 || "$dir" != /* || "$dir" == / ||
         "$dir" == *'/../'* || "$dir" == *'/./'* ||
         "$dir" == *'//'* || "$dir" == */ ]]; then
@@ -23,6 +23,7 @@ sedeagro_acquire_production_deploy_lock() {
   done
   # This is a fixed host namespace in the production caller, not a repo or
   # worktree-local file. A distinct operator UID cannot borrow its lock.
+  previous_umask="$(umask)"
   umask 077
   if [[ ! -e "$dir" && ! -L "$dir" ]]; then
     mkdir -m 700 -- "$dir" 2>/dev/null || true
@@ -73,5 +74,7 @@ sedeagro_acquire_production_deploy_lock() {
     printf 'BLOCKED production deployment lock: another release is in progress\n' >&2
     return 2
   fi
+  # Restore the invoking shell's original defaults for git/Docker/other work.
+  umask "$previous_umask"
 }
 sedeagro_acquire_production_deploy_lock "$@"
