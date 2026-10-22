@@ -11,7 +11,7 @@ import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { ASSIGNABLE_ROLES, assertRunAssignmentChange, assertRunReadyToStart, assertRunTransition, assertScoutingWritable, canReadScoutingRun } from './scoutingPolicy.js';
 import { decodeEvidenceContent, safeEvidenceFileName } from './evidenceContent.js';
-import { getPrivateEvidence, putPrivateEvidence,
+import { putPrivateEvidence,
   getPrivateEvidenceByteLength, getBoundedPrivateEvidence } from './evidenceStorage.js';
 import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from './evidenceIntegrity.js';
 import { evidenceProvenanceView } from './evidenceProvenance.js';
@@ -377,13 +377,32 @@ scoutingRouter.get('/evidence/:id/content', requireCapability('scouting.read'), 
   const observation = await ScoutingObservation.findByPk(evidence.scouting_observation_id, { transaction: req.dbTransaction });
   if (!observation) throw new HttpError(404, 'Evidencia no encontrada.');
   await findRun(req, observation.scouting_run_id);
-  const bytes = await getPrivateEvidence({
-    tenantId: req.tenantId,
-    evidenceId: evidence.id,
-    transaction: req.dbTransaction
+  // Match the work-order private download contract: never present stored
+  // bytes as evidence unless their persisted size and SHA-256 match exactly.
+  // Probe the BYTEA size without transferring data to Node, then use a
+  // database-bounded second read; the checks are in the same RLS transaction.
+  const blobLength = await getPrivateEvidenceByteLength({
+    tenantId: req.tenantId, evidenceId: evidence.id, transaction: req.dbTransaction
   });
-  if (!bytes) throw new HttpError(404, 'El archivo no está disponible; solo se registraron metadatos.');
   res.set('Cache-Control', 'private, no-store');
+  res.set('X-Content-Type-Options', 'nosniff');
+  if (blobLength === null) {
+    throw new HttpError(404, 'El archivo privado no está disponible.', undefined,
+      'SCOUTING_EVIDENCE_BYTES_MISSING');
+  }
+  const bytes = shouldReadEvidenceBytes(evidence.content_sha256, evidence.size_bytes, blobLength)
+    ? await getBoundedPrivateEvidence({
+      tenantId: req.tenantId, evidenceId: evidence.id, transaction: req.dbTransaction
+    }) : undefined;
+  const integrity = classifyEvidenceIntegrity({
+    expectedHash: evidence.content_sha256,
+    declaredSize: evidence.size_bytes,
+    blobLength, bytes
+  });
+  if (integrity !== 'verified') {
+    throw new HttpError(409, 'Falló la comprobación de integridad del archivo privado.',
+      undefined, 'SCOUTING_EVIDENCE_INTEGRITY_FAILED');
+  }
   res.json({ data: {
     id: evidence.id,
     original_name: evidence.original_name,
