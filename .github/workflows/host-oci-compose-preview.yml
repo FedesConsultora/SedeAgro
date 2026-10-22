@@ -1,0 +1,45 @@
+name: OCI host signed Compose read-only preview
+
+on:
+  pull_request:
+    paths:
+      - "scripts/inspect-host-oci-compose.mjs"
+      - "scripts/test/inspect-host-oci-compose.test.mjs"
+      - ".github/workflows/host-oci-compose-preview.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/inspect-host-oci-compose.mjs"
+      - "scripts/test/inspect-host-oci-compose.test.mjs"
+      - ".github/workflows/host-oci-compose-preview.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-oci-compose-preview-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-oci-compose-preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact event HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify real Docker Compose v2 availability
+        run: docker compose version
+      - name: Syntax checks
+        run: |
+          node --check scripts/inspect-host-oci-compose.mjs
+          node --check scripts/test/inspect-host-oci-compose.test.mjs
+      - name: Signed host Compose parity and adversarial tests
+        run: node --test scripts/test/inspect-host-oci-compose.test.mjs
