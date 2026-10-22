@@ -54,7 +54,8 @@ export function validateExecutionEvidenceResponse(response, reportId, existingId
   if (expected) {
     let bytes;
     try { bytes = preparedEvidenceByteLength(expected.payload); } catch { /* invalid ACK */ }
-    if (!expected.actorId || !bytes ||
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(asset.id) ||
+        !expected.actorId || !bytes ||
         asset.uploaded_by !== expected.actorId ||
         asset.original_name !== expected.payload?.original_name ||
         asset.kind !== expected.payload?.kind ||
