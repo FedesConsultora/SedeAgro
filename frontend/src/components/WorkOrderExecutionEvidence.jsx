@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
+import { sessionScope } from '../services/offlineSyncModel.js';
+import { createMobileCaptureFence } from '../services/mobileCaptureSafety.js';
+import { createPrivateUploadCache } from '../services/privateEvidenceUpload.js';
 import {
-  canUploadExecutionEvidence, validateExecutionFile,
+  canUploadExecutionEvidence,
   validateExecutionEvidenceResponse, decodePrivateEvidenceResponse
 } from '../services/executionEvidence.js';
-
-function fileBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.readAsDataURL(file);
-  });
-}
 
 const statusLabels = { verified: 'Archivo íntegro', mismatch: 'Integridad fallida',
   missing: 'Archivo no disponible', unverifiable: 'No verificable', oversize: 'Archivo excedido' };
@@ -21,7 +15,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   const { api, dataMode, session } = useSession();
   const live = dataMode === 'live' && session?.authenticated === true;
   const userId = session?.user?.id;
-  const identity = session?.membership?.tenantId || session?.tenant?.id || userId;
+  const identity = sessionScope(session);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -33,6 +27,27 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   const [checks, setChecks] = useState({});
   const [opened, setOpened] = useState(null);
   const urlRef = useRef(null);
+  const uploadCache = useRef(null);
+  const uploadFence = useRef(null);
+  if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
+  if (!uploadFence.current) uploadFence.current = createMobileCaptureFence();
+  const uploadScope = live && identity && uploadFor && uploadKey
+    ? `${identity}:${order.id}:${uploadFor}:${uploadKey}` : null;
+  uploadFence.current.setScope(uploadScope);
+  useEffect(() => {
+    uploadFence.current.setScope(uploadScope);
+    return () => uploadFence.current.invalidate();
+  }, [uploadScope]);
+  useEffect(() => {
+    // A different user in the same tenant is also a different security scope.
+    uploadCache.current.reset();
+    setUploadFor(null);
+    setFile(null);
+    setUploadKey('');
+    setBusy(false);
+    setOpened(null);
+    setChecks({});
+  }, [order.id, identity]);
 
   useEffect(() => {
     if (!live) return undefined;
@@ -62,6 +77,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   if (!live || reports.length === 0) return null;
 
   const updateFile = chosen => {
+    uploadCache.current.reset();
     setFile(chosen);
     // A retry preserves this UUID; selecting another file generates a new one.
     setUploadKey(chosen ? crypto.randomUUID() : '');
@@ -74,26 +90,37 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
     if (!report || !canUploadExecutionEvidence(report, order.status, userId, live) || busy) return;
     setBusy(true);
     setError('');
+    const ticket = uploadFence.current.ticket();
+    if (!uploadFence.current.isCurrent(ticket)) {
+      setBusy(false);
+      return;
+    }
     try {
-      const kind = validateExecutionFile(file);
-      const base64 = await fileBase64(file);
+      // Cache the *prepared* JPEG payload before HTTP. If an ACK is lost,
+      // retrying this UUID must use byte-identical content.
+      const payload = await uploadCache.current.prepare(file, uploadKey);
+      if (!uploadFence.current.isCurrent(ticket)) return;
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/evidence`, {
           method: 'POST', silent: true,
-          body: { kind, mime_type: file.type, original_name: file.name,
-            client_upload_id: uploadKey, content_base64: base64 }
+          body: { ...payload, client_upload_id: uploadKey }
         });
+      if (!uploadFence.current.isCurrent(ticket)) return;
       validateExecutionEvidenceResponse(response, report.id);
+      uploadCache.current.reset();
+      setBusy(false);
       setUploadFor(null);
       setFile(null);
       setUploadKey('');
       setRevision(n => n + 1);
       onChanged?.();
     } catch (err) {
-      // Deliberately retain the chosen file and UUID after network ambiguity.
-      setError(err?.message || 'No se confirmó la carga. Podés reintentar.');
+      // Network ambiguity leaves both UUID and encoded bytes unchanged.
+      if (uploadFence.current.isCurrent(ticket)) {
+        setError(err?.message || 'No se confirmó la carga. Podés reintentar.');
+      }
     } finally {
-      setBusy(false);
+      if (uploadFence.current.isCurrent(ticket)) setBusy(false);
     }
   };
 
@@ -163,13 +190,14 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
         </div>)}
         {allowed && files.length < 8 && <button type="button" className="ghost-action"
           disabled={busy} onClick={() => {
+            uploadCache.current.reset();
             setUploadFor(report.id);
             setFile(null);
             setUploadKey('');
             setError('');
           }}>Adjuntar foto o PDF</button>}
         {uploadFor === report.id && allowed && <form className="order-detail__execution-form" onSubmit={upload}>
-          <label className="form-field">Archivo real (hasta 2 MiB)
+          <label className="form-field">Archivo real (foto JPEG/PNG/WebP hasta 2 MiB, convertida a JPEG privado de 512 KiB; PDF sin cambios)
             <input type="file" required accept="image/jpeg,image/png,image/webp,application/pdf"
               disabled={busy} onChange={event => updateFile(event.target.files?.[0] || null)} />
           </label>
@@ -178,6 +206,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
               {busy ? 'Adjuntando…' : 'Guardar respaldo privado'}
             </button>
             <button type="button" className="ghost-action" disabled={busy} onClick={() => {
+              uploadCache.current.reset();
               setUploadFor(null); setFile(null); setUploadKey('');
             }}>Cancelar</button>
           </div>
