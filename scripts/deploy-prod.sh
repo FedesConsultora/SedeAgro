@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 0P.38: exclude competing deploys across checkout/worktree paths on THIS host.
+# Fail closed before any git pull, signed admission, Docker or migration.
+# /run/lock/sedeagro must be a private namespace owned by the deploy UID;
+# the sourced helper retains its flock FD until this process exits.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! source "$SCRIPT_DIR/production-deploy-lock.sh" /run/lock/sedeagro; then
+  printf 'BLOCKED: exclusive host deployment lock could not be acquired.\n' >&2
+  exit 2
+fi
+
 echo "====================================="
 echo "  SedeAgro - Deploy Producción"
 echo "====================================="
