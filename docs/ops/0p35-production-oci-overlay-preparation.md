@@ -52,9 +52,16 @@ Compose models with Docker Compose v2:
 
 Both are rendered by `docker compose ... config --no-env-resolution
 --format json` with synthetic placeholders and
-`COMPOSE_DISABLE_ENV_FILE=1`. Production `.env` and service env files
-are **never loaded**, no credentials logged or exported and no service
-started. The parser compares the complete normalized trees. Only two
+`COMPOSE_DISABLE_ENV_FILE=1`. **Docker Compose still requires that a
+service `env_file` physically exist even with `--no-env-resolution`.**
+The verifier therefore copies only the two **committed YAML files**
+into a private 0700 temporary directory, writes an ephemeral 0600
+`backend/.env` containing ONLY `NODE_ENV=ci-oci-review-only`, and
+deletes everything in a `finally` block. Its Docker subprocess gets
+a tightly controlled environment with synthetic DB passwords and
+no inherited application secrets. Production `.env` and real service
+env files are **never read, loaded, or copied**; no credentials logged
+or exported and no service started. The parser compares the complete normalized trees. Only two
 differences are allowed: backend/frontend lose `build` and gain their
 exact SHA40 OCI image tags and `pull_policy: never`. It rejects changes
 to DB/Redis pinned images, dependency ordering, fedes-net, internal
