@@ -114,7 +114,13 @@ farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, 
 }));
 
 farmsRouter.patch('/:id', requireCapability('gis.write'), validate(farmSchema.partial()), asyncHandler(async (req, res) => {
-  const farm = await Farm.findByPk(req.params.id, { transaction: req.dbTransaction });
+  // Lock the farm row while checking whether the initial producer assignment
+  // is safe. Inserts of fields referencing the farm acquire a FK KEY SHARE lock,
+  // so this UPDATE lock prevents a concurrent child from bypassing the count.
+  const farm = await Farm.findByPk(req.params.id, {
+    transaction: req.dbTransaction,
+    lock: req.dbTransaction.LOCK.UPDATE
+  });
   if (!farm) return res.status(404).json({ error: { message: 'Establecimiento no encontrado.' } });
   if (Object.hasOwn(req.body, 'producer_id') && req.body.producer_id !== farm.producer_id) {
     // Producer grants authorize whole farms and their historical fields.
