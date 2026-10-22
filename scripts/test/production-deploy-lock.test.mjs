@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const helper=fileURLToPath(new URL('../production-deploy-lock.sh',import.meta.url));
 const deploy=readFileSync(new URL('../deploy-prod.sh',import.meta.url),'utf8');
-const command='set -euo pipefail; source "$1" "$2"; printf "WORK_ENTERED\\n"';
+const command='set -euo pipefail; umask 022; initial="$(umask)"; source "$1" "$2"; [[ "$(umask)" == "$initial" ]]; printf "WORK_ENTERED\\n"';
 function fixture(t){
   const root=mkdtempSync(join(tmpdir(),'sedeagro-lock-rehearsal-'));
   t.after(()=>rmSync(root,{recursive:true,force:true}));
