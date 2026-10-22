@@ -11,6 +11,19 @@ El flujo de observación offline ya convertía todas las fotografías a JPEG por
 - La carga del parte mantiene el mismo `client_upload_id` al reintentar una respuesta HTTP ambigua y conserva **exactamente el mismo Base64 convertido**, no vuelve a ejecutar Canvas con ese UUID; otra selección genera un UUID y payload nuevos.
 - Un cambio de cuenta/tenant/recurso o cierre de formulario durante conversión invalida un ticket local e impide iniciar la subida desde el callback anterior. Los metadatos de un usuario no se heredan por compartir tenant.
 
+
+## MOB-11 — fotos nativas HEIC/HEIF en iPhone (admisión condicionada al navegador)
+- El selector de recorrida (cámara/galería) y ambos adjuntos online ofrecen `image/heic` y `image/heif`, además de JPEG/PNG/WebP. Una imagen fuente sigue limitada a **12 MiB** y **40 MP**. El PDF continúa limitado a **2 MiB** sin transformación.
+- HEIC y HEIF son **solo MIME de origen** (`CAMERA_SOURCE_MIME_TYPES`), nunca un tipo aceptado en `validateOfflinePhoto` ni un `mime_type` de subida. La única ruta válida es decodificar mediante `createImageBitmap` o `HTMLImageElement`, dibujar píxeles en un Canvas, exportar JPEG <=512 KiB y validar firma/tamaño antes de cifrar/POST.
+- La compatibilidad depende del navegador, versión, dispositivo y codec; Safari iOS moderno puede decodificar fotos HEIC nativas, pero Chromium/Firefox y otros entornos pueden rechazarlas. Ante ausencia de decodificador o JPEG inválido: error visible, **sin borrador de foto y sin enviar bytes HEIC/HEIF originales**. El usuario puede elegir una versión JPEG; no se descargan librerías externas ni se sube a conversores remotos.
+- Esto no es certificación de iPhone: Safari/iOS físico y Android permanecen **NOT_RUN**. La foto puede ser aceptada como fuente pero no prometer vista previa ni orientación sin pruebas en dispositivo. Los históricos no se alteran y la API REST externa no sanea universalmente EXIF.
+
+### Casos de aceptación física pendientes (staging autorizado)
+1. iPhone con captura Alta eficiencia, Safari compatible: imagen HEIC real de galería y cámara en recorrida, observación online y orden; verificar carga/cola privada únicamente JPEG <=512 KiB, orientación y hash, ausencia de EXIF GPS de origen.
+2. Repetir con HEIF del sistema, dispositivo con JPEG automático y permisos de Fotos limitados; no asumir que `accept` obliga a Safari a conservar el tipo HEIC original.
+3. Navegador sin decodificador HEIC: selector puede devolver imagen HEIC, pero debe mostrar error recuperable sin almacenar ni transferir original; elegir JPEG después debe funcionar.
+4. Exceder 12 MiB, 40 MP, archivo corrupto y cambio de tenant durante conversión; verificar rechazo, limpieza de URL y ausencia de envíos tardíos. Repetir sin red y después de reconexión.
+
 ## Qué demuestra y qué no
 - Tests unitarios: fuente 2 MiB+1 y exactamente 12 MiB admitidos como foto, fuente 12 MiB+1/imagen vacía/nombre inseguro rechazados antes de Canvas, PDF 2 MiB+1 rechazado, MIME no admitido, rechazo de foto no convertida, no degradación a bytes originales, PDF intacto, caché de reintentos e integración estática en ambos formularios.
 - CI browser/Chromium existente: ya ejercita `readOfflinePhoto` con JPEG EXIF sintético, Canvas y persistencia cifrada; no sustituye QA física de Safari iOS o Android.
