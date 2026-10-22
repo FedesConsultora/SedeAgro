@@ -80,6 +80,9 @@ test('both live upload surfaces must use the shared privacy gate, never FileRead
     '../src/components/WorkOrderExecutionEvidence.jsx']) {
     const jsx = readFileSync(new URL(path, import.meta.url), 'utf8');
     assert.match(jsx, /preparePrivateEvidenceUpload|createPrivateUploadCache/);
+    assert.match(jsx, /client_upload_id: uploadKey/);
+    assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
+    assert.match(jsx, /createMobileCaptureFence/);
     assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
   }
 });
