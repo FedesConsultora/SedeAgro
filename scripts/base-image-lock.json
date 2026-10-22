@@ -1,7 +1,7 @@
 {
   "schema": "sedeagro-base-images-v1",
   "platform": "linux/amd64",
-  "reviewed_from": "docker-library/repo-info repos/nginx/remote/1.30.6-alpine3.24.md (OCI index and linux/amd64); all four locks verified online again by CI before builds",
+  "reviewed_from": "docker-library/repo-info repos/nginx/remote/1.30.6-alpine3.24-slim.md (OCI index and linux/amd64); immutable digest checked online by CI before builds",
   "reviewed_on": "2026-10-22",
   "images": {
     "node": {
@@ -10,8 +10,8 @@
       "media_type": "application/vnd.oci.image.index.v1+json"
     },
     "nginx": {
-      "tag": "nginx:1.30.6-alpine3.24",
-      "digest": "sha256:ff8328b4279ec385af48cde9ef486e7165ad74b7065cb3cd86c377384e2e2dd5",
+      "tag": "nginx:1.30.6-alpine3.24-slim",
+      "digest": "sha256:a6cc4968d63e87b7d78fb0e089dcd85a6c88e7660b9b06ee0c9b380ac7bc5593",
       "media_type": "application/vnd.oci.image.index.v1+json"
     },
     "postgis": {
