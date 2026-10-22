@@ -235,9 +235,9 @@ test('both live upload surfaces must use the shared privacy gate, never FileRead
     assert.match(jsx, /client_upload_id: uploadKey/);
     assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
     assert.match(jsx, /createMobileCaptureFence/);
-    assert.match(jsx, /const uploadInFlight = useRef\\(null\\)/);
-    assert.match(jsx, /isCurrent\\(uploadInFlight\\.current\\)/);
-    assert.match(jsx, /uploadInFlight\\.current === ticket/);
+    assert.match(jsx, /const uploadInFlight = useRef\(null\)/);
+    assert.match(jsx, /isCurrent\(uploadInFlight\.current\)/);
+    assert.match(jsx, /uploadInFlight\.current === ticket/);
     assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
   }
 });
