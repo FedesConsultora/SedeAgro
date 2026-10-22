@@ -42,6 +42,40 @@ test('two synchronous observation submits acquire only one durable save ticket',
   assert.equal(gate.acquire(two), true, 'a new modal session may save a new capture');
 });
 
+test('two rapid async submit events enqueue only once while storage is pending', async () => {
+  const fence = createMobileCaptureFence('tenant:user:run');
+  const gate = createMobileCaptureSubmitGate();
+  let allowStorage;
+  let storageStarted;
+  const pending = new Promise(resolve => { allowStorage = resolve; });
+  const begun = new Promise(resolve => { storageStarted = resolve; });
+  let localWrites = 0;
+  const submit = async () => {
+    const ticket = fence.ticket();
+    if (!fence.isCurrent(ticket) || !gate.acquire(ticket)) return 'duplicate-blocked';
+    let stored = false;
+    try {
+      localWrites += 1;
+      storageStarted();
+      await pending;
+      stored = true;
+      return 'saved';
+    } finally {
+      gate.settle(ticket, stored);
+    }
+  };
+  const first = submit();
+  await begun;
+  assert.equal(await submit(), 'duplicate-blocked');
+  assert.equal(localWrites, 1);
+  allowStorage();
+  assert.equal(await first, 'saved');
+  assert.equal(await submit(), 'duplicate-blocked', 'success remains locked until close');
+  gate.reset();
+  assert.equal(await submit(), 'saved');
+  assert.equal(localWrites, 2, 'newly reopened modal may queue its own observation');
+});
+
 test('save failure unlocks a retry, but an obsolete completion cannot release new capture', () => {
   const fence = createMobileCaptureFence('tenant-A:user-A:run-A');
   const gate = createMobileCaptureSubmitGate();
@@ -115,7 +149,7 @@ test('form refuses stale asynchronous photo completion and old tenant callbacks'
   assert.match(form, /submitGate\.current\.acquire\(ticket\)/);
   assert.match(form, /submitGate\.current\.settle\(ticket, stored\)/);
   assert.match(form, /submitGate\.current\.reset\(\)/);
-  assert.match(form, /const stored = await offlineQueue\.queueObservation/);
+  assert.match(form, /const storedItem = await offlineQueue\.queueObservation/);
 
 });
 
