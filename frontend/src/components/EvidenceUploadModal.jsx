@@ -11,6 +11,7 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
   const [uploadKey, setUploadKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const fileInputRef = useRef(null);
   const fence = useRef(null);
   const uploadCache = useRef(null);
   if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
@@ -49,6 +50,9 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
       await api.createEvidence(observationId, { ...payload, client_upload_id: uploadKey });
       if (fence.current.isCurrent(ticket)) {
         uploadCache.current.reset();
+        setFile(null);
+        setUploadKey('');
+        if (fileInputRef.current) fileInputRef.current.value = '';
         onCreated?.();
       }
     } catch (err) {
@@ -73,7 +77,7 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
         <label className="form-field">
           <span>Archivo real *</span>
-          <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
             disabled={saving || dataMode !== 'live'}
             onChange={(e) => {
               const selected = e.target.files?.[0] || null;
