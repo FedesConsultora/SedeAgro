@@ -19,6 +19,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const { dataMode, session } = useSession();
   const [form, setForm] = useState(emptyObservation);
   const [saving, setSaving] = useState(false);
+  const [savedLocally, setSavedLocally] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoError, setPhotoError] = useState('');
@@ -48,6 +49,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
     // must never unlock a new scoped modal's save ticket.
     submitGate.current.reset();
     setSaving(false);
+    setSavedLocally(false);
     setForm(emptyObservation());
     setLocation(null);
     setLocating(false);
@@ -107,7 +109,10 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
         ...(attachment ? { photo: attachment } : {})
       });
       stored = true;
-      if (captureFence.current.isCurrent(ticket)) onQueued?.(storedItem);
+      if (captureFence.current.isCurrent(ticket)) {
+        setSavedLocally(true);
+        onQueued?.(storedItem);
+      }
     } catch (err) {
       if (captureFence.current.isCurrent(ticket)) {
         setError(stored
@@ -118,16 +123,16 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
       // A successful write remains locked until modal close; releasing it
       // immediately would allow another submit before React closes the modal.
       if (submitGate.current.settle(ticket, stored) &&
-          captureFence.current.isCurrent(ticket) && !stored) setSaving(false);
+          captureFence.current.isCurrent(ticket)) setSaving(false);
     }
   };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Agregar observación"
       footer={<>
-        <button type="button" className="ghost-action" onClick={onClose} disabled={saving}>Cancelar</button>
-        <button type="submit" form="obs-form" className="primary-action" disabled={saving || locating}>
-          {saving ? 'Preparando y guardando…' : 'Guardar observación'}
+        <button type="button" className="ghost-action" onClick={onClose} disabled={saving && !savedLocally}>Cancelar</button>
+        <button type="submit" form="obs-form" className="primary-action" disabled={saving || locating || savedLocally}>
+          {savedLocally ? 'Guardada en este dispositivo' : saving ? 'Preparando y guardando…' : 'Guardar observación'}
         </button>
       </>}
     >
