@@ -29,6 +29,32 @@ const campaignFieldSchema = z.object({
   status: z.enum(['planned', 'active', 'harvested', 'closed']).default('planned')
 });
 
+// Both columns have valid independent FKs, but those FKs do not prove that the
+// selected variety actually belongs to the selected crop. The global catalogs
+// are read-only through the tenant API; validate the pair in the same request
+// transaction before writing any company-scoped campaign field.
+async function assertCropVarietyForCampaign(req, cropTypeId, varietyId) {
+  const crop = await CropType.findByPk(cropTypeId, {
+    attributes: ['id'],
+    transaction: req.dbTransaction
+  });
+  if (!crop) {
+    throw new HttpError(422, 'Cultivo de campaña no válido.',
+      undefined, 'CAMPAIGN_CROP_TYPE_NOT_FOUND');
+  }
+  if (varietyId != null) {
+    const matchingVariety = await CropVariety.findOne({
+      where: { id: varietyId, crop_type_id: cropTypeId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    });
+    if (!matchingVariety) {
+      throw new HttpError(422, 'La variedad no pertenece al cultivo seleccionado.',
+        undefined, 'CAMPAIGN_CROP_VARIETY_MISMATCH');
+    }
+  }
+}
+
 campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async (req, res) => {
   const scopedFields = await assignedFieldIds(req);
   const scopedCampaignFields = scopedFields === null ? null : await CampaignField.findAll({
@@ -60,6 +86,21 @@ campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaig
 }));
 
 campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldSchema), asyncHandler(async (req, res) => {
+  const [campaign, field] = await Promise.all([
+    Campaign.findOne({
+      where: { id: req.params.campaignId, tenant_id: req.tenantId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    }),
+    Field.findOne({
+      where: { id: req.body.field_id, tenant_id: req.tenantId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    })
+  ]);
+  if (!campaign) throw new HttpError(404, 'Campaña no encontrada.', undefined, 'CAMPAIGN_NOT_FOUND');
+  if (!field) throw new HttpError(404, 'Lote no encontrado.', undefined, 'CAMPAIGN_FIELD_NOT_FOUND');
+  await assertCropVarietyForCampaign(req, req.body.crop_type_id, req.body.crop_variety_id);
   const campaignField = await CampaignField.create({
     ...req.body,
     campaign_id: req.params.campaignId
@@ -123,6 +164,15 @@ campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.
   if (req.body.field_id && req.body.field_id !== cf.field_id) {
     throw new HttpError(409, 'No se puede cambiar el lote de una campaña existente.',
       undefined, 'CAMPAIGN_FIELD_IDENTITY_IMMUTABLE');
+  }
+  // PATCH can change either half of this relationship. Compare the effective
+  // pair after applying the partial update, not just the fields sent today.
+  if (req.body.crop_type_id !== undefined || req.body.crop_variety_id !== undefined) {
+    const effectiveTypeId = req.body.crop_type_id ?? cf.crop_type_id;
+    const effectiveVarietyId = req.body.crop_variety_id !== undefined
+      ? req.body.crop_variety_id
+      : cf.crop_variety_id;
+    await assertCropVarietyForCampaign(req, effectiveTypeId, effectiveVarietyId);
   }
   await cf.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: cf });
