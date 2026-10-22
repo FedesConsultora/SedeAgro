@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
-import { sessionScope } from '../services/offlineSyncModel.js';
+import { reportAccessContext } from '../services/reportAccessContext.js';
 import { decodeAsyncReportFile } from '../services/reportArtifactClient.js';
 
 // Async reporting is explicitly separate from the immediate CSV/PDF/XLSX buttons.
 export function ReportJobsPanel({ fields }) {
   const { api, dataMode, session } = useSession();
-  const scope = dataMode === 'live' ? sessionScope(session) : null;
+  // Include privileges: the same tenant/user can be downgraded while a
+  // report worker request or SHA-256 download is still in progress.
+  const scope = reportAccessContext(session, dataMode);
   const current = useRef(null);
   current.current = { scope, api };
   const [templates, setTemplates] = useState([]);

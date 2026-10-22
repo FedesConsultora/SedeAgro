@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
-import { sessionScope } from '../services/offlineSyncModel.js';
+import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport } from '../services/reportAccessContext.js';
 import { decodeFieldDocument } from '../services/reportDownload.js';
 
 const STATUS_ES = {
@@ -11,7 +11,13 @@ const STATUS_ES = {
 
 export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) {
   const { api, dataMode, session } = useSession();
-  const [report, setReport] = useState(null);
+  const [reportState, setReportState] = useState(null);
+  const reportContext = reportAccessContext(session, dataMode, fieldId);
+  // Never render a previous actor/role/field's report even during the render
+  // before React runs an effect that clears stale component state.
+  const report = visibleFieldReport(reportState, reportContext, api);
+  const loadSequence = useRef(0);
+  const loadInFlight = useRef(false);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [reportError, setReportError] = useState('');
@@ -22,21 +28,28 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
   const [exportError, setExportError] = useState('');
   const [exportStatus, setExportStatus] = useState('');
   const currentScope = useRef(null);
-  currentScope.current = dataMode === 'live' ? sessionScope(session) : null;
+  currentScope.current = reportContext;
   const currentApiRef = useRef(api);
   currentApiRef.current = api;
   useEffect(() => () => {
     currentScope.current = null;
     currentApiRef.current = null;
   }, []);
-  // A same-user/tenant re-login still replaces the authoritative cookie.
-  // Do not deliver a previous authentication generation's completed report.
+  // A role/entitlement change in the same tenant is also a new authority.
+  // Revoke pending load/export work and hide all previous report details.
   useEffect(() => {
+    loadSequence.current += 1;
+    loadInFlight.current = false;
+    setReportState(null);
+    setLoading(false);
+    setExpanded(false);
+    setReportError('');
     exportLock.current = false;
     setExporting(false);
     setExportError('');
     setExportStatus('');
-  }, [api]);
+    return () => { loadSequence.current += 1; };
+  }, [reportContext, api]);
 
   const exportReport = async (format) => {
     if (exportLock.current || dataMode !== 'live' || !currentScope.current) return;
@@ -95,33 +108,48 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
   };
 
   const load = async () => {
-    if (loading || report) { setExpanded((v) => !v); return; }
+    if (loading || report) { setExpanded(value => !value); return; }
+    if (loadInFlight.current || (dataMode === 'live' && !reportContext)) return;
+    const scope = reportContext;
+    const requestApi = api;
+    const sequence = ++loadSequence.current;
+    const isCurrent = () => loadSequence.current === sequence &&
+      currentScope.current === scope && currentApiRef.current === requestApi;
+    loadInFlight.current = true;
     setLoading(true);
     setReportError('');
     setExpanded(true);
     try {
       if (dataMode === 'mock') {
-        // Mock report data
-        setReport({
-          field: { name: fieldName, Farm: { name: farmName } },
+        // Demo data is never reused when the user switches to a live account.
+        if (isCurrent()) setReportState({ scope, api: requestApi, report: {
+          field: { id: fieldId, name: fieldName, Farm: { name: farmName } },
           activeCampaignField: {
             Campaign: { name: 'Campaña gruesa 2026/27', status: 'active' },
             CropType: { name: 'Soja' },
             status: 'active'
           },
-          lastScoutingRun: { scheduled_at: '2026-06-20', status: 'planned', ScoutingObservations: [{ severity: 'medium', observation_type: 'weed' }] },
+          lastScoutingRun: { scheduled_at: '2026-06-20', status: 'planned',
+            ScoutingObservations: [{ severity: 'medium', observation_type: 'weed' }] },
           workOrdersSummary: { open: 1, closed: 0, recent: [] }
-        });
+        } });
         return;
       }
-      const res = await api.getFieldReport(fieldId);
-      setReport(res.data);
+      const res = await requestApi.getFieldReport(fieldId);
+      if (!isCurrent()) return;
+      const confirmed = confirmFieldReportResponse(res, fieldId);
+      if (isCurrent()) setReportState({ scope, api: requestApi, report: confirmed });
     } catch (error) {
-      setReportError(error?.message || 'No se pudo cargar el resumen del lote.');
-      setReport(null);
-      setExpanded(false);
+      if (isCurrent()) {
+        setReportError(error?.message || 'No se pudo cargar el resumen del lote.');
+        setReportState(null);
+        setExpanded(false);
+      }
     } finally {
-      setLoading(false);
+      if (isCurrent()) {
+        loadInFlight.current = false;
+        setLoading(false);
+      }
     }
   };
 

@@ -6,6 +6,7 @@ import { FieldReportCard } from '../components/FieldReportCard.jsx';
 import { ReportJobsPanel } from '../components/ReportJobsPanel.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { useTenantCollection } from '../services/useTenantCollection.js';
+import { reportAccessContext } from '../services/reportAccessContext.js';
 import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
 
 export function ReportsPage() {
@@ -15,6 +16,7 @@ export function ReportsPage() {
     mockRecords: mockData.fields, title: 'lotes para reportes'
   });
   const [search, setSearch] = useState('');
+  const reportPrincipal = reportAccessContext(session, dataMode);
 
   const visible = search
     ? fields.filter((f) => [f.name, f.Farm?.name].join(' ').toLowerCase().includes(search.toLowerCase()))
@@ -24,7 +26,7 @@ export function ReportsPage() {
     <div className="page-grid">
       <WorkspaceHeading eyebrow="Análisis por lote" title="Reportes" />
 
-      {dataMode === 'live' && !loading && !error && <ReportJobsPanel fields={fields} />}
+      {dataMode === 'live' && !loading && !error && <ReportJobsPanel fields={fields} key={reportPrincipal || 'unavailable'} />}
 
       {/* Search bar */}
       <div className="data-table-toolbar" style={{ borderBottom: 'none', padding: 0 }}>
@@ -57,7 +59,7 @@ export function ReportsPage() {
         <div style={{ display: 'grid', gap: 16 }}>
           {visible.map((field) => (
             <FieldReportCard
-              key={field.id}
+              key={`${reportPrincipal || 'demo'}:${field.id}`}
               fieldId={field.id}
               fieldName={field.name}
               farmName={field.Farm?.name || '–'}
