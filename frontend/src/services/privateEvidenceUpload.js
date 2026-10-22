@@ -1,4 +1,4 @@
-import { validateExecutionFile } from './executionEvidence.js';
+import { preparedEvidenceByteLength, validateExecutionFile } from './executionEvidence.js';
 import {
   CAMERA_SOURCE_MIME_TYPES, cameraPhotoPlan, MAX_OFFLINE_PHOTO_BYTES, readOfflinePhoto
 } from './offlinePhoto.js';
@@ -52,6 +52,28 @@ export async function preparePrivateEvidenceUpload(file, {
     original_name: converted.original_name,
     content_base64: converted.content_base64
   };
+}
+
+// The scouting API returns the full EvidenceAsset, including observation,
+// uploader and stable client_upload_id. A 2xx/200 replay by itself is NOT a
+// confirmed upload: retain prepared bytes until the receipt matches exactly.
+export function validateScoutingEvidenceUploadResponse(response, {
+  observationId, actorId, uploadId, payload
+} = {}) {
+  let bytes;
+  try { bytes = preparedEvidenceByteLength(payload); } catch { /* invalid receipt */ }
+  const asset = response?.data;
+  if (!asset || typeof asset.id !== 'string' ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(asset.id) ||
+      !observationId || !actorId || !uploadId || !bytes ||
+      asset.scouting_observation_id !== observationId ||
+      asset.uploaded_by !== actorId || asset.client_upload_id !== uploadId ||
+      asset.kind !== payload?.kind || asset.mime_type !== payload?.mime_type ||
+      asset.original_name !== payload?.original_name || asset.size_bytes !== bytes ||
+      typeof response.replayed !== 'boolean') {
+    throw new Error('No se pudo confirmar el adjunto privado mediante el servidor. Podés reintentar.');
+  }
+  return asset;
 }
 
 // Same file+UUID must have ONE conversion, including while Canvas/FileReader is
