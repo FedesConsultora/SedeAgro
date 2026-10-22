@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createPrivateUploadCache, preparePrivateEvidenceUpload } from '../src/services/privateEvidenceUpload.js';
+import { createPrivateUploadCache, preparePrivateEvidenceUpload, validateScoutingEvidenceUploadResponse } from '../src/services/privateEvidenceUpload.js';
 import { MAX_CAMERA_SOURCE_BYTES } from '../src/services/offlinePhoto.js';
 import { MAX_EXECUTION_FILE_BYTES } from '../src/services/executionEvidence.js';
 
@@ -227,6 +227,71 @@ test('failed decoder is not cached and may retry; invalid selection never calls 
   }), /Seleccioná/);
 });
 
+const OBSERVATION = 'c41f5c95-b087-4547-bf3f-f32c20625158';
+const ACTOR = 'b2570700-ec13-4463-a66c-7c28e0878b5d';
+const UPLOAD = 'c629aefe-8f54-4d4c-ab17-5c7e681ace65';
+const FILE_ID = '75d23b90-60b4-4b7b-b777-0db18e1971af';
+const receiptPayload = { kind: 'photo', mime_type: 'image/jpeg',
+  original_name: 'recorrida-lote.jpg', content_base64: '/9j/' };
+const receiptAsset = {
+  id: FILE_ID, scouting_observation_id: OBSERVATION, uploaded_by: ACTOR,
+  client_upload_id: UPLOAD, kind: 'photo', mime_type: 'image/jpeg',
+  original_name: 'recorrida-lote.jpg', size_bytes: 3
+};
+const expectedReceipt = { observationId: OBSERVATION, actorId: ACTOR,
+  uploadId: UPLOAD, payload: receiptPayload };
+
+test('online scouting upload only succeeds on exact ACK for observation, actor, UUID and JPEG bytes', () => {
+  for (const replayed of [false, true]) {
+    assert.deepEqual(validateScoutingEvidenceUploadResponse({
+      data: receiptAsset, replayed
+    }, expectedReceipt), receiptAsset);
+  }
+  for (const mutation of [
+    { id: 'not-uuid' }, { id: '' }, { scouting_observation_id: FILE_ID },
+    { uploaded_by: FILE_ID }, { client_upload_id: FILE_ID },
+    { kind: 'document' }, { mime_type: 'image/png' },
+    { original_name: 'otro.jpg' }, { size_bytes: 4 },
+    { size_bytes: '3' }, { size_bytes: null }
+  ]) {
+    assert.throws(() => validateScoutingEvidenceUploadResponse({
+      data: { ...receiptAsset, ...mutation }, replayed: false
+    }, expectedReceipt), /confirmar.*adjunto/i);
+  }
+  for (const response of [null, {}, { data: null },
+    { data: receiptAsset }, { data: receiptAsset, replayed: 'true' }]) {
+    assert.throws(() => validateScoutingEvidenceUploadResponse(response, expectedReceipt),
+      /confirmar.*adjunto/i);
+  }
+});
+
+test('ambiguous ACK with same UUID cannot clear selected photo or fabricate server success', () => {
+  const cache = createPrivateUploadCache();
+  return (async () => {
+    let conversions = 0;
+    const convert = async () => { conversions++; return receiptPayload; };
+    const preparedOnce = await cache.prepare(photo, UPLOAD, convert);
+    assert.throws(() => validateScoutingEvidenceUploadResponse({
+      data: { ...receiptAsset, client_upload_id: FILE_ID }, replayed: false
+    }, { ...expectedReceipt, payload: preparedOnce }), /confirmar.*adjunto/i);
+    const retryPayload = await cache.prepare(photo, UPLOAD, convert);
+    assert.equal(retryPayload, preparedOnce);
+    assert.equal(conversions, 1);
+    assert.equal(validateScoutingEvidenceUploadResponse({
+      data: receiptAsset, replayed: true
+    }, { ...expectedReceipt, payload: retryPayload }).id, FILE_ID);
+  })();
+});
+
+test('receipt validator never accepts invalid or oversize Base64 as evidence confirmation', () => {
+  for (const content_base64 of ['', 'AA$=', 'AAA', 'AAAA=', 'A'.repeat(2_796_208)]) {
+    assert.throws(() => validateScoutingEvidenceUploadResponse({
+      data: receiptAsset, replayed: false
+    }, { ...expectedReceipt, payload: { ...receiptPayload, content_base64 } }),
+    /confirmar.*adjunto/i);
+  }
+});
+
 test('both live upload surfaces must use the shared privacy gate, never FileReader images', () => {
   for (const path of ['../src/components/EvidenceUploadModal.jsx',
     '../src/components/WorkOrderExecutionEvidence.jsx']) {
@@ -239,5 +304,6 @@ test('both live upload surfaces must use the shared privacy gate, never FileRead
     assert.match(jsx, /isCurrent\(uploadInFlight\.current\)/);
     assert.match(jsx, /uploadInFlight\.current === ticket/);
     assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
+    assert.match(jsx, /validate(?:ScoutingEvidenceUploadResponse|ExecutionEvidenceResponse)/);
   }
 });

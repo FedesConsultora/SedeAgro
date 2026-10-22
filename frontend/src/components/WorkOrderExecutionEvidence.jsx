@@ -117,7 +117,9 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
           body: { ...payload, client_upload_id: uploadKey }
         });
       if (!uploadFence.current.isCurrent(ticket)) return;
-      validateExecutionEvidenceResponse(response, report.id);
+      // Work-order receipts expose author/name/type/size and report ID (not
+      // client_upload_id or digest). Verify all available identity fields.
+      validateExecutionEvidenceResponse(response, report.id, null, { actorId: userId, payload });
       uploadCache.current.reset();
       setBusy(false);
       setUploadFor(null);
