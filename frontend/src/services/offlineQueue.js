@@ -5,6 +5,7 @@ import {
 import { indexedDbQueueStore } from './offlineQueueStore.js';
 import { reconcileOfflineDraft } from './offlineReconciliation.js';
 import { planConfirmedPhotoRecovery, verifiedPhotoUpload } from './photoRecovery.js';
+import { validateOfflinePhoto } from './offlinePhoto.js';
 import { assertStorageCapacity, browserStorageStatus } from './offlineStorageStatus.js';
 
 const changes = () => {
@@ -258,12 +259,21 @@ export function createOfflineQueue({
               if (typeof sendEvidence !== 'function') {
                 throw new Error('El envío de fotografías no está disponible en este cliente.');
               }
+              // An HTTP 2xx or a partial attachment receipt cannot prove this
+              // exact user's image persisted. Match all immutable bindings
+              // before removing encrypted offline bytes, exactly as the manual
+              // photo-only recovery path already does.
+              const photo = validateOfflinePhoto(item.evidence);
+              const plan = {
+                observationId,
+                clientUploadId: item.evidence.client_upload_id,
+                submittedBy: session.user.id,
+                sizeBytes: photo.size_bytes,
+                mimeType: photo.mime_type,
+                originalName: photo.original_name
+              };
               const uploaded = await sendEvidence(observationId, item.evidence);
-              if (uploaded?.data?.client_upload_id !== item.evidence.client_upload_id ||
-                  uploaded?.data?.scouting_observation_id !== observationId ||
-                  uploaded?.data?.size_bytes === undefined) {
-                throw new Error('No se recibió confirmación válida del archivo adjunto.');
-              }
+              verifiedPhotoUpload(uploaded, plan);
             }
             const latest = await store.get(item.id);
             if (!latest || JSON.stringify(latest) !== JSON.stringify(expectedAfterWrite)) {
