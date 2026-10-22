@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Op } from 'sequelize';
-import { Membership, Team, TeamMember, User } from '../../models/index.js';
+import { Farm, Membership, Team, TeamMember, User } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
@@ -50,8 +50,39 @@ teamsRouter.get('/', requireCapability('teams.read'), asyncHandler(async (req, r
 }));
 
 teamsRouter.post('/', requireCapability('teams.write'), validate(teamSchema), asyncHandler(async (req, res) => {
-  const team = await Team.create(req.body, { transaction: req.dbTransaction });
-  res.status(201).json({ data: team });
+  // A tenant FK denies cross-tenant farms, but without checking first the
+  // client receives an opaque database error rather than a scoped 404.
+  if (req.body.farm_id != null) {
+    const farm = await Farm.findOne({
+      where: { id: req.body.farm_id, tenant_id: req.tenantId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    });
+    if (!farm) {
+      throw new HttpError(404, 'Establecimiento no encontrado en esta empresa.',
+        undefined, 'TEAM_FARM_NOT_FOUND');
+    }
+  }
+  // Team name is uniquely scoped to one company. Retries of the exact same
+  // creation should reuse the original record; a changed scope or farm must
+  // never silently reassign an existing operational team.
+  const [team, created] = await Team.findOrCreate({
+    where: { tenant_id: req.tenantId, name: req.body.name },
+    defaults: {
+      scope: req.body.scope,
+      farm_id: req.body.farm_id ?? null,
+      notes: req.body.notes ?? null
+    },
+    transaction: req.dbTransaction
+  });
+  const same = team.scope === req.body.scope &&
+    (team.farm_id ?? null) === (req.body.farm_id ?? null) &&
+    (team.notes ?? null) === (req.body.notes ?? null);
+  if (!created && !same) {
+    throw new HttpError(409, 'El equipo ya existe con otra configuración.',
+      undefined, 'TEAM_CREATE_CONFLICT');
+  }
+  res.status(created ? 201 : 200).json({ data: team, replayed: !created });
 }));
 
 teamsRouter.post('/:id/members', requireCapability('teams.write'), validate(memberSchema), asyncHandler(async (req, res) => {
