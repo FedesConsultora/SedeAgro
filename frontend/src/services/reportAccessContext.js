@@ -28,3 +28,10 @@ export function confirmFieldReportResponse(response, fieldId) {
   }
   return report;
 }
+
+// Rendering must never wait for an effect to clear old private data. A stale
+// state object from another actor, field or API instance is not visible.
+export function visibleFieldReport(snapshot, context, api) {
+  return snapshot?.scope === context && snapshot?.api === api
+    ? snapshot.report : null;
+}
