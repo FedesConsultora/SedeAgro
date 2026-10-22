@@ -220,7 +220,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
             setError('');
           }}>Adjuntar foto o PDF</button>}
         {uploadFor === report.id && allowed && <form className="order-detail__execution-form" onSubmit={upload}>
-          <label className="form-field">Archivo real (foto JPEG/PNG/WebP hasta 2 MiB, convertida a JPEG privado de 512 KiB; PDF sin cambios)
+          <label className="form-field">Archivo real (foto JPEG/PNG/WebP original hasta 12 MiB, convertida a JPEG privado de 512 KiB; PDF hasta 2 MiB sin cambios)
             <input type="file" required accept="image/jpeg,image/png,image/webp,application/pdf"
               disabled={busy} onChange={event => updateFile(event.target.files?.[0] || null)} />
           </label>
