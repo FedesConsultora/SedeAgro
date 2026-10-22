@@ -21,6 +21,9 @@ de leer los .env, ejecutar Git, preflight, Docker, backup o migraciones.
   al pathname y usa `flock -n` (no espera indefinidamente).
 - El descriptor permanece abierto por el proceso `deploy-prod.sh`,
   incluyendo preflight, migraciones y verificación de readiness.
+  El helper restaura la máscara `umask` original del llamador tras
+  crear de forma privada el lock: no modifica permisos posteriores
+  de Git, archivos de diagnóstico ni procesos de Docker.
   El kernel libera el lock al terminar/morir la última referencia al
   descriptor. No borrar el archivo del lock: su unlink permitiría dos
   locks sobre inodos distintos.
