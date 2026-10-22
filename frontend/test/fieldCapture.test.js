@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CAMERA_SOURCE_MIME_TYPES, OFFLINE_PHOTO_MIME_TYPES,
   MAX_CAMERA_SOURCE_BYTES, MAX_CAMERA_PIXELS, MAX_OFFLINE_PHOTO_BYTES,
-  cameraPhotoPlan, photoOutputName, scaledPhotoSize, validateOfflinePhoto
+  cameraPhotoPlan, decodeMobilePhoto, photoOutputName, scaledPhotoSize, validateOfflinePhoto
 } from '../src/services/offlinePhoto.js';
 import { guidanceForDraft, queueSummary } from '../src/services/offlineConflictGuidance.js';
 
@@ -19,11 +20,69 @@ test('field camera accepts compatible 12MiB sources but preserves the 512KiB enc
   assert.throws(() => cameraPhotoPlan({
     name: '../outside.jpg', type: 'image/jpeg', size: 10
   }), /nombre/i);
-  assert.throws(() => cameraPhotoPlan({
-    name: 'photo.heic', type: 'image/heic', size: 1024
-  }), /JPEG, PNG o WebP/i);
+  for (const [name, mime] of [['iphone.heic', 'image/heic'], ['iphone.heif', 'image/heif']]) {
+    assert.deepEqual(cameraPhotoPlan({ name, type: mime, size: MAX_CAMERA_SOURCE_BYTES }),
+      { compress: true, sanitize: true, sourceBytes: MAX_CAMERA_SOURCE_BYTES });
+  }
+  assert.deepEqual(CAMERA_SOURCE_MIME_TYPES.slice(-2), ['image/heic', 'image/heif']);
+  assert.equal(OFFLINE_PHOTO_MIME_TYPES.includes('image/heic'), false,
+    'HEIC is an INPUT only; IndexedDB and POST bodies never store raw HEIC');
+  assert.equal(OFFLINE_PHOTO_MIME_TYPES.includes('image/heif'), false);
   assert.throws(() => cameraPhotoPlan({
     name: 'photo.svg', type: 'image/svg+xml', size: 1024
+  }), /JPEG, PNG, WebP/i);
+});
+
+test('native HEIC/HEIF decoder may open browser pixels without sending original bytes', async () => {
+  for (const mime of ['image/heic', 'image/heif']) {
+    const file = { name: 'iphone.heic', type: mime, size: 2048 };
+    let received = null;
+    let closed = 0;
+    const bitmap = { width: 1600, height: 1200, close: () => { closed += 1; } };
+    const decoded = await decodeMobilePhoto(file, {
+      createBitmap: async (input, options) => {
+        received = { input, options };
+        return bitmap;
+      },
+      ImageConstructor: null
+    });
+    assert.equal(received.input, file);
+    assert.deepEqual(received.options, { imageOrientation: 'from-image' });
+    assert.deepEqual({ width: decoded.width, height: decoded.height, decoder: decoded.decoder },
+      { width: 1600, height: 1200, decoder: 'bitmap' });
+    decoded.close();
+    assert.equal(closed, 1);
+  }
+});
+
+test('unsupported HEIC decoding fails closed, revokes object URL and never forwards source', async () => {
+  let revoked = 0;
+  class UnsupportedImage {
+    set src(value) {
+      if (value) queueMicrotask(() => this.onerror?.());
+    }
+  }
+  const file = { name: 'iphone.heic', type: 'image/heic', size: 2048 };
+  await assert.rejects(decodeMobilePhoto(file, {
+    createBitmap: async () => { throw new Error('Unsupported HEIC'); },
+    ImageConstructor: UnsupportedImage,
+    objectUrls: {
+      createObjectURL: selected => {
+        assert.equal(selected, file);
+        return 'blob:local-heic';
+      },
+      revokeObjectURL: url => {
+        assert.equal(url, 'blob:local-heic');
+        revoked += 1;
+      }
+    }
+  }), /HEIC\/HEIF.*JPEG/);
+  assert.equal(revoked, 1);
+});
+
+test('offline saved photos remain JPEG/PNG/WebP only, even if native camera supplied HEIC', () => {
+  assert.throws(() => validateOfflinePhoto({
+    original_name: 'raw.HEIC', mime_type: 'image/heic', content_base64: 'AAAA'
   }), /JPEG, PNG o WebP/i);
 });
 

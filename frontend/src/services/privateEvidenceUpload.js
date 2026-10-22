@@ -1,6 +1,6 @@
 import { validateExecutionFile } from './executionEvidence.js';
 import {
-  cameraPhotoPlan, MAX_OFFLINE_PHOTO_BYTES, OFFLINE_PHOTO_MIME_TYPES, readOfflinePhoto
+  CAMERA_SOURCE_MIME_TYPES, cameraPhotoPlan, MAX_OFFLINE_PHOTO_BYTES, readOfflinePhoto
 } from './offlinePhoto.js';
 
 // PDFs intentionally preserve their original bytes. Photos never do: the
@@ -23,7 +23,7 @@ export async function preparePrivateEvidenceUpload(file, {
   // removes metadata and reduces it. The shared offline camera preflight
   // allows up to 12 MiB of SOURCE bytes without ever sending those bytes.
   // Documents do not undergo conversion, so they keep the 2 MiB input limit.
-  const isPhoto = OFFLINE_PHOTO_MIME_TYPES.includes(file?.type);
+  const isPhoto = CAMERA_SOURCE_MIME_TYPES.includes(file?.type);
   const kind = isPhoto ? 'photo' : validateExecutionFile(file);
   if (isPhoto) {
     cameraPhotoPlan(file);

@@ -165,12 +165,12 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
           <div className="field-photo-picker__actions">
             <label className="ghost-action field-photo-picker__action">
               Tomar foto
-              <input type="file" accept="image/jpeg,image/png,image/webp" capture="environment"
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" capture="environment"
                 onChange={onPhotoSelected} disabled={saving} aria-label="Tomar foto con cámara trasera" />
             </label>
             <label className="ghost-action field-photo-picker__action">
               Elegir archivo
-              <input type="file" accept="image/jpeg,image/png,image/webp"
+              <input type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
                 onChange={onPhotoSelected} disabled={saving} aria-label="Elegir fotografía del dispositivo" />
             </label>
             {photo && <button type="button" className="ghost-action" disabled={saving}
@@ -190,7 +190,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
           )}
           {photoError && <p role="alert" className="field-photo-picker__error">{photoError}</p>}
           <p className="field-photo-picker__hint">
-            JPEG, PNG o WebP de hasta 12 MiB. Las fotos grandes se convierten a JPEG
+            JPEG, PNG, WebP, HEIC o HEIF de hasta 12 MiB. El navegador debe poder abrir la foto; las fotos grandes se convierten a JPEG
             de hasta 512 KiB para guardarlas cifradas. Todas las fotos nuevas se convierten
             a JPEG para eliminar metadatos EXIF/GPS del archivo original, incluso las pequeñas.
             Esto puede modificar la calidad y la transparencia.
