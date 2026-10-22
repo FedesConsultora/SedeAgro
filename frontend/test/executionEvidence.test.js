@@ -56,6 +56,7 @@ test('UI is attached to real execution reports, preserves retry id and uses one 
   assert.match(jsx, /client_upload_id: uploadKey/);
   assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
   assert.match(jsx, /uploadFence\.current\.isCurrent\(ticket\)/);
+  assert.match(jsx, /viewFence\.current\.isCurrent\(ticket\)/);
   assert.match(jsx, /const identity = sessionScope\(session\)/);
   assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
   assert.match(jsx, /reintentar/i);
