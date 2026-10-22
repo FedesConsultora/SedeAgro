@@ -12,6 +12,7 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const fileInputRef = useRef(null);
+  const uploadInFlight = useRef(null);
   const fence = useRef(null);
   const uploadCache = useRef(null);
   if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
@@ -41,7 +42,11 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
       return;
     }
     const ticket = fence.current.ticket();
-    if (!fence.current.isCurrent(ticket) || saving) return;
+    // React state alone cannot block two submit events before the next render.
+    // A previous session's ticket is stale and cannot block a new session.
+    if (!fence.current.isCurrent(ticket) || saving ||
+        fence.current.isCurrent(uploadInFlight.current)) return;
+    uploadInFlight.current = ticket;
     setSaving(true);
     try {
       // Same UUID and byte-identical converted JPEG if the HTTP ACK is lost.
@@ -60,6 +65,9 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
         setError(err?.message || 'No se pudo adjuntar la evidencia.');
       }
     } finally {
+      // An old HTTP response must not unlock an upload already started in a
+      // different observation or tenant after this request was invalidated.
+      if (uploadInFlight.current === ticket) uploadInFlight.current = null;
       if (fence.current.isCurrent(ticket)) setSaving(false);
     }
   };
