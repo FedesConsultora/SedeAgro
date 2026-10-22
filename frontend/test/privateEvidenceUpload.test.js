@@ -63,7 +63,36 @@ test('oversize, empty or unsafe camera images are rejected before decoder or HTT
     assert.equal(decoded, false);
   }
   await assert.rejects(preparePrivateEvidenceUpload({ ...photo, size: MAX_CAMERA_SOURCE_BYTES,
-    type: 'image/heic' }), /JPEG|PDF/);
+    type: 'image/avif' }), /JPEG|PDF/);
+});
+
+test('online HEIC and HEIF from iPhone never reach upload as source MIME or bytes', async () => {
+  for (const type of ['image/heic', 'image/heif']) {
+    const file = { name: type === 'image/heic' ? 'camera.HEIC' : 'camera.heif',
+      type, size: MAX_CAMERA_SOURCE_BYTES };
+    let sanitized = 0;
+    const payload = await preparePrivateEvidenceUpload(file, {
+      sanitizePhoto: async selected => {
+        assert.equal(selected, file);
+        sanitized += 1;
+        return { ...prepared, original_name: 'camera-reducida.jpg' };
+      },
+      readDocument: async () => { throw new Error('Raw HEIC cannot be read as document'); }
+    });
+    assert.equal(sanitized, 1);
+    assert.deepEqual(payload, {
+      kind: 'photo', mime_type: 'image/jpeg',
+      original_name: 'camera-reducida.jpg', content_base64: prepared.content_base64
+    });
+    await assert.rejects(preparePrivateEvidenceUpload(file, {
+      sanitizePhoto: async () => { throw new Error('Unsupported platform decoder'); }
+    }), /Unsupported platform decoder/);
+    await assert.rejects(preparePrivateEvidenceUpload(file, {
+      sanitizePhoto: async () => ({
+        ...prepared, mime_type: type, original_name: file.name
+      })
+    }), /JPEG sin metadatos/);
+  }
 });
 
 test('photo conversion errors and unverified outputs fail closed without original fallback', async () => {
