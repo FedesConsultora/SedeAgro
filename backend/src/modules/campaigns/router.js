@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { Op } from 'sequelize';
 import { Campaign, CampaignField, CropType, CropVariety, Field } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
 
@@ -115,6 +115,15 @@ campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.
     transaction: req.dbTransaction
   });
   if (!cf) return res.status(404).json({ error: { message: 'Campo de campaña no encontrado.' } });
+  // campaign_fields.id is the stable identity used by scouting runs and work
+  // orders; observations and orders record their field_id independently.
+  // Moving the parent would silently reinterpret already recorded GPS work,
+  // and checking only for existing children would leave a concurrent race.
+  // Correct an erroneous lot by creating a new association instead.
+  if (req.body.field_id && req.body.field_id !== cf.field_id) {
+    throw new HttpError(409, 'No se puede cambiar el lote de una campaña existente.',
+      undefined, 'CAMPAIGN_FIELD_IDENTITY_IMMUTABLE');
+  }
   await cf.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: cf });
 }));
