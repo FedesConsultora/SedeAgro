@@ -1,7 +1,9 @@
 // 0P.35 — read-only dry-run of EXISTING production Compose with a no-build
 // OCI image override. This is NOT a deployment or release admission.
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,7 +29,8 @@ const envFor=sha=>({
 });
 const command=(args,env)=>execFileSync('docker',args,{
   encoding:'utf8',timeout:15000,maxBuffer:512*1024,
-  env:{...process.env,...env},stdio:['ignore','pipe','pipe']
+  env:{PATH:process.env.PATH,HOME:process.env.HOME,...env},
+  stdio:['ignore','pipe','pipe']
 });
 function parse(value){
   check(typeof value==='string'&&value.length>2&&value.length<512*1024,
@@ -70,6 +73,24 @@ export function validateProductionOverlay(base,overlay,receipt,sha){
   return Object.fromEntries(receipt.images.map(x=>[x.service,x.config_id]));
 }
 
+// Docker Compose's config validator stats required env_file even with
+// --no-env-resolution. Never read/copy any real backend/.env: mirror only
+// committed YAML bytes under private disposable temp with a synthetic stub.
+export function withSyntheticComposeFiles(run){
+  const dir=mkdtempSync(join(tmpdir(),'sedeagro-oci-prod-preview-'));
+  try{
+    const backend=join(dir,'backend');
+    mkdirSync(backend,{mode:0o700});
+    writeFileSync(join(backend,'.env'),'NODE_ENV=ci-oci-review-only\\n',
+      {mode:0o600,flag:'wx'});
+    const prod=join(dir,'docker-compose.yml');
+    const overlay=join(dir,'docker-compose.oci-production-override.yml');
+    writeFileSync(prod,readFileSync(PROD),{mode:0o600,flag:'wx'});
+    writeFileSync(overlay,readFileSync(OVERLAY),{mode:0o600,flag:'wx'});
+    return run({prod,overlay});
+  }finally{rmSync(dir,{recursive:true,force:true});}
+}
+
 export async function inspectProductionOverlay({
   sha,bundlePath,receiptPath,execute=command,
   review=inspectImportedCompose
@@ -93,17 +114,18 @@ export async function inspectProductionOverlay({
     ID.test(verified.imported_images?.frontend||''),
   'prior complete OCI receiver verification required');
   const receipt=parse(readFileSync(receiptPath,'utf8'));
-  check(receipt.archive?.sha256===verified.archive_sha256&&
+  check(receipt.head===sha&&
+    receipt.archive?.sha256===verified.archive_sha256&&
     receipt.archive.name==='sedeagro-images-'+sha+'.tar'&&
     Array.isArray(receipt.images)&&receipt.images.length===2&&
     receipt.images.every(x=>x.config_id===verified.imported_images[x.service]),
   'current OCI receipt or Docker IDs differ from validated imported images');
   const safeEnv=envFor(sha);
   const cfg=['config','--no-env-resolution','--format','json'];
-  const baseline=parse(execute(['compose','-f',PROD,...cfg],safeEnv));
-  const candidate=parse(execute([
-    'compose','-f',PROD,'-f',OVERLAY,...cfg
-  ],safeEnv));
+  const [baseline,candidate]=withSyntheticComposeFiles(({prod,overlay})=>[
+    parse(execute(['compose','-f',prod,...cfg],safeEnv)),
+    parse(execute(['compose','-f',prod,'-f',overlay,...cfg],safeEnv))
+  ]);
   const ids=validateProductionOverlay(baseline,candidate,receipt,sha);
   return {
     status:'CI_OCI_PRODUCTION_TOPOLOGY_OVERLAY_VALIDATED_NOT_DEPLOYED',
