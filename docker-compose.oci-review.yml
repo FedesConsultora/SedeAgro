@@ -1,0 +1,21 @@
+# 0P.34 — image-only, networkless CI REVIEW. Not a deployment Compose file.
+# This intentionally cannot reach PostGIS, Redis, any network or the host.
+# docker compose CONFIG only; NEVER docker compose up/run/start.
+name: sedeagro-oci-review
+
+services:
+  backend:
+    image: ${SEDEAGRO_OCI_BACKEND_IMAGE:?Exact signed backend image tag required}
+    pull_policy: never
+    network_mode: none
+    read_only: true
+    entrypoint: ["node"]
+    command: ["--version"]
+
+  frontend:
+    image: ${SEDEAGRO_OCI_FRONTEND_IMAGE:?Exact signed frontend image tag required}
+    pull_policy: never
+    network_mode: none
+    read_only: true
+    entrypoint: ["nginx"]
+    command: ["-v"]
