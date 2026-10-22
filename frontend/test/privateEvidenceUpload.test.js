@@ -304,5 +304,6 @@ test('both live upload surfaces must use the shared privacy gate, never FileRead
     assert.match(jsx, /isCurrent\(uploadInFlight\.current\)/);
     assert.match(jsx, /uploadInFlight\.current === ticket/);
     assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
+    assert.match(jsx, /validate(?:ScoutingEvidenceUploadResponse|ExecutionEvidenceResponse)/);
   }
 });
