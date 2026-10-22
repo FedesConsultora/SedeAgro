@@ -100,7 +100,7 @@ docker compose run --rm --no-deps \
   -e MIGRATION_DB_NAME="$POSTGRES_DB" \
   backend sh -ec '
     DATABASE_URL="$(node -e '\''const p=process.env; const user=encodeURIComponent(p.MIGRATION_DB_USER); const pass=encodeURIComponent(p.MIGRATION_DB_PASSWORD); const db=encodeURIComponent(p.MIGRATION_DB_NAME); process.stdout.write("postgres://"+user+":"+pass+"@db:5432/"+db);'\'')" \
-      npm run db:prepare
+      node src/infra/db/migrate.js up && node src/infra/db/seed.js up
   '
 
 echo "Provisionando permisos mínimos del usuario de la aplicación..."
