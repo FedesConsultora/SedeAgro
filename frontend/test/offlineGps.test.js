@@ -59,7 +59,7 @@ test('UI requires explicit GPS click; no watchPosition or automatic location upl
   assert.match(picker, /requestId\.current !== current/);
   assert.match(picker, /onBusyChange\?\.\(false\)/);
   assert.match(form, /selectedLocation \? \{ point: selectedLocation\.point \} : \{\}/);
-  assert.match(form, /disabled=\{saving \|\| locating\}/);
+  assert.match(form, /disabled=\{saving \|\| locating \|\| savedLocally\}/);
   assert.match(form, /key=\{locationKey\}/);
 });
 
