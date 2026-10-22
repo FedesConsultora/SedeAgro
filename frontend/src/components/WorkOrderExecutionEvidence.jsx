@@ -28,6 +28,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   const [opened, setOpened] = useState(null);
   const urlRef = useRef(null);
   const uploadCache = useRef(null);
+  const uploadInFlight = useRef(null);
   const uploadFence = useRef(null);
   const viewFence = useRef(null);
   if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
@@ -97,13 +98,14 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
     event.preventDefault();
     const report = reports.find(item => item.id === uploadFor);
     if (!report || !canUploadExecutionEvidence(report, order.status, userId, live) || busy) return;
+    const ticket = uploadFence.current.ticket();
+    // Keep HTTP single-flight even if two submit events arrive before React
+    // commits busy=true. A ticket from a previous tenant/order is not current.
+    if (!uploadFence.current.isCurrent(ticket) ||
+        uploadFence.current.isCurrent(uploadInFlight.current)) return;
+    uploadInFlight.current = ticket;
     setBusy(true);
     setError('');
-    const ticket = uploadFence.current.ticket();
-    if (!uploadFence.current.isCurrent(ticket)) {
-      setBusy(false);
-      return;
-    }
     try {
       // Cache the *prepared* JPEG payload before HTTP. If an ACK is lost,
       // retrying this UUID must use byte-identical content.
@@ -129,6 +131,8 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
         setError(err?.message || 'No se confirmó la carga. Podés reintentar.');
       }
     } finally {
+      // Late settlement for a stale user/order must not release a new ticket.
+      if (uploadInFlight.current === ticket) uploadInFlight.current = null;
       if (uploadFence.current.isCurrent(ticket)) setBusy(false);
     }
   };

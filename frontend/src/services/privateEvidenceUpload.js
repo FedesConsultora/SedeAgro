@@ -54,18 +54,39 @@ export async function preparePrivateEvidenceUpload(file, {
   };
 }
 
-// A failed/ambiguous HTTP acknowledgement must not trigger a second Canvas
-// encoding under the same idempotency UUID. Reuse identical prepared bytes.
+// Same file+UUID must have ONE conversion, including while Canvas/FileReader is
+// still working. A reset/new selection changes the generation so a late
+// completion cannot restore another actor's payload or collide with a retry.
+// HTTP retries intentionally preserve a fulfilled payload byte-for-byte.
 export function createPrivateUploadCache() {
   let cached = null;
+  let generation = 0;
   return Object.freeze({
     async prepare(file, key, prepare = preparePrivateEvidenceUpload) {
       if (!key || !file) throw new Error('Seleccioná un archivo nuevo antes de adjuntar.');
-      if (cached?.key === key && cached?.file === file) return cached.payload;
-      const payload = await prepare(file);
-      cached = { key, file, payload };
-      return payload;
+      if (cached?.key === key && cached?.file === file) return cached.pending;
+
+      const selectedGeneration = ++generation;
+      // Store the promise synchronously BEFORE the first asynchronous step.
+      // React may deliver a second submit before its saving state renders.
+      const pending = Promise.resolve().then(() => prepare(file));
+      const selected = { key, file, pending, generation: selectedGeneration };
+      cached = selected;
+      try {
+        const payload = await pending;
+        if (cached !== selected || generation !== selectedGeneration) {
+          throw new Error('La selección del archivo cambió. Volvé a adjuntarlo.');
+        }
+        return payload;
+      } catch (error) {
+        // A stale rejection must never delete the latest selection's cache.
+        if (cached === selected) cached = null;
+        throw error;
+      }
     },
-    reset() { cached = null; }
+    reset() {
+      generation += 1;
+      cached = null;
+    }
   });
 }

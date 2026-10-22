@@ -146,6 +146,87 @@ test('an ambiguous upload retry reuses the exact payload until selection/UUID ch
   assert.equal(encodings, 3);
 });
 
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+test('two same-file same-UUID calls share ONE encoding before either one settles', async () => {
+  const cache = createPrivateUploadCache();
+  const converting = deferred();
+  let conversions = 0;
+  const prepare = () => { conversions += 1; return converting.promise; };
+  const a = cache.prepare(photo, 'stable-uuid', prepare);
+  const b = cache.prepare(photo, 'stable-uuid', prepare);
+  await Promise.resolve();
+  assert.equal(conversions, 1, 'concurrent submits must never encode different bytes under one UUID');
+  const payload = { kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'safe.jpg', content_base64: 'unique-JPEG-bytes' };
+  converting.resolve(payload);
+  const [first, second] = await Promise.all([a, b]);
+  assert.equal(first, second);
+  assert.equal(first, payload);
+  assert.equal(await cache.prepare(photo, 'stable-uuid', prepare), payload);
+  assert.equal(conversions, 1, 'ambiguous HTTP ACK must reuse the exact encoded bytes');
+});
+
+test('reset invalidates conversion in progress; stale JPEG cannot repopulate new scope cache', async () => {
+  const cache = createPrivateUploadCache();
+  const old = deferred();
+  const pending = cache.prepare(photo, 'old-uuid', () => old.promise);
+  const rejected = assert.rejects(pending, /cambió.*archivo|archivo.*cambió/i);
+  await Promise.resolve();
+  cache.reset();
+  const otherFile = { ...photo, name: 'other.heic', type: 'image/heic' };
+  const currentBytes = { kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'other.jpg', content_base64: 'new-session-content' };
+  let runs = 0;
+  const current = await cache.prepare(otherFile, 'new-uuid', async () => {
+    runs += 1; return currentBytes;
+  });
+  old.resolve({ kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'old.jpg', content_base64: 'STALE-GPS-EXIF' });
+  await rejected;
+  assert.equal(await cache.prepare(otherFile, 'new-uuid', async () => {
+    runs += 1; throw Error('Should not reencode new selection');
+  }), current);
+  assert.equal(runs, 1);
+});
+
+test('switching UUID mid-conversion invalidates old bytes without damaging the new one', async () => {
+  const cache = createPrivateUploadCache();
+  const old = deferred();
+  const first = cache.prepare(photo, 'key-1', () => old.promise);
+  const rejected = assert.rejects(first, /cambió.*archivo|archivo.*cambió/i);
+  await Promise.resolve();
+  const payload = await cache.prepare(photo, 'key-2', async () => ({
+    kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'fresh.jpg', content_base64: 'fresh' }));
+  old.resolve({ kind: 'photo', mime_type: 'image/jpeg',
+    original_name: 'stale.jpg', content_base64: 'stale' });
+  await rejected;
+  assert.equal(await cache.prepare(photo, 'key-2', async () => {
+    throw new Error('Wrong cache key');
+  }), payload);
+});
+
+test('failed decoder is not cached and may retry; invalid selection never calls converter', async () => {
+  const cache = createPrivateUploadCache();
+  let calls = 0;
+  await assert.rejects(cache.prepare(photo, 'retry-uuid', async () => {
+    calls += 1; throw new Error('Decoder failed');
+  }), /Decoder failed/);
+  const payload = await cache.prepare(photo, 'retry-uuid', async () => {
+    calls += 1; return { kind: 'photo', content_base64: 'sanitized' };
+  });
+  assert.equal(calls, 2);
+  assert.equal((await cache.prepare(photo, 'retry-uuid')).content_base64, payload.content_base64);
+  await assert.rejects(cache.prepare(null, 'retry-uuid', () => {
+    throw new Error('Must not run');
+  }), /Seleccioná/);
+});
+
 test('both live upload surfaces must use the shared privacy gate, never FileReader images', () => {
   for (const path of ['../src/components/EvidenceUploadModal.jsx',
     '../src/components/WorkOrderExecutionEvidence.jsx']) {
@@ -154,6 +235,9 @@ test('both live upload surfaces must use the shared privacy gate, never FileRead
     assert.match(jsx, /client_upload_id: uploadKey/);
     assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
     assert.match(jsx, /createMobileCaptureFence/);
+    assert.match(jsx, /const uploadInFlight = useRef\(null\)/);
+    assert.match(jsx, /isCurrent\(uploadInFlight\.current\)/);
+    assert.match(jsx, /uploadInFlight\.current === ticket/);
     assert.doesNotMatch(jsx, /readAsDataURL\(file\)/);
   }
 });
