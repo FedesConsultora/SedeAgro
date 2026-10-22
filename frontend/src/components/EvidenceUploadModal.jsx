@@ -3,7 +3,7 @@ import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { createMobileCaptureFence } from '../services/mobileCaptureSafety.js';
-import { createPrivateUploadCache } from '../services/privateEvidenceUpload.js';
+import { createPrivateUploadCache, validateScoutingEvidenceUploadResponse } from '../services/privateEvidenceUpload.js';
 
 export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId }) {
   const { api, dataMode, session } = useSession();
@@ -52,7 +52,13 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
       // Same UUID and byte-identical converted JPEG if the HTTP ACK is lost.
       const payload = await uploadCache.current.prepare(file, uploadKey);
       if (!fence.current.isCurrent(ticket)) return;
-      await api.createEvidence(observationId, { ...payload, client_upload_id: uploadKey });
+      const response = await api.createEvidence(observationId, { ...payload, client_upload_id: uploadKey });
+      if (!fence.current.isCurrent(ticket)) return;
+      // A transport success or an idempotent replay is not a receipt until
+      // the server confirms this observation, author, UUID and exact file.
+      validateScoutingEvidenceUploadResponse(response, {
+        observationId, actorId: session?.user?.id, uploadId: uploadKey, payload
+      });
       if (fence.current.isCurrent(ticket)) {
         uploadCache.current.reset();
         setFile(null);
