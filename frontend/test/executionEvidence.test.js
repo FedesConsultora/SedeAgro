@@ -91,7 +91,7 @@ test('UI is attached to real execution reports, preserves retry id and uses one 
   const jsx = readFileSync(new URL('../src/components/WorkOrderExecutionEvidence.jsx', import.meta.url), 'utf8');
   const panel = readFileSync(new URL('../src/components/WorkOrderExecutionPanel.jsx', import.meta.url), 'utf8');
   assert.match(jsx, /client_upload_id: uploadKey/);
-  assert.match(jsx, /validateExecutionEvidenceResponse\\(response, report\\.id, null, /);
+  assert.match(jsx, /validateExecutionEvidenceResponse\(response, report\.id, null, /);
   assert.match(jsx, /uploadCache\.current\.prepare\(file, uploadKey\)/);
   assert.match(jsx, /uploadFence\.current\.isCurrent\(ticket\)/);
   assert.match(jsx, /const uploadInFlight = useRef\(null\)/);
