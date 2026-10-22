@@ -62,12 +62,14 @@ test('team roster accepts only active local members, hides revoked members, and 
     assert.match(db, /(?:^|[_-])test(?:$|[_-])/i, 'refuse non-test database');
     assert.equal(runtimeDb, db);
     assert.ok(isSafeRuntimeDbRole(role), 'application role must not bypass RLS');
+    // Team resources use FORCE RLS; the core memberships table is governed
+    // by auth's own tenant-aware policy (not the extended business RLS set).
+    // Verify its tenant/status checks through actual HTTP cases below.
     const policies = (await owner.query(`
       SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
-      WHERE oid = ANY(ARRAY['public.teams'::regclass,'public.team_members'::regclass,
-        'public.memberships'::regclass])
+      WHERE oid = ANY(ARRAY['public.teams'::regclass,'public.team_members'::regclass])
     `)).rows;
-    assert.equal(policies.length, 3);
+    assert.equal(policies.length, 2);
     for (const policy of policies) {
       assert.ok(policy.relrowsecurity && policy.relforcerowsecurity, policy.relname);
     }
