@@ -1376,9 +1376,37 @@ workOrdersRouter.post('/:id/inputs', requireCapability('orders.write'), validate
 }));
 
 workOrdersRouter.post('/:id/machinery', requireCapability('orders.write'), validate(machinerySchema), asyncHandler(async (req, res) => {
-  const machine = await WorkOrderMachinery.create({
-    ...req.body,
-    work_order_id: req.params.id
-  }, { transaction: req.dbTransaction });
-  res.status(201).json({ data: machine });
+  // Planning uses the same locked baseline as inputs. A late equipment write
+  // would silently alter an approved/executing/closed order. Lock the order
+  // before checking its state, so a concurrent approval cannot race this write.
+  const order = await readableWorkOrder(req, req.params.id, true);
+  if (!['draft', 'pending_approval'].includes(order.status)) {
+    throw new HttpError(409, 'La maquinaria planificada se congela al aprobar la orden.',
+      undefined, 'WORK_ORDER_MACHINERY_PLAN_FROZEN');
+  }
+  const catalogMachine = await Machinery.findOne({
+    where: { id: req.body.machinery_id, tenant_id: req.tenantId, status: 'active' },
+    attributes: ['id'],
+    transaction: req.dbTransaction
+  });
+  if (!catalogMachine) {
+    throw new HttpError(422, 'La maquinaria debe estar activa en el catálogo de la empresa.',
+      undefined, 'WORK_ORDER_MACHINERY_UNAVAILABLE');
+  }
+  // Idempotent retries reuse the same row and never rewrite an already
+  // reviewed role. This unique key is backed by the tenant composite FK.
+  const [machine, created] = await WorkOrderMachinery.findOrCreate({
+    where: {
+      tenant_id: req.tenantId,
+      work_order_id: order.id,
+      machinery_id: catalogMachine.id
+    },
+    defaults: { role: req.body.role },
+    transaction: req.dbTransaction
+  });
+  if (!created && machine.role !== req.body.role) {
+    throw new HttpError(409, 'La maquinaria ya fue planificada con otra función.',
+      undefined, 'WORK_ORDER_MACHINERY_ROLE_CONFLICT');
+  }
+  res.status(created ? 201 : 200).json({ data: machine, replayed: !created });
 }));
