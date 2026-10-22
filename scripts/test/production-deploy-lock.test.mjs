@@ -39,7 +39,7 @@ test('production entry holds one fixed host lock before ANY pull, Docker or migr
     assert.ok(deploy.indexOf(operation)>offset,
       'exclusive lock must precede '+operation);
   }
-  assert.doesNotMatch(deploy,/source.*\\$\\{?SEDEAGRO_DEPLOY_LOCK_DIR/);
+  assert.doesNotMatch(deploy,/SEDEAGRO_DEPLOY_LOCK_DIR/);
   assert.match(deploy,/if ! source/);
 });
 
@@ -74,7 +74,7 @@ test('concurrent contender from a separate checkout is denied until owner exits'
   const contender=attempt(dir,tmpdir());
   denied(contender);
   assert.match(contender.stderr,/another release is in progress/);
-  holder.stdin.write('finish\\n');
+  holder.stdin.write('finish\n');
   const [code]=await once(holder,'close');
   assert.equal(code,0);
   const after=attempt(dir,root);
@@ -116,7 +116,7 @@ test('standalone helper cannot be mistaken for an authorized deploy command',()=
 });
 
 test('blocker remains: no synthetic lock grants Security Owner or image release GO',()=>{
-  assert.match(deploy,/production-preflight\\.sh/);
+  assert.ok(deploy.includes('production-preflight.sh'));
   assert.match(deploy,/docker compose build backend frontend/);
   const trust=JSON.parse(readFileSync(new URL('../security-owner-trust.json',
     import.meta.url),'utf8'));
