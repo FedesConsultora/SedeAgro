@@ -6,7 +6,7 @@ import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
 import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { localObservationDateTime } from '../services/observationLocation.js';
-import { createMobileCaptureFence } from '../services/mobileCaptureSafety.js';
+import { createMobileCaptureFence, createMobileCaptureSubmitGate } from '../services/mobileCaptureSafety.js';
 
 const emptyObservation = () => ({
   observation_type: 'weed',
@@ -19,6 +19,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const { dataMode, session } = useSession();
   const [form, setForm] = useState(emptyObservation);
   const [saving, setSaving] = useState(false);
+  const [savedLocally, setSavedLocally] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [photoError, setPhotoError] = useState('');
@@ -27,6 +28,8 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const locationKey = `${dataMode}:${sessionScope(session) || 'anonymous'}:${runId}`;
   const captureFence = useRef(null);
   if (!captureFence.current) captureFence.current = createMobileCaptureFence();
+  const submitGate = useRef(null);
+  if (!submitGate.current) submitGate.current = createMobileCaptureSubmitGate();
   // Render-time fence: asynchronous JPEG decoding can finish before an effect
   // runs after a tenant/run change. Do not use a stale closure to persist.
   captureFence.current.setScope(isOpen && dataMode === 'live' ? locationKey : null);
@@ -42,6 +45,11 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   // Cancelled/finished forms and actor/tenant/run changes must never reuse
   // a previous operator's private notes, photo or explicitly approved GPS.
   useEffect(() => {
+    // Reset on close or principal/run change. A previous IndexedDB completion
+    // must never unlock a new scoped modal's save ticket.
+    submitGate.current.reset();
+    setSaving(false);
+    setSavedLocally(false);
     setForm(emptyObservation());
     setLocation(null);
     setLocating(false);
@@ -80,7 +88,9 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
   const handleSubmit = async (e) => {
     e.preventDefault();
     const ticket = captureFence.current.ticket();
-    if (!captureFence.current.isCurrent(ticket)) return;
+    if (!captureFence.current.isCurrent(ticket) ||
+        !submitGate.current.acquire(ticket)) return;
+    let stored = false;
     setSaving(true);
     setError('');
     try {
@@ -93,27 +103,36 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
       // delivery runs through the idempotent batch API, even when online.
       const attachment = photo ? await readOfflinePhoto(photo) : null;
       if (!captureFence.current.isCurrent(ticket)) return;
-      const item = await offlineQueue.queueObservation(session, runId, {
+      const storedItem = await offlineQueue.queueObservation(session, runId, {
         ...form,
         ...(selectedLocation ? { point: selectedLocation.point } : {}),
         ...(attachment ? { photo: attachment } : {})
       });
-      if (captureFence.current.isCurrent(ticket)) onQueued?.(item);
+      stored = true;
+      if (captureFence.current.isCurrent(ticket)) {
+        setSavedLocally(true);
+        onQueued?.(storedItem);
+      }
     } catch (err) {
       if (captureFence.current.isCurrent(ticket)) {
-        setError(err?.message || 'Error al guardar');
+        setError(stored
+          ? 'La observación quedó guardada localmente, pero no se pudo actualizar la pantalla. Revisá Sincronizaciones antes de repetirla.'
+          : err?.message || 'Error al guardar');
       }
     } finally {
-      if (captureFence.current.isCurrent(ticket)) setSaving(false);
+      // A successful write remains locked until modal close; releasing it
+      // immediately would allow another submit before React closes the modal.
+      if (submitGate.current.settle(ticket, stored) &&
+          captureFence.current.isCurrent(ticket)) setSaving(false);
     }
   };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Agregar observación"
       footer={<>
-        <button type="button" className="ghost-action" onClick={onClose} disabled={saving}>Cancelar</button>
-        <button type="submit" form="obs-form" className="primary-action" disabled={saving || locating}>
-          {saving ? 'Preparando y guardando…' : 'Guardar observación'}
+        <button type="button" className="ghost-action" onClick={onClose} disabled={saving && !savedLocally}>Cancelar</button>
+        <button type="submit" form="obs-form" className="primary-action" disabled={saving || locating || savedLocally}>
+          {savedLocally ? 'Guardada en este dispositivo' : saving ? 'Preparando y guardando…' : 'Guardar observación'}
         </button>
       </>}
     >

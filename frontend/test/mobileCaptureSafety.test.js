@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createMobileCaptureFence } from '../src/services/mobileCaptureSafety.js';
+import { createMobileCaptureFence, createMobileCaptureSubmitGate } from '../src/services/mobileCaptureSafety.js';
 
 test('photo preparation tickets cannot cross tenant, run, modal closure or unmount', () => {
   const fence = createMobileCaptureFence();
@@ -26,6 +26,76 @@ test('fence remains stable while the same authenticated form rerenders', () => {
   fence.setScope('live:tenant-A:user-A:run-A');
   assert.equal(fence.isCurrent(ticket), true);
   assert.equal(Object.keys(ticket).sort().join(','), 'generation,scope');
+});
+
+test('two synchronous observation submits acquire only one durable save ticket', () => {
+  const fence = createMobileCaptureFence('tenant-A:user-A:run-A');
+  const gate = createMobileCaptureSubmitGate();
+  const one = fence.ticket();
+  const two = fence.ticket();
+  assert.equal(gate.acquire(one), true);
+  assert.equal(gate.acquire(two), false, 'same render may dispatch a second submit');
+  assert.equal(gate.isHeld(one), true);
+  assert.equal(gate.settle(one, true), true, 'durable save holds lock until modal reset');
+  assert.equal(gate.acquire(two), false, 'success cannot be queued twice before modal closes');
+  gate.reset();
+  assert.equal(gate.acquire(two), true, 'a new modal session may save a new capture');
+});
+
+test('two rapid async submit events enqueue only once while storage is pending', async () => {
+  const fence = createMobileCaptureFence('tenant:user:run');
+  const gate = createMobileCaptureSubmitGate();
+  let allowStorage;
+  let storageStarted;
+  const pending = new Promise(resolve => { allowStorage = resolve; });
+  const begun = new Promise(resolve => { storageStarted = resolve; });
+  let localWrites = 0;
+  const submit = async () => {
+    const ticket = fence.ticket();
+    if (!fence.isCurrent(ticket) || !gate.acquire(ticket)) return 'duplicate-blocked';
+    let stored = false;
+    try {
+      localWrites += 1;
+      storageStarted();
+      await pending;
+      stored = true;
+      return 'saved';
+    } finally {
+      gate.settle(ticket, stored);
+    }
+  };
+  const first = submit();
+  await begun;
+  assert.equal(await submit(), 'duplicate-blocked');
+  assert.equal(localWrites, 1);
+  allowStorage();
+  assert.equal(await first, 'saved');
+  assert.equal(await submit(), 'duplicate-blocked', 'success remains locked until close');
+  gate.reset();
+  assert.equal(await submit(), 'saved');
+  assert.equal(localWrites, 2, 'newly reopened modal may queue its own observation');
+});
+
+test('save failure unlocks a retry, but an obsolete completion cannot release new capture', () => {
+  const fence = createMobileCaptureFence('tenant-A:user-A:run-A');
+  const gate = createMobileCaptureSubmitGate();
+  const first = fence.ticket();
+  assert.equal(gate.acquire(first), true);
+  assert.equal(gate.settle(first, false), true);
+  const retry = fence.ticket();
+  assert.equal(gate.acquire(retry), true);
+  gate.reset();
+  fence.setScope('tenant-B:user-B:run-B');
+  const other = fence.ticket();
+  assert.equal(gate.acquire(other), true);
+  assert.equal(gate.settle(retry, false), false, 'late rejected save cannot unlock another actor');
+  assert.equal(gate.settle(first, true), false, 'late success cannot make new modal sticky');
+  assert.equal(gate.isHeld(other), true);
+  assert.equal(gate.settle(other, false), true);
+  assert.equal(gate.acquire(fence.ticket()), true);
+  gate.reset();
+  fence.invalidate();
+  assert.equal(gate.acquire(fence.ticket()), false, 'unscoped tickets never lock the form');
 });
 
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -74,8 +144,19 @@ test('visibility and pagehide abandon pending GPS without watchPosition', () => 
 
 test('form refuses stale asynchronous photo completion and old tenant callbacks', () => {
   assert.match(form, /captureFence\.current\.setScope\(isOpen && dataMode === 'live' \? locationKey : null\)/);
-  assert.match(form, /if \(!captureFence\.current\.isCurrent\(ticket\)\) return/);
-  assert.match(form, /if \(captureFence\.current\.isCurrent\(ticket\)\) onQueued\?\.\(item\)/);
+  assert.match(form, /if \(!captureFence\.current\.isCurrent\(ticket\) \|\|/);
+  assert.match(form, /if \(captureFence\.current\.isCurrent\(ticket\)\) \{/);
+  assert.match(form, /onQueued\?\.\(storedItem\)/);
+  assert.match(form, /submitGate\.current\.acquire\(ticket\)/);
+  assert.match(form, /submitGate\.current\.settle\(ticket, stored\)/);
+  assert.match(form, /submitGate\.current\.reset\(\)/);
+  assert.match(form, /const storedItem = await offlineQueue\.queueObservation/);
+  assert.match(form, /setSavedLocally\(true\)/);
+  assert.match(form, /disabled=\{saving \|\| locating \|\| savedLocally\}/);
+  assert.match(form, /disabled=\{saving && !savedLocally\}/);
+  assert.match(form, /Guardada en este dispositivo/);
+
+
 });
 
 test('Chromium exercises actual image fallback, encrypted reload and delayed location event', () => {

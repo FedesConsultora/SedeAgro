@@ -24,3 +24,33 @@ export function createMobileCaptureFence(scope = null) {
     }
   });
 }
+
+// React state does not synchronously lock a submit event: two mobile taps in
+// the same render can otherwise create two different offline UUIDs. The form
+// holds successful writes until it closes; failed writes may retry. Identity
+// comparison ensures an old Promise cannot unlock a newly opened form.
+export function createMobileCaptureSubmitGate() {
+  let active = null;
+  return Object.freeze({
+    acquire(ticket) {
+      if (active || !ticket?.scope) return false;
+      active = { ticket, committed: false };
+      return true;
+    },
+    isHeld(ticket) {
+      return Boolean(active && active.ticket === ticket);
+    },
+    settle(ticket, committed = false) {
+      if (!active || active.ticket !== ticket) return false;
+      if (committed) {
+        active.committed = true;
+      } else if (!active.committed) {
+        active = null;
+      }
+      return true;
+    },
+    reset() {
+      active = null;
+    }
+  });
+}
