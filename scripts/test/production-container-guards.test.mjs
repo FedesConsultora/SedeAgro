@@ -22,6 +22,21 @@ test('both production image builds install exactly their committed lockfile on N
   }
 });
 
+test('backend production runtime does not carry npm global CVEs or depend on npm CLI', () => {
+  const dockerfile = read('backend/Dockerfile');
+  const deploy = read('scripts/deploy-prod.sh');
+  const pkg = JSON.parse(read('backend/package.json'));
+  assert.equal(pkg.scripts.start, 'node src/server.js');
+  assert.equal(pkg.scripts.migrate, 'node src/infra/db/migrate.js up');
+  assert.equal(pkg.scripts.seed, 'node src/infra/db/seed.js up');
+  assert.match(dockerfile, /RUN npm ci --omit=dev/);
+  assert.match(dockerfile, /rm -rf \/usr\/local\/lib\/node_modules\/npm \/usr\/local\/bin\/npm \/usr\/local\/bin\/npx/);
+  assert.match(dockerfile, /CMD \["node", "src\/server\.js"\]/);
+  assert.doesNotMatch(dockerfile, /CMD \["npm", "start"\]/);
+  assert.match(deploy, /node src\/infra\/db\/migrate\.js up && node src\/infra\/db\/seed\.js up/);
+  assert.doesNotMatch(deploy, /npm run db:prepare/);
+});
+
 test('frontend lock contains every optional Rolldown native target with verified integrity', () => {
   const lock = JSON.parse(read('frontend/package-lock.json'));
   const root = JSON.parse(read('package-lock.json'));
