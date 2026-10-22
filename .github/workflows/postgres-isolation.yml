@@ -84,6 +84,8 @@ jobs:
           node --test scripts/test/ci-oci-import-rehearsal.test.mjs
           node --check scripts/ci-oci-compose-parity.mjs
           node --test scripts/test/ci-oci-compose-parity.test.mjs
+          node --check scripts/ci-oci-production-overlay.mjs
+          node --test scripts/test/ci-oci-production-overlay.test.mjs
           node --check scripts/verify-oci-signed-provenance.mjs
           node --test scripts/test/verify-oci-signed-provenance.test.mjs
           node --check scripts/verify-image-security.mjs
@@ -592,6 +594,8 @@ jobs:
           node scripts/ci-oci-import-rehearsal.mjs --mode fresh \
             --sha "$IMAGE_SHA" --bundle "$archive" --receipt "$receipt"
           node scripts/ci-oci-compose-parity.mjs --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          node scripts/ci-oci-production-overlay.mjs --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
           # Attestations are fetched from GitHub and verified via gh Sigstore
           # policy; no registry, deployment or production Docker access.
