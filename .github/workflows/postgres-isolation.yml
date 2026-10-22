@@ -265,6 +265,9 @@ jobs:
           docker run --rm --entrypoint sh sedeagro-backend-rc:$IMAGE_SHA -ec '
             node -e "if (!process.version.startsWith(\"v22.\")) process.exit(1)"
             test -f /app/src/server.js
+            test ! -e /usr/local/lib/node_modules/npm
+            ! command -v npm >/dev/null 2>&1
+            ! command -v npx >/dev/null 2>&1
             test -f /app/db/migrations/202610190003_review_queue_view_moderation_audit.js
             node -e "import(\"express\")"
             test ! -f /app/.env

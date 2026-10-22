@@ -33,7 +33,8 @@ const trivy=(s,{vulns=[]}={})=>({
   SchemaVersion:2,ArtifactName:tag(s),ArtifactType:'container_image',
   Metadata:{ImageID:id(s),OS:{Family:'alpine',Name:'3.22'}},
   Results:[{Target:'alpine:3.22',Class:'os-pkgs',Type:'alpine',
-    Vulnerabilities:vulns}]
+    Vulnerabilities:vulns},...(s==='backend'?
+    [{Target:'Node.js',Class:'lang-pkgs',Type:'node-pkg'}]:[])]
 });
 const image=s=>({
   Id:id(s),Os:'linux',Architecture:'amd64',RepoTags:[tag(s)],
@@ -130,6 +131,24 @@ test('Trivy wrong image, incomplete results and duplicated findings fail closed'
       vulnerability('MEDIUM',false,{Severity:'URGENT'})]}]}
   ])assert.throws(()=>assessTrivy(bad,'backend',sha),/IMAGE_SECURITY_BLOCKED/);
 });
+test('Trivy zero findings may omit Vulnerabilities only with complete OS and Node coverage',()=>{
+  const backend=trivy('backend');
+  const result=assessTrivy(backend,'backend',sha);
+  assert.equal(result.findings,0);
+  assert.equal(result.severities.HIGH,0);
+  const frontend=trivy('frontend');
+  delete frontend.Results[0].Vulnerabilities;
+  assert.equal(assessTrivy(frontend,'frontend',sha).findings,0);
+  for(const broken of [
+    {...backend,Results:backend.Results.slice(0,1)},
+    {...backend,Results:[{Target:'Node.js',Class:'lang-pkgs',Type:'node-pkg'}]},
+    {...backend,Results:[{Target:'alpine:3.22',Class:'os-pkgs',Type:'other'},backend.Results[1]]},
+    {...backend,Results:[{Target:'alpine:3.22',Class:'os-pkgs',Type:'alpine',
+      Vulnerabilities:null},backend.Results[1]]},
+    {...backend,Results:[...backend.Results,backend.Results[1]]}
+  ]) assert.throws(()=>assessTrivy(broken,'backend',sha),/IMAGE_SECURITY_BLOCKED/);
+});
+
 test('summary classifies HIGH/CRITICAL as release blocked but CI evidence remains distinguishable',()=>{
   const risk=evaluateImageSecurity({sha,documents:makeDocs({vulns:[
     vulnerability('HIGH',false)]},{vulns:[vulnerability('CRITICAL',true)]}),

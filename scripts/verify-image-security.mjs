@@ -88,11 +88,21 @@ export function assessTrivy(scan,service,sha){
   const fixed=Object.fromEntries(SEVERITY.map(s=>[s,0]));
   const seen=new Set();
   let findings=0;
+  const coverage=new Set(), targets=new Set();
   for(const result of scan.Results){
+    // Trivy omits Vulnerabilities entirely for a scanned target with ZERO
+    // findings; this is different from a missing target or incomplete scan.
+    // Require real OS + backend Node package-class coverage and valid types.
+    const typeOk=(result.Class==='os-pkgs'&&result.Type==='alpine')||
+      (result.Class==='lang-pkgs'&&result.Type==='node-pkg');
     check(typeof result.Target==='string'&&result.Target.length>0&&
-      result.Target.length<4000&&Array.isArray(result.Vulnerabilities),
-    'Trivy result target or vulnerabilities incomplete');
-    for(const v of result.Vulnerabilities){
+      result.Target.length<4000&&typeOk&&
+      (result.Vulnerabilities===undefined||Array.isArray(result.Vulnerabilities))&&
+      !targets.has(result.Class+'\\0'+result.Target),
+    'Trivy result target, package class or vulnerabilities incomplete');
+    targets.add(result.Class+'\\0'+result.Target);
+    coverage.add(result.Class);
+    for(const v of result.Vulnerabilities||[]){
       check(++findings<=15000&&typeof v.VulnerabilityID==='string'&&
         v.VulnerabilityID.length>2&&v.VulnerabilityID.length<128&&
         typeof v.PkgName==='string'&&v.PkgName.length>0&&v.PkgName.length<1000&&
@@ -106,6 +116,9 @@ export function assessTrivy(scan,service,sha){
       if(typeof v.FixedVersion==='string'&&v.FixedVersion.trim())fixed[v.Severity]++;
     }
   }
+  check(coverage.has('os-pkgs')&&
+    (service==='frontend'||coverage.has('lang-pkgs')),
+  'Trivy OS/Node package-class coverage incomplete');
   return {findings,severities:tally,fixable_by_severity:fixed};
 }
 export function readSecurityDocuments({sha,dir}){

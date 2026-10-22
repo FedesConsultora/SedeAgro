@@ -16,9 +16,10 @@ ENV SEDEAGRO_BUILD_SHA=${RELEASE_SHA}
 RUN node -e 'if (!/^[0-9a-f]{40}$/.test(process.env.SEDEAGRO_BUILD_SHA || "")) process.exit(1)'
 LABEL org.opencontainers.image.revision="${RELEASE_SHA}"
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY src ./src
 COPY db ./db
 COPY scripts ./scripts
 EXPOSE 3001
-CMD ["npm", "start"]
+CMD ["node", "src/server.js"]
