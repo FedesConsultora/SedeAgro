@@ -91,13 +91,12 @@ function rejected(attempt, reason = /BLOCKED production preflight/) {
   assert.doesNotMatch(attempt.stdout, /PASS read-only/);
 }
 
-test('accepts only an exact reviewed clean main and explicit approval', (t) => {
+test('clean reviewed main and DEPLOY token are still blocked without signed image admission', (t) => {
   const { attempt, sha } = fixture(t);
   const result = attempt();
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /PASS read-only production preflight/);
-  assert.ok(result.stdout.includes(sha));
-  assert.doesNotMatch(result.stdout, /OwnerReleaseKey|RuntimeReleaseKey|SyntheticJwt/);
+  rejected(result, /signed OCI\/security evidence directory is mandatory/);
+  assert.doesNotMatch(result.stdout + result.stderr, /OwnerReleaseKey|RuntimeReleaseKey|SyntheticJwt/);
+  assert.equal(sha.length, 40);
 });
 
 test('rejects an omitted, partial or mismatching SHA and incorrect approval', (t) => {
@@ -164,7 +163,7 @@ test('rejects demo seeds, debug logs and unsafe origin without executing config'
     rejected(attempt());
   }
   writeFileSync(path, original);
-  assert.equal(attempt().status, 0);
+  rejected(attempt(), /signed OCI\/security evidence directory is mandatory/);
 });
 
 test('rejects weak secrets, shared DB users and duplicate configuration', (t) => {
@@ -210,9 +209,15 @@ test('synthetic remediated release must also eliminate every recorded vulnerable
   rejected(attempt(), /security P0 unresolved/);
 });
 
-test('real patched lock and zero-advisory reviewed policy pass read-only preflight in disposable repo', t => {
-  const { attempt }=fixture(t, securityCurrentPolicy, securityCurrentLock);
-  const result=attempt();
-  assert.equal(result.status,0,result.stderr);
-  assert.match(result.stdout,/PASS read-only production preflight/);
+test('real patched npm lock remains insufficient for release without attested images', t => {
+  const { attempt } = fixture(t, securityCurrentPolicy, securityCurrentLock);
+  rejected(attempt(), /signed OCI\/security evidence directory is mandatory/);
+});
+
+test('admission runs after secret/npm checks but before any production PASS or Docker', () => {
+  const gate = source.indexOf('node "$ROOT/scripts/verify-production-image-admission.mjs"');
+  const npm = source.indexOf('node "$ROOT/scripts/verify-production-security.mjs"');
+  const pass = source.indexOf("printf 'PASS read-only production preflight:");
+  assert.ok(npm >= 0 && gate > npm && pass > gate);
+  assert.doesNotMatch(source, /(?:DEPLOY_APPROVAL|SKIP_GIT_PULL).*bypass/i);
 });
