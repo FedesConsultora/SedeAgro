@@ -292,12 +292,23 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       [evidenceId, corrupted]);
     assert.deepEqual((await request(integrityPath)).json,
       { data: { id: evidenceId, status: 'mismatch' } }, 'same-length corruption must be detected');
+    const corruptedDownload = await request(`/evidence/${evidenceId}/content`);
+    assert.equal(corruptedDownload.status, 409,
+      'download must not present changed source bytes as verified evidence');
+    assert.equal(corruptedDownload.json?.data?.content_base64, undefined,
+      'corrupted bytes must never appear in a response');
     await owner.query('UPDATE evidence_blobs SET content = $2 WHERE evidence_id = $1',
       [evidenceId, png]);
+    assert.deepEqual(Buffer.from((await request(`/evidence/${evidenceId}/content`))
+      .json.data.content_base64, 'base64'), png,
+      'intact evidence remains downloadable after controlled restoration');
     await owner.query('UPDATE evidence_assets SET size_bytes = $2 WHERE id = $1',
       [evidenceId, png.length + 1]);
     assert.equal((await request(integrityPath)).json.data.status, 'mismatch',
       'wrong declared file size must be reported');
+    const wrongSizeDownload = await request(`/evidence/${evidenceId}/content`);
+    assert.equal(wrongSizeDownload.status, 409);
+    assert.equal(wrongSizeDownload.json?.data?.content_base64, undefined);
     await owner.query('UPDATE evidence_assets SET size_bytes = $2 WHERE id = $1',
       [evidenceId, png.length]);
 
@@ -305,6 +316,10 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
       [evidenceId]);
     assert.equal((await request(integrityPath)).json.data.status, 'unverifiable',
       'legacy metadata without hash must not be called verified');
+    const legacyDownload = await request(`/evidence/${evidenceId}/content`);
+    assert.equal(legacyDownload.status, 409,
+      'legacy content without a verifiable hash cannot be downloaded as verified');
+    assert.equal(legacyDownload.json?.data?.content_base64, undefined);
     await owner.query('UPDATE evidence_assets SET content_sha256 = $2 WHERE id = $1',
       [evidenceId, originalHash]);
 
@@ -398,6 +413,9 @@ test('real scouting: assigned reads, derived field, evidence upload/download, cl
     assert.deepEqual((await request(integrityPath)).json,
       { data: { id: evidenceId, status: 'missing' } },
       'asset metadata without a blob cannot be considered intact');
+    const notFoundBytes = await request(`/evidence/${evidenceId}/content`);
+    assert.equal(notFoundBytes.status, 404);
+    assert.equal(notFoundBytes.json?.data?.content_base64, undefined);
     assert.equal(missingBlob.json.data.items.find(item =>
       item.client_upload_id === offlineUploadId).bytes_available, true);
     await owner.query(
