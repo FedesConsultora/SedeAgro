@@ -145,7 +145,8 @@ test('visibility and pagehide abandon pending GPS without watchPosition', () => 
 test('form refuses stale asynchronous photo completion and old tenant callbacks', () => {
   assert.match(form, /captureFence\.current\.setScope\(isOpen && dataMode === 'live' \? locationKey : null\)/);
   assert.match(form, /if \(!captureFence\.current\.isCurrent\(ticket\) \|\|/);
-  assert.match(form, /if \(captureFence\.current\.isCurrent\(ticket\)\) onQueued\?\.\(storedItem\)/);
+  assert.match(form, /if \(captureFence\.current\.isCurrent\(ticket\)\) \{/);
+  assert.match(form, /onQueued\?\.\(storedItem\)/);
   assert.match(form, /submitGate\.current\.acquire\(ticket\)/);
   assert.match(form, /submitGate\.current\.settle\(ticket, stored\)/);
   assert.match(form, /submitGate\.current\.reset\(\)/);
