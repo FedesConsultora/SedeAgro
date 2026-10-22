@@ -34,7 +34,10 @@ const irrigationSchema = z.object({
   ended_at: z.coerce.date().optional(),
   source: z.enum(['manual', 'sensor', 'import']).default('manual'),
   notes: z.string().optional()
-});
+}).refine(
+  event => !event.ended_at || event.ended_at.getTime() >= event.started_at.getTime(),
+  { path: ['ended_at'], message: 'La fecha de finalización no puede ser anterior al inicio.' }
+);
 
 fieldsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res) => {
   const grants = await grantedProducerIds(req);
