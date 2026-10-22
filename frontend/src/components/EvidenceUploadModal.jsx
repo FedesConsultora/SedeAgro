@@ -3,14 +3,17 @@ import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { createMobileCaptureFence } from '../services/mobileCaptureSafety.js';
-import { preparePrivateEvidenceUpload } from '../services/privateEvidenceUpload.js';
+import { createPrivateUploadCache } from '../services/privateEvidenceUpload.js';
 
 export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId }) {
   const { api, dataMode, session } = useSession();
   const [file, setFile] = useState(null);
+  const [uploadKey, setUploadKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const fence = useRef(null);
+  const uploadCache = useRef(null);
+  if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
   if (!fence.current) fence.current = createMobileCaptureFence();
   const scope = isOpen && dataMode === 'live' && sessionScope(session)
     ? `${sessionScope(session)}:${observationId}` : null;
@@ -22,7 +25,9 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
     return () => fence.current.invalidate();
   }, [scope]);
   useEffect(() => {
+    uploadCache.current.reset();
     setFile(null);
+    setUploadKey('');
     setSaving(false);
     setError('');
   }, [scope]);
@@ -38,10 +43,14 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
     if (!fence.current.isCurrent(ticket) || saving) return;
     setSaving(true);
     try {
-      const payload = await preparePrivateEvidenceUpload(file);
+      // Same UUID and byte-identical converted JPEG if the HTTP ACK is lost.
+      const payload = await uploadCache.current.prepare(file, uploadKey);
       if (!fence.current.isCurrent(ticket)) return;
-      await api.createEvidence(observationId, payload);
-      if (fence.current.isCurrent(ticket)) onCreated?.();
+      await api.createEvidence(observationId, { ...payload, client_upload_id: uploadKey });
+      if (fence.current.isCurrent(ticket)) {
+        uploadCache.current.reset();
+        onCreated?.();
+      }
     } catch (err) {
       if (fence.current.isCurrent(ticket)) {
         setError(err?.message || 'No se pudo adjuntar la evidencia.');
@@ -66,7 +75,13 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
           <span>Archivo real *</span>
           <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
             disabled={saving || dataMode !== 'live'}
-            onChange={(e) => { setFile(e.target.files?.[0] || null); setError(''); }} required />
+            onChange={(e) => {
+              const selected = e.target.files?.[0] || null;
+              uploadCache.current.reset();
+              setFile(selected);
+              setUploadKey(selected ? crypto.randomUUID() : '');
+              setError('');
+            }} required />
         </label>
         {file && <p style={{ margin: 0, fontSize: 13 }}>
           {file.name} · {(file.size / 1024).toFixed(0)} KiB
