@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
-import { reportAccessContext, confirmFieldReportResponse } from '../services/reportAccessContext.js';
+import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport } from '../services/reportAccessContext.js';
 import { decodeFieldDocument } from '../services/reportDownload.js';
 
 const STATUS_ES = {
@@ -15,8 +15,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
   const reportContext = reportAccessContext(session, dataMode, fieldId);
   // Never render a previous actor/role/field's report even during the render
   // before React runs an effect that clears stale component state.
-  const report = reportState?.scope === reportContext && reportState?.api === api
-    ? reportState.report : null;
+  const report = visibleFieldReport(reportState, reportContext, api);
   const loadSequence = useRef(0);
   const loadInFlight = useRef(false);
   const [loading, setLoading] = useState(false);
