@@ -29,15 +29,23 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   const urlRef = useRef(null);
   const uploadCache = useRef(null);
   const uploadFence = useRef(null);
+  const viewFence = useRef(null);
   if (!uploadCache.current) uploadCache.current = createPrivateUploadCache();
   if (!uploadFence.current) uploadFence.current = createMobileCaptureFence();
+  if (!viewFence.current) viewFence.current = createMobileCaptureFence();
   const uploadScope = live && identity && uploadFor && uploadKey
     ? `${identity}:${order.id}:${uploadFor}:${uploadKey}` : null;
   uploadFence.current.setScope(uploadScope);
+  const viewScope = live && identity ? `${identity}:${order.id}` : null;
+  viewFence.current.setScope(viewScope);
   useEffect(() => {
     uploadFence.current.setScope(uploadScope);
     return () => uploadFence.current.invalidate();
   }, [uploadScope]);
+  useEffect(() => {
+    viewFence.current.setScope(viewScope);
+    return () => viewFence.current.invalidate();
+  }, [viewScope]);
   useEffect(() => {
     // A different user in the same tenant is also a different security scope.
     uploadCache.current.reset();
@@ -127,29 +135,39 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
 
   const check = async asset => {
     if (busy) return;
+    const ticket = viewFence.current.ticket();
+    if (!viewFence.current.isCurrent(ticket)) return;
     setBusy(true);
     setError('');
     try {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/evidence/${encodeURIComponent(asset.id)}/integrity`,
         { silent: true });
+      if (!viewFence.current.isCurrent(ticket)) return;
       if (response?.data?.id !== asset.id || !Object.hasOwn(statusLabels, response.data.status)) {
         throw new Error('La comprobación no fue confirmada por el servidor.');
       }
       setChecks(current => ({ ...current, [asset.id]: response.data.status }));
     } catch (err) {
-      setError(err?.message || 'No se pudo comprobar el archivo.');
-    } finally { setBusy(false); }
+      if (viewFence.current.isCurrent(ticket)) {
+        setError(err?.message || 'No se pudo comprobar el archivo.');
+      }
+    } finally {
+      if (viewFence.current.isCurrent(ticket)) setBusy(false);
+    }
   };
 
   const open = async asset => {
     if (busy) return;
+    const ticket = viewFence.current.ticket();
+    if (!viewFence.current.isCurrent(ticket)) return;
     setBusy(true);
     setError('');
     try {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/evidence/${encodeURIComponent(asset.id)}/content`,
         { silent: true });
+      if (!viewFence.current.isCurrent(ticket)) return;
       const blob = decodePrivateEvidenceResponse(response, asset.id, asset.mime_type);
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
       const url = URL.createObjectURL(blob);
@@ -157,11 +175,15 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
       setOpened({ id: asset.id, url, name: asset.original_name,
         mime: asset.mime_type });
     } catch (err) {
-      setOpened(null);
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-      setError(err?.message || 'No se pudo abrir el archivo privado.');
-    } finally { setBusy(false); }
+      if (viewFence.current.isCurrent(ticket)) {
+        setOpened(null);
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+        setError(err?.message || 'No se pudo abrir el archivo privado.');
+      }
+    } finally {
+      if (viewFence.current.isCurrent(ticket)) setBusy(false);
+    }
   };
 
   return <section className="detail-section order-detail__evidence">
