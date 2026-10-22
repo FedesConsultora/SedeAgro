@@ -111,6 +111,21 @@ test('reject production Compose build, alternate tags, pulls, networks, ports, s
   }
 });
 
+test('Docker Compose v2 renders the committed review template with no implicit network or build',t=>{
+  const version=spawnSync('docker',['compose','version'],{encoding:'utf8',timeout:5000});
+  if(version.status!==0){t.skip('Docker Compose unavailable outside CI runner');return;}
+  const compose=fileURLToPath(new URL('../../docker-compose.oci-review.yml',import.meta.url));
+  const out=spawnSync('docker',['compose','-f',compose,'config','--format','json'],{
+    encoding:'utf8',timeout:10000,
+    env:{...process.env,
+      SEDEAGRO_OCI_BACKEND_IMAGE:images[0].tag,
+      SEDEAGRO_OCI_FRONTEND_IMAGE:images[1].tag}
+  });
+  assert.equal(out.status,0,out.stderr);
+  assert.deepEqual(validateReviewCompose(JSON.parse(out.stdout),receipt,SHA),
+    valid.image_ids);
+});
+
 test('wrong SHA, duplicate service, wrong config and malformed receipt are rejected',()=>{
   for(const x of [
     {...receipt,head:'f'.repeat(40)},
@@ -143,7 +158,7 @@ test('receipt, archive hash and expected image ids must match before Docker',asy
     x=>{x.archive.name='other.tar';},
     x=>{x.images[0].config_id=id('f');},
   ]){
-    const original=JSON.parse(readFileSync(f.receiptPath,'utf8'));
+    const original=structuredClone(receipt);
     alteration(original);
     writeFileSync(f.receiptPath,JSON.stringify(original));
     await assert.rejects(inspectImportedCompose(props(f,d)),
