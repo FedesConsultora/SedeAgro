@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  inspectProductionOverlay,validateProductionOverlay
+  inspectProductionOverlay,validateProductionOverlay,withSyntheticComposeFiles
 } from '../ci-oci-production-overlay.mjs';
 
 const SHA='a'.repeat(40);
@@ -182,25 +182,25 @@ test('receipt and Docker config identities match before reading Compose preview'
 test('Compose v2 renders base and OCI override without secrets on disposable CI',t=>{
   const version=spawnSync('docker',['compose','version'],{encoding:'utf8',timeout:5000});
   if(version.status!==0){t.skip('Compose not installed locally');return;}
-  const root=fileURLToPath(new URL('../../',import.meta.url));
-  const p=join(root,'docker-compose.yml'),
-    override=join(root,'docker-compose.oci-production-override.yml');
-  const env={...process.env,COMPOSE_DISABLE_ENV_FILE:'1',
+  const env={PATH:process.env.PATH,HOME:process.env.HOME,
+    COMPOSE_DISABLE_ENV_FILE:'1',
     SEDEAGRO_RELEASE_SHA:SHA,SEDEAGRO_OCI_BACKEND_IMAGE:images[0].tag,
     SEDEAGRO_OCI_FRONTEND_IMAGE:images[1].tag,
     POSTGRES_PASSWORD:'DISPOSABLE_REVIEW_ONLY',
     APP_DB_PASSWORD:'DISPOSABLE_REVIEW_ONLY'};
-  const run=args=>spawnSync('docker',args,{
-    encoding:'utf8',timeout:15000,env});
-  const config=['config','--no-env-resolution','--format','json'];
-  const a=run(['compose','-f',p,...config]);
-  const b=run(['compose','-f',p,'-f',override,...config]);
-  assert.equal(a.status,0,'BASE COMPOSE FORMAT INVALID: '+a.stderr.slice(0,120));
-  assert.equal(b.status,0,'OCI OVERRIDE FORMAT INVALID: '+b.stderr.slice(0,120));
-  assert.deepEqual(validateProductionOverlay(
-    JSON.parse(a.stdout),JSON.parse(b.stdout),receipt,SHA),
-  review.imported_images);
-  assert.doesNotMatch(b.stdout,/"build"\s*:/);
+  withSyntheticComposeFiles(({prod,overlay})=>{
+    const run=args=>spawnSync('docker',args,{
+      encoding:'utf8',timeout:15000,env});
+    const config=['config','--no-env-resolution','--format','json'];
+    const a=run(['compose','-f',prod,...config]);
+    const b=run(['compose','-f',prod,'-f',overlay,...config]);
+    assert.equal(a.status,0,'BASE COMPOSE FORMAT INVALID: '+a.stderr.slice(0,120));
+    assert.equal(b.status,0,'OCI OVERRIDE FORMAT INVALID: '+b.stderr.slice(0,120));
+    assert.deepEqual(validateProductionOverlay(
+      JSON.parse(a.stdout),JSON.parse(b.stdout),receipt,SHA),
+    review.imported_images);
+    assert.doesNotMatch(b.stdout,/"build"\s*:/);
+  });
 });
 
 test('standalone CLI refuses user terminal and never prints environment secrets',t=>{
