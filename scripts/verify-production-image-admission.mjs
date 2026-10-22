@@ -21,6 +21,7 @@ function secureDirectory(dir) {
   const absolute = resolve(dir);
   const stat = lstatSync(absolute);
   check(stat.isDirectory() && !stat.isSymbolicLink() && (stat.mode & 0o077) === 0 &&
+    (typeof process.getuid !== 'function' || stat.uid === process.getuid()) &&
     realpathSync(absolute) === absolute &&
     absolute !== SRC && !absolute.startsWith(SRC + '/'),
   'release evidence must be private, canonical and outside the source checkout');
@@ -33,6 +34,13 @@ export function verifySignedSecurityDecision(security, sha) {
     security.source_signed === true &&
     security.images_verified === 2 &&
     Array.isArray(security.subjects) && security.subjects.length === 5 &&
+    security.subjects.map(s => s.name).join('|') === [
+      'sedeagro-backend-' + sha + '.spdx.json',
+      'sedeagro-backend-' + sha + '.trivy.json',
+      'sedeagro-frontend-' + sha + '.spdx.json',
+      'sedeagro-frontend-' + sha + '.trivy.json',
+      'sedeagro-security-' + sha + '.json'
+    ].join('|') &&
     security.subjects.every(s => /^sedeagro-(?:backend|frontend)-[a-f0-9]{40}\.(?:spdx|trivy)\.json$|^sedeagro-security-[a-f0-9]{40}\.json$/.test(s.name) &&
       s.name.includes(sha) && /^[a-f0-9]{64}$/.test(s.sha256)),
   'exact SHA and five verified GitHub-signed security subjects required');
