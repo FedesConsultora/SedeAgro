@@ -8,6 +8,12 @@ export const MAX_CAMERA_PIXELS = 40_000_000;
 export const OFFLINE_PHOTO_MIME_TYPES = Object.freeze([
   'image/jpeg', 'image/png', 'image/webp'
 ]);
+// Camera SOURCE types are broader than encrypted/HTTP output types. HEIC/HEIF
+// must pass native browser decoding and Canvas re-encoding to JPEG; raw Apple
+// containers are never valid offline drafts or server evidence payloads.
+export const CAMERA_SOURCE_MIME_TYPES = Object.freeze([
+  ...OFFLINE_PHOTO_MIME_TYPES, 'image/heic', 'image/heif'
+]);
 const SIZES = Object.freeze([2048, 1600, 1280, 1024, 800, 640]);
 const QUALITIES = Object.freeze([0.82, 0.7, 0.58, 0.46]);
 
@@ -47,10 +53,10 @@ export function validateOfflinePhoto(photo) {
 }
 
 export function cameraPhotoPlan(file) {
-  if (!file || !OFFLINE_PHOTO_MIME_TYPES.includes(file.type) ||
+  if (!file || !CAMERA_SOURCE_MIME_TYPES.includes(file.type) ||
       !Number.isInteger(file.size) || file.size < 1 ||
       file.size > MAX_CAMERA_SOURCE_BYTES) {
-    throw new Error('Elegí una foto JPEG, PNG o WebP de hasta 12 MiB.');
+    throw new Error('Elegí una foto JPEG, PNG, WebP, HEIC o HEIF de hasta 12 MiB.');
   }
   if (typeof file.name !== 'string' || !file.name ||
       file.name.length > 180 || /[\\/\x00-\x1f\x7f]/.test(file.name)) {
@@ -115,7 +121,11 @@ export async function decodeMobilePhoto(file, {
       };
       const timeoutId = setTimeout(() => finish(new Error('La foto tardó demasiado en abrirse. Volvé a seleccionarla.')), 15000);
       image.onload = () => finish();
-      image.onerror = () => finish(new Error('No se pudo decodificar la foto. Probá otro archivo JPEG, PNG o WebP.'));
+      image.onerror = () => finish(new Error(
+        ['image/heic', 'image/heif'].includes(file?.type)
+          ? 'El navegador no pudo abrir esta foto HEIC/HEIF. Probá Safari actualizado o un JPEG.'
+          : 'No se pudo decodificar la foto. Probá otro archivo JPEG, PNG o WebP.'
+      ));
       image.src = objectUrl;
     });
     const width = image.naturalWidth || image.width;
