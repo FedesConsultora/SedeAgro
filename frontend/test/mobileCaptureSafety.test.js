@@ -45,6 +45,25 @@ test('mobile image fallback never copies original EXIF-containing bytes', () => 
   assert.doesNotMatch(photo, /output\s*=\s*file\s*;/);
 });
 
+test('all three field image selectors allow native HEIC input without weakening output privacy', () => {
+  const observation = source('../src/components/ObservationFormModal.jsx');
+  const scouting = source('../src/components/EvidenceUploadModal.jsx');
+  const execution = source('../src/components/WorkOrderExecutionEvidence.jsx');
+  const upload = source('../src/services/privateEvidenceUpload.js');
+  const inputs = [observation, scouting, execution];
+  for (const ui of inputs) {
+    assert.match(ui, /accept="[^"]*image\/heic,image\/heif/);
+    assert.match(ui, /12 MiB/);
+    assert.doesNotMatch(ui, /readAsDataURL\(photo\)|readAsDataURL\(file\)/);
+  }
+  assert.match(upload, /CAMERA_SOURCE_MIME_TYPES\.includes\(file\?\.type\)/);
+  assert.match(upload, /converted\?\.sanitized !== true/);
+  assert.match(upload, /converted\?\.mime_type !== 'image\/jpeg'/);
+  assert.match(photo, /OFFLINE_PHOTO_MIME_TYPES = Object\.freeze/);
+  assert.match(photo, /CAMERA_SOURCE_MIME_TYPES = Object\.freeze/);
+  assert.match(photo, /mime_type: 'image\/jpeg'/);
+});
+
 test('visibility and pagehide abandon pending GPS without watchPosition', () => {
   assert.match(picker, /document\.addEventListener\('visibilitychange', onVisibility\)/);
   assert.match(picker, /window\.addEventListener\('pagehide', stopPending\)/);
