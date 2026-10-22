@@ -7,7 +7,7 @@ set -euo pipefail
 # the sourced helper retains its flock FD until this process exits.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! source "$SCRIPT_DIR/production-deploy-lock.sh" /run/lock/sedeagro; then
-  printf 'BLOCKED: exclusive host deployment lock could not be acquired.\\n' >&2
+  printf 'BLOCKED: exclusive host deployment lock could not be acquired.\n' >&2
   exit 2
 fi
 
