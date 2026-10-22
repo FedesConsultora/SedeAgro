@@ -17,7 +17,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 AS prod
+FROM nginx:1.30.6-alpine3.24@sha256:ff8328b4279ec385af48cde9ef486e7165ad74b7065cb3cd86c377384e2e2dd5 AS prod
 ARG RELEASE_SHA
 LABEL org.opencontainers.image.revision="${RELEASE_SHA}"
 COPY nginx.conf /etc/nginx/conf.d/default.conf
