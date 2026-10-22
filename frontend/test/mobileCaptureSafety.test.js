@@ -150,6 +150,11 @@ test('form refuses stale asynchronous photo completion and old tenant callbacks'
   assert.match(form, /submitGate\.current\.settle\(ticket, stored\)/);
   assert.match(form, /submitGate\.current\.reset\(\)/);
   assert.match(form, /const storedItem = await offlineQueue\.queueObservation/);
+  assert.match(form, /setSavedLocally\(true\)/);
+  assert.match(form, /disabled=\{saving \|\| locating \|\| savedLocally\}/);
+  assert.match(form, /disabled=\{saving && !savedLocally\}/);
+  assert.match(form, /Guardada en este dispositivo/);
+
 
 });
 
