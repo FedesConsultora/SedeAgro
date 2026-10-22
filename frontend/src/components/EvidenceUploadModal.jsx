@@ -91,8 +91,8 @@ export function EvidenceUploadModal({ isOpen, onClose, onCreated, observationId 
           {file.name} · {(file.size / 1024).toFixed(0)} KiB
         </p>}
         <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
-          Fotos JPEG, PNG o WebP (se convierten a JPEG de hasta 512 KiB sin metadatos originales)
-          y PDF de hasta 2 MiB. Los PDF conservan su contenido y metadatos.
+          Fotos JPEG, PNG o WebP de origen hasta 12 MiB (se convierten a JPEG de hasta 512 KiB
+          sin metadatos originales) y PDF de hasta 2 MiB. Los PDF conservan su contenido y metadatos.
           Los archivos se guardan en la base privada de la empresa; no se envían a servicios externos.
         </p>
         {dataMode !== 'live' && <p role="status" style={{ color: '#9a3412', margin: 0 }}>
