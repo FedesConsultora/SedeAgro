@@ -9,7 +9,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const TAGS = {
   node: 'node:22-alpine',
-  nginx: 'nginx:1.30.6-alpine3.24',
+  nginx: 'nginx:1.30.6-alpine3.24-slim',
   postgis: 'postgis/postgis:16-3.4',
   redis: 'redis:7-alpine'
 };

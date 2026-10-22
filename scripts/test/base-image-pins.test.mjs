@@ -27,7 +27,7 @@ test('reviewed lock has exactly four nonempty digests, distinct sources and expe
   assert.deepEqual(Object.keys(refs), ['node','nginx','postgis','redis']);
   assert.equal(load().platform,'linux/amd64');
   assert.match(refs.node, /^node:22-alpine@sha256:[a-f0-9]{64}$/);
-  assert.match(refs.nginx, /^nginx:1\.30\.6-alpine3\.24@sha256:[a-f0-9]{64}$/);
+  assert.match(refs.nginx, /^nginx:1\.30\.6-alpine3\.24-slim@sha256:[a-f0-9]{64}$/);
   assert.match(refs.postgis, /^postgis\/postgis:16-3\.4@sha256:[a-f0-9]{64}$/);
   assert.match(refs.redis, /^redis:7-alpine@sha256:[a-f0-9]{64}$/);
   assert.equal(new Set(Object.values(refs)).size,4);
@@ -189,7 +189,7 @@ test('browser Nginx config acceptance runs the identical immutable production ba
   const workflow = read('.github/workflows/postgres-isolation.yml');
   const browser = workflow.split('  browser-offline:')[1]?.split('  production-images:')[0] || '';
   const reference = pinned('nginx');
-  assert.equal((browser.match(/nginx:1\.30\.6-alpine3\.24@sha256:[a-f0-9]{64}/g)||[]).length, 2);
+  assert.equal((browser.match(/nginx:1\.30\.6-alpine3\.24-slim@sha256:[a-f0-9]{64}/g)||[]).length, 2);
   assert.equal(browser.split(reference).length - 1, 2,
     'both nginx -t and loopback HTTP smoke must use the exact locked prod digest');
   assert.doesNotMatch(browser, /nginx:(?:latest|1\.27-alpine)(?:\s|$)/m);

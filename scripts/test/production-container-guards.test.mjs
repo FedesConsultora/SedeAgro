@@ -101,7 +101,7 @@ test('frontend build requires same-origin API and serves only compiled assets', 
   const dockerfile = read('frontend/Dockerfile');
   assert.match(dockerfile, /ARG VITE_API_URL=\/api/);
   assert.match(dockerfile, /RUN npm run build/);
-  const prod = dockerfile.split(/FROM nginx:1\.30\.6-alpine3\.24@sha256:[a-f0-9]{64} AS prod/)[1];
+  const prod = dockerfile.split(/FROM nginx:1\.30\.6-alpine3\.24-slim@sha256:[a-f0-9]{64} AS prod/)[1];
   assert.ok(prod);
   assert.match(prod, /COPY --from=build \/app\/dist \/usr\/share\/nginx\/html/);
   assert.doesNotMatch(prod, /COPY \. \./);
@@ -109,7 +109,7 @@ test('frontend build requires same-origin API and serves only compiled assets', 
 
 test('production frontend Docker removes upstream Nginx sample files before copying manifest-bound dist', () => {
   const dockerfile = read('frontend/Dockerfile');
-  const prod = dockerfile.split(/FROM nginx:1\.30\.6-alpine3\.24@sha256:[a-f0-9]{64} AS prod/)[1];
+  const prod = dockerfile.split(/FROM nginx:1\.30\.6-alpine3\.24-slim@sha256:[a-f0-9]{64} AS prod/)[1];
   assert.ok(prod, 'expected final Nginx image stage');
   const clearing = prod.indexOf('RUN rm -rf /usr/share/nginx/html && mkdir -p /usr/share/nginx/html');
   const copying = prod.indexOf('COPY --from=build /app/dist /usr/share/nginx/html');
