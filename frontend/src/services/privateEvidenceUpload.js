@@ -1,5 +1,7 @@
 import { validateExecutionFile } from './executionEvidence.js';
-import { readOfflinePhoto } from './offlinePhoto.js';
+import {
+  cameraPhotoPlan, MAX_OFFLINE_PHOTO_BYTES, OFFLINE_PHOTO_MIME_TYPES, readOfflinePhoto
+} from './offlinePhoto.js';
 
 // PDFs intentionally preserve their original bytes. Photos never do: the
 // existing field-photo pipeline decodes pixels, strips source metadata and
@@ -17,7 +19,19 @@ export async function preparePrivateEvidenceUpload(file, {
   sanitizePhoto = readOfflinePhoto,
   readDocument = readDocumentBase64
 } = {}) {
-  const kind = validateExecutionFile(file);
+  // A typical phone photo can exceed the 2 MiB *upload* limit before Canvas
+  // removes metadata and reduces it. The shared offline camera preflight
+  // allows up to 12 MiB of SOURCE bytes without ever sending those bytes.
+  // Documents do not undergo conversion, so they keep the 2 MiB input limit.
+  const isPhoto = OFFLINE_PHOTO_MIME_TYPES.includes(file?.type);
+  const kind = isPhoto ? 'photo' : validateExecutionFile(file);
+  if (isPhoto) {
+    cameraPhotoPlan(file);
+    // Preserve the original evidence validator's dot-name rejection.
+    if (file.name === '.' || file.name === '..') {
+      throw new Error('El nombre del archivo no es válido.');
+    }
+  }
   if (kind === 'document') {
     const content_base64 = await readDocument(file);
     if (!content_base64) throw new Error('No se pudo leer el documento.');
@@ -29,7 +43,7 @@ export async function preparePrivateEvidenceUpload(file, {
   if (converted?.sanitized !== true || converted?.mime_type !== 'image/jpeg' ||
       !converted?.original_name || !converted?.content_base64 ||
       !Number.isInteger(converted.size_bytes) || converted.size_bytes < 1 ||
-      converted.size_bytes > 512 * 1024) {
+      converted.size_bytes > MAX_OFFLINE_PHOTO_BYTES) {
     throw new Error('No se pudo preparar una fotografía JPEG sin metadatos.');
   }
   return {
