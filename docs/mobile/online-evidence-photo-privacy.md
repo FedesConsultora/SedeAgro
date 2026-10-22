@@ -7,6 +7,7 @@ El flujo de observación offline ya convertía todas las fotografías a JPEG por
 - La carga de fotografías JPEG/PNG/WebP de ambas interfaces ahora usa el pipeline existente `readOfflinePhoto` de `offlinePhoto.js`: decodificación, Canvas y un **JPEG nuevo máximo 512 KiB** que no copia los metadatos del archivo fuente.
 - Se mantiene el límite original de **2 MiB de archivo seleccionado** para estas dos pantallas; los PDFs siguen permitidos hasta 2 MiB y **conservan sus bytes y metadatos originales**, de lo cual advierte el formulario. No se procesa PDF como imagen ni se envía a terceros.
 - Si el navegador no puede decodificar/recodificar la foto, la carga falla explícitamente. **Nunca** se vuelve a subir el JPEG/PNG/WebP original como alternativa.
+- La carga online de observaciones agrega un `client_upload_id` nuevo por archivo y reutiliza el mismo Base64 convertido al reintentar. Antes lo omitía y podía duplicar el adjunto tras perder un ACK.
 - La carga del parte mantiene el mismo `client_upload_id` al reintentar una respuesta HTTP ambigua y conserva **exactamente el mismo Base64 convertido**, no vuelve a ejecutar Canvas con ese UUID; otra selección genera un UUID y payload nuevos.
 - Un cambio de cuenta/tenant/recurso o cierre de formulario durante conversión invalida un ticket local e impide iniciar la subida desde el callback anterior. Los metadatos de un usuario no se heredan por compartir tenant.
 
