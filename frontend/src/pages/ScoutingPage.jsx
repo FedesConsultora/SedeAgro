@@ -6,6 +6,8 @@ import { ScoutingRunFormModal } from '../components/ScoutingRunFormModal.jsx';
 import { ObservationFormModal } from '../components/ObservationFormModal.jsx';
 import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
+import { parseScoutingPrivateEvidence } from '../services/scoutingPrivateEvidenceClient.js';
+import { sessionScope } from '../services/offlineSyncModel.js';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
@@ -47,6 +49,39 @@ function RunDetail({ run, onChanged, onOpenSync }) {
   const [selectedAssignee, setSelectedAssignee] = useState('');
   const [loadingAssignees, setLoadingAssignees] = useState(false);
   const detailRequestSequence = useRef(0);
+  const liveScope = dataMode === 'live' ? sessionScope(session) : null;
+  const downloadScope = liveScope
+    ? [liveScope, run.id, session?.membership?.roleCode || '',
+      (session?.entitlements || []).slice().sort().join(',')].join(':') : null;
+  const scopeRef = useRef(downloadScope);
+  scopeRef.current = downloadScope;
+  const downloadSequence = useRef(0);
+  const downloadInFlight = useRef(false);
+  const downloadUrl = useRef(null);
+
+  useEffect(() => {
+    const interrupt = () => {
+      downloadSequence.current += 1;
+      downloadInFlight.current = false;
+      if (downloadUrl.current) URL.revokeObjectURL(downloadUrl.current);
+      downloadUrl.current = null;
+      setDownloadingId(null);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') interrupt();
+    };
+    window.addEventListener('offline', interrupt);
+    window.addEventListener('pagehide', interrupt);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      interrupt();
+      window.removeEventListener('offline', interrupt);
+      window.removeEventListener('pagehide', interrupt);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [downloadScope]);
+
+
 
   const refresh = useCallback(async () => {
     const sequence = ++detailRequestSequence.current;
@@ -132,27 +167,45 @@ function RunDetail({ run, onChanged, onOpenSync }) {
   };
 
   const download = async (evidence) => {
+    if (!downloadScope || downloadInFlight.current || navigator.onLine === false) return;
+    // Guard synchronously against a second tap before React commits state.
+    downloadInFlight.current = true;
+    const sequence = ++downloadSequence.current;
+    const current = () => scopeRef.current === downloadScope &&
+      sequence === downloadSequence.current && navigator.onLine !== false &&
+      document.visibilityState !== 'hidden';
     setDownloadingId(evidence.id);
     setActionError('');
     try {
-      const result = await api.getEvidenceContent(evidence.id);
-      const encoded = result.data.content_base64;
-      const binary = atob(encoded);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: result.data.mime_type });
+      const response = await api.getEvidenceContent(evidence.id);
+      if (!current()) return;
+      // The backend already checks SHA-256; this final client boundary also
+      // verifies exact selected ID, safe name, MIME, bytes and the 2 MiB cap.
+      const { blob, filename } = parseScoutingPrivateEvidence(response, evidence);
+      if (!current()) return;
       const url = URL.createObjectURL(blob);
+      if (!current()) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      downloadUrl.current = url;
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = result.data.original_name || 'evidencia';
+      anchor.download = filename;
       document.body.appendChild(anchor);
-      anchor.click();
+      if (current()) anchor.click();
       anchor.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        if (downloadUrl.current === url) downloadUrl.current = null;
+      }, 1000);
     } catch (err) {
-      setActionError(err?.message || 'No se pudo descargar el archivo.');
+      if (current()) setActionError(err?.message || 'No se pudo descargar el archivo privado.');
     } finally {
-      setDownloadingId(null);
+      if (sequence === downloadSequence.current) {
+        downloadInFlight.current = false;
+        setDownloadingId(null);
+      }
     }
   };
 
@@ -286,7 +339,7 @@ function RunDetail({ run, onChanged, onOpenSync }) {
         onCreated={() => { setShowObsModal(false); void refresh(); onChanged?.(); }} />}
       {showEvidModal && <EvidenceUploadModal isOpen observationId={showEvidModal} onClose={() => setShowEvidModal(null)}
         onCreated={() => { setShowEvidModal(null); void refresh(); }} />}
-      {preview && <EvidencePreviewModal isOpen evidence={preview} api={api} onClose={() => setPreview(null)} />}
+      {preview && <EvidencePreviewModal isOpen evidence={preview} runId={run.id} api={api} onClose={() => setPreview(null)} />}
     </section>
   );
 }
