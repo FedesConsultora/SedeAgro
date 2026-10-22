@@ -1,0 +1,43 @@
+name: OCI host read-only acceptance
+
+on:
+  pull_request:
+    paths:
+      - "scripts/inspect-host-oci-images.mjs"
+      - "scripts/test/inspect-host-oci-images.test.mjs"
+      - ".github/workflows/host-oci-readonly.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/inspect-host-oci-images.mjs"
+      - "scripts/test/inspect-host-oci-images.test.mjs"
+      - ".github/workflows/host-oci-readonly.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-oci-readonly-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-oci-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact event HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate signed host inspector syntax
+        run: |
+          node --check scripts/inspect-host-oci-images.mjs
+          node --check scripts/test/inspect-host-oci-images.test.mjs
+      - name: Run isolated read-only security regression tests
+        run: node --test scripts/test/inspect-host-oci-images.test.mjs
