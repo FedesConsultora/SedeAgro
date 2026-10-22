@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { reportAccessContext, confirmFieldReportResponse
+import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport
 } from '../src/services/reportAccessContext.js';
 
 const session = Object.freeze({
@@ -36,6 +36,19 @@ test('demo and unauthenticated cold start never become a report access context',
   assert.equal(reportAccessContext(null, 'live'), null);
 });
 
+test('render-time masking hides the old summary BEFORE effects clear state', () => {
+  const api = { getFieldReport: () => null };
+  const scope = reportAccessContext(session, 'live', 'field-1');
+  const snapshot = { scope, api, report: { privateOrders: ['A'] } };
+  assert.equal(visibleFieldReport(snapshot, scope, api), snapshot.report);
+  assert.equal(visibleFieldReport(snapshot, reportAccessContext({
+    ...session, membership: { roleCode: 'scout' }
+  }, 'live', 'field-1'), api), null);
+  assert.equal(visibleFieldReport(snapshot, scope, {}), null);
+  assert.equal(visibleFieldReport(snapshot, null, api), null);
+  assert.equal(visibleFieldReport(null, scope, api), null);
+});
+
 test('field summary only accepts the selected ID, not another field in the same tenant', () => {
   const payload = { data: { field: { id: 'field-1' }, workOrdersSummary: { open: 3 } } };
   assert.equal(confirmFieldReportResponse(payload, 'field-1'), payload.data);
@@ -61,7 +74,6 @@ test('field summary never commits an old HTTP response or exports outside origin
   assert.match(card, /loadSequence\.current === sequence/);
   assert.match(card, /currentScope\.current === scope/);
   assert.match(card, /reportAccessContext\(session, dataMode, fieldId\)/);
-  assert.match(card, /reportState\?\.scope === reportContext/);
-  assert.match(card, /reportState\?\.api === api/);
+  assert.match(card, /visibleFieldReport\(reportState, reportContext, api\)/);
   assert.match(card, /URL\.revokeObjectURL/);
 });
