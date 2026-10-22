@@ -81,7 +81,7 @@ export function withSyntheticComposeFiles(run){
   try{
     const backend=join(dir,'backend');
     mkdirSync(backend,{mode:0o700});
-    writeFileSync(join(backend,'.env'),'NODE_ENV=ci-oci-review-only\\n',
+    writeFileSync(join(backend,'.env'),'NODE_ENV=ci-oci-review-only\n',
       {mode:0o600,flag:'wx'});
     const prod=join(dir,'docker-compose.yml');
     const overlay=join(dir,'docker-compose.oci-production-override.yml');
