@@ -53,6 +53,8 @@ jobs:
           bash -n scripts/deploy-prod.sh
           bash -n scripts/production-preflight.sh
           node --test scripts/test/production-preflight.test.mjs
+          node --check scripts/verify-production-image-admission.mjs
+          node --test scripts/test/production-image-admission.test.mjs
           bash -n scripts/verify-production-backup.sh
           node --test scripts/test/production-backup-guards.test.mjs
           bash -n scripts/verify-fresh-install-db.sh

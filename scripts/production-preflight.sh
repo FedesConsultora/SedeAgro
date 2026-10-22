@@ -88,5 +88,16 @@ if ! node "$ROOT/scripts/verify-production-security.mjs" \
   fail "security P0 unresolved; see issue #137 and approved release-security policy"
 fi
 
+# 0P.33: signed Syft/Trivy and OCI metadata MUST be admitted independently.
+# DEPLOY:<SHA> and a green npm lock check are never approval of image risk.
+# This gate intentionally denies release while signed CI says release_go=false
+# or while deploy-prod.sh rebuilds images rather than consuming exact OCI bytes.
+[[ -n "${SEDEAGRO_SIGNED_RELEASE_DIR:-}" ]] ||
+  fail "signed OCI/security evidence directory is mandatory before deployment"
+if ! node "$ROOT/scripts/verify-production-image-admission.mjs" \
+  --sha "$SHA" --evidence-dir "$SEDEAGRO_SIGNED_RELEASE_DIR"; then
+  fail "signed image risk, identity or immutable deployment admission denied"
+fi
+
 printf 'PASS read-only production preflight: clean main/origin/main at %s, restricted env permissions, prod-only config and explicit approval.\n' "$SHA"
 printf 'NOT CERTIFIED: backup/restore of staging, live database readiness, mobile field acceptance or VPS cutover.\n'
