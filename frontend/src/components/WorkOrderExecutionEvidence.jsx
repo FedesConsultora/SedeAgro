@@ -47,7 +47,8 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
     setBusy(false);
     setOpened(null);
     setChecks({});
-  }, [order.id, identity]);
+    setItems([]);
+  }, [order.id, identity, live]);
 
   useEffect(() => {
     if (!live) return undefined;
@@ -72,7 +73,7 @@ export function WorkOrderExecutionEvidence({ order, reports, onChanged }) {
   useEffect(() => () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
     urlRef.current = null;
-  }, [order.id, identity]);
+  }, [order.id, identity, live]);
 
   if (!live || reports.length === 0) return null;
 
