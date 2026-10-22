@@ -114,8 +114,36 @@ farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, 
 }));
 
 farmsRouter.patch('/:id', requireCapability('gis.write'), validate(farmSchema.partial()), asyncHandler(async (req, res) => {
-  const farm = await Farm.findByPk(req.params.id, { transaction: req.dbTransaction });
+  // Lock the farm row while checking whether the initial producer assignment
+  // is safe. Inserts of fields referencing the farm acquire a FK KEY SHARE lock,
+  // so this UPDATE lock prevents a concurrent child from bypassing the count.
+  const farm = await Farm.findByPk(req.params.id, {
+    transaction: req.dbTransaction,
+    lock: req.dbTransaction.LOCK.UPDATE
+  });
   if (!farm) return res.status(404).json({ error: { message: 'Establecimiento no encontrado.' } });
+  if (Object.hasOwn(req.body, 'producer_id') && req.body.producer_id !== farm.producer_id) {
+    // Producer grants authorize whole farms and their historical fields.
+    // Reparenting a farm with fields, or changing an already assigned producer,
+    // would expose prior work to a new producer without an access grant.
+    // The one safe onboarding exception is first assigning an empty farm.
+    const canAssignEmptyFarm = farm.producer_id === null && req.body.producer_id !== null &&
+      await Field.count({
+        where: { farm_id: farm.id, tenant_id: req.tenantId },
+        transaction: req.dbTransaction
+      }) === 0;
+    if (!canAssignEmptyFarm) {
+      throw new HttpError(409, 'No se puede cambiar el productor de un establecimiento con historial.',
+        undefined, 'FARM_PRODUCER_IDENTITY_IMMUTABLE');
+    }
+    const producer = await Producer.findOne({
+      where: { id: req.body.producer_id, tenant_id: req.tenantId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    });
+    if (!producer) throw new HttpError(404, 'Productor no encontrado en esta organización.',
+      undefined, 'FARM_PRODUCER_NOT_FOUND');
+  }
   await farm.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: farm });
 }));
