@@ -15,7 +15,7 @@ test('small request JSON, including mobile base64 photos, remains valid', () => 
 
 test('an oversized flat array is rejected before per-item validation', () => {
   assert.equal(withinValidationBudget({ operations: Array(MAX_VALIDATION_NODES).fill(null) }), false);
-  assert.equal(withinValidationBudget({ operations: Array(50).fill({ status: 'pending' }) }), true);
+  assert.equal(withinValidationBudget({ operations: Array.from({ length: 50 }, () => ({ status: 'pending' })) }), true);
 });
 
 test('oversized nested containers and object key fanout are also bounded', () => {
