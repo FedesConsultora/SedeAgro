@@ -71,7 +71,7 @@ test('photo waits for observation receipt and deletes only after both acknowledg
   assert.equal(rows.size,0);
 });
 
-test('lost upload ACK preserves stable UUID and partial success for idempotent replay',async()=>{
+test('lost photo ACK preserves UUID and requires fresh personal receipt for photo-only replay',async()=>{
   const {queue,rows}=harness();
   const draft=await queue.queueObservation(session,RUN,{...values,photo});
   const originalUploadId=draft.evidence.client_upload_id;
@@ -85,12 +85,17 @@ test('lost upload ACK preserves stable UUID and partial success for idempotent r
   assert.equal(partial.syncedObservationId,OBS);
   assert.equal(partial.evidence.client_upload_id,originalUploadId);
   await queue.allowRetry(session,draft.id);
-  const replay=await queue.flush(session,async body=>reply(body),{
-    force:true,sendEvidence:async(id,payload)=>{submissions++;assert.equal(payload.client_upload_id,originalUploadId);return uploaded(id,payload);}
+  let batches=0;
+  const replay=await queue.flush(session,async body=>{batches++;return reply(body);},{
+    force:true,sendEvidence:async(id,payload)=>{submissions++;return uploaded(id,payload);}
   });
-  assert.equal(replay.sent,1);
-  assert.equal(submissions,2);
-  assert.equal(rows.size,0);
+  assert.equal(replay.attempted,0);
+  assert.equal(replay.sent,0);
+  assert.equal(replay.photoRecoveryRequired,1);
+  assert.equal(batches,0);
+  assert.equal(submissions,1);
+  assert.equal(rows.size,1);
+  assert.equal(rows.get(draft.id).evidence.client_upload_id,originalUploadId);
 });
 
 test('photo conflict keeps applied observation visible without deleting original image',async()=>{
@@ -158,7 +163,7 @@ test('auto photo ACK must bind asset identity, user, MIME, name and exact size b
   }
 });
 
-test('bad photo receipt retains retryable original and a later exact replay is acknowledged',async()=>{
+test('bad photo receipt keeps bytes until explicit personal photo-only recovery',async()=>{
   const {queue,rows}=harness();
   const draft=await queue.queueObservation(session,RUN,{...values,photo});
   let seen=0;
@@ -176,12 +181,17 @@ test('bad photo receipt retains retryable original and a later exact replay is a
   assert.equal(pending.evidence.client_upload_id,draft.evidence.client_upload_id);
   assert.equal(pending.state,'pending');
   await queue.allowRetry(session,draft.id);
-  const second=await queue.flush(session,async body=>reply(body),{
+  let batches=0;
+  const second=await queue.flush(session,async body=>{batches++;return reply(body);},{
     force:true,sendEvidence:sender
   });
-  assert.equal(second.sent,1);
-  assert.equal(rows.size,0);
-  assert.equal(seen,2);
+  assert.equal(second.attempted,0);
+  assert.equal(second.sent,0);
+  assert.equal(second.photoRecoveryRequired,1);
+  assert.equal(batches,0);
+  assert.equal(rows.size,1);
+  assert.equal(rows.get(draft.id).evidence.content_base64,IMAGE);
+  assert.equal(seen,1);
 });
 
 test('global flush never resends an observation whose photo alone lacks ACK',async()=>{
