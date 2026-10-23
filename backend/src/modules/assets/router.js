@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
 import { AgriculturalInput, Machinery } from '../../models/index.js';
 import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuard.js';
-import { asyncHandler, validate } from '../../utils/http.js';
+import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const assetsRouter = Router();
@@ -37,8 +38,31 @@ assetsRouter.get('/machinery', requireCapability('assets.read'), asyncHandler(as
 }));
 
 assetsRouter.post('/machinery', requireCapability('assets.write'), validate(machinerySchema), asyncHandler(async (req, res) => {
-  const machine = await Machinery.create(req.body, { transaction: req.dbTransaction });
-  res.status(201).json({ data: machine });
+  // A serial number identifies one physical machine within a tenant. Reuse it
+  // for identical HTTP retries, but never rewrite a machine already referenced
+  // by operational work orders. Unnumbered machines have no safe natural key:
+  // two tractors with the same name may still be distinct equipment.
+  if (!req.body.serial_number) {
+    const machine = await Machinery.create(req.body, { transaction: req.dbTransaction });
+    return res.status(201).json({ data: machine });
+  }
+  const [machine, created] = await Machinery.findOrCreate({
+    where: { tenant_id: req.tenantId, serial_number: req.body.serial_number },
+    defaults: req.body,
+    transaction: req.dbTransaction
+  });
+  if (!created && (
+    machine.name !== req.body.name ||
+    machine.kind !== req.body.kind ||
+    (machine.brand ?? null) !== (req.body.brand ?? null) ||
+    (machine.model ?? null) !== (req.body.model ?? null) ||
+    machine.status !== req.body.status ||
+    !isDeepStrictEqual(machine.metadata, req.body.metadata)
+  )) {
+    throw new HttpError(409, 'Ya existe maquinaria con ese número de serie y otra configuración.',
+      undefined, 'ASSET_MACHINERY_CONFLICT');
+  }
+  res.status(created ? 201 : 200).json({ data: machine, replayed: !created });
 }));
 
 assetsRouter.get('/inputs', requireCapability('assets.read'), asyncHandler(async (req, res) => {
