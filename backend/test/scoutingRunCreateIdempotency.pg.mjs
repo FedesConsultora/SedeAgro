@@ -200,7 +200,7 @@ test('durable run key serializes requests, prevents changed replay and audit/not
       "UPDATE memberships SET status='blocked' WHERE tenant_id=$1 AND user_id=$2",
       [a, adminA.id]);
     const revoked = await send(adminA.token, a, body);
-    assert.equal(revoked.status, 403, JSON.stringify(revoked.body));
+    assert.equal(revoked.status, 401, JSON.stringify(revoked.body));
     await owner.query(
       "UPDATE memberships SET status='active' WHERE tenant_id=$1 AND user_id=$2",
       [a, adminA.id]);
