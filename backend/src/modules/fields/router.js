@@ -7,6 +7,7 @@ import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { grantedProducerIds } from '../farms/producerAccess.js';
 import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
+import { assertValidFieldBoundary, fieldBoundarySchema } from './fieldBoundaryPolicy.js';
 
 export const fieldsRouter = Router();
 
@@ -16,7 +17,7 @@ const fieldSchema = z.object({
   farm_id: z.string().uuid(),
   name: z.string().min(1).max(180),
   area_hectares: z.coerce.number().nonnegative().default(0),
-  boundary: z.any().optional(),
+  boundary: fieldBoundarySchema.nullable().optional(),
   status: z.enum(['active', 'inactive', 'archived']).default('active'),
   notes: z.string().optional()
 });
@@ -70,6 +71,8 @@ fieldsRouter.post('/', requireCapability('gis.write'), validate(fieldSchema), as
     throw new HttpError(404, 'Establecimiento no encontrado en esta empresa.',
       undefined, 'FIELD_FARM_NOT_FOUND');
   }
+  // Shape and topology are checked before PostGIS persists the geometry.
+  await assertValidFieldBoundary(req, farm.id, req.body.boundary);
   const field = await Field.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: field });
 }));
@@ -139,6 +142,9 @@ fieldsRouter.patch('/:id', requireCapability('gis.write'), validate(fieldSchema.
   if (Object.hasOwn(req.body, 'farm_id') && req.body.farm_id !== field.farm_id) {
     throw new HttpError(409, 'No se puede cambiar el establecimiento de un lote existente.',
       undefined, 'FIELD_FARM_IDENTITY_IMMUTABLE');
+  }
+  if (Object.hasOwn(req.body, 'boundary')) {
+    await assertValidFieldBoundary(req, field.farm_id, req.body.boundary);
   }
   await field.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: field });
