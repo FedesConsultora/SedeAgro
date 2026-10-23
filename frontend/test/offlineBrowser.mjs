@@ -169,6 +169,73 @@ try {
   await otherTab.close();
   console.log('PASS: Two Chromium tabs reject stale CAS write/delete while preserving encrypted draft');
 
+
+  // 0U.15: Count+insert must be serialized in one IDB readwrite
+  // transaction. Both independent tabs submit at the 99/100 boundary.
+  const quota = await page.evaluate(async () => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const { createPendingObservation } = await import('/src/services/offlineSyncModel.js');
+    const account = {
+      authenticated: true,
+      tenant: { id: '0c000000-0000-4000-8000-000000000001' },
+      user: { id: '0c000000-0000-4000-8000-000000000002' }
+    };
+    const make = (n) => {
+      let position = 0;
+      return createPendingObservation({
+        session: account, runId: '0c000000-0000-4000-8000-000000000003',
+        values: { observation_type: 'pest', severity: 'low',
+          notes: 'private quota test ' + String(n) },
+        uuid: () => '0c000000-0000-4000-8000-' +
+          String(n * 3 + ++position).padStart(12, '0'),
+        now: new Date('2026-10-14T12:00:00.000Z')
+      });
+    };
+    for (let n = 0; n < 99; n++) await indexedDbQueueStore.put(make(n));
+    return { scope: make(0).scope, first: make(99), second: make(100) };
+  });
+  const quotaTab = await context.newPage();
+  await quotaTab.goto('http://127.0.0.1:4173/');
+  const putCandidate = async (target, draft) => target.evaluate(async (row) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    try { return { accepted: await indexedDbQueueStore.put(row) === row.id }; }
+    catch (error) { return { accepted: false, error: error.message }; }
+  }, draft);
+  const raced = await Promise.all([
+    putCandidate(page, quota.first),
+    putCandidate(quotaTab, quota.second)
+  ]);
+  assert.equal(raced.filter(row => row.accepted).length, 1);
+  assert.equal(raced.filter(row => !row.accepted).length, 1);
+  assert.match(raced.find(row => !row.accepted).error, /límite de 100/);
+  await page.reload();
+  const quotaCheck = await page.evaluate(async ({ scope, first }) => {
+    const { indexedDbQueueStore } = await import('/src/services/offlineQueueStore.js');
+    const rows = await indexedDbQueueStore.list(scope);
+    const full = rows.length;
+    const current = await indexedDbQueueStore.get(rows[0].id);
+    const updated = await indexedDbQueueStore.put({
+      ...current, lastError: 'updated at 100 without adding row'
+    }, { expected: current });
+    const otherScope = '0c000000-0000-4000-8000-000000000009:' +
+      '0c000000-0000-4000-8000-000000000002';
+    const other = { ...first, scope: otherScope,
+      id: otherScope + ':' + first.idempotencyKey };
+    await indexedDbQueueStore.put(other);
+    const otherCount = (await indexedDbQueueStore.list(otherScope)).length;
+    return {
+      full, updated, otherCount,
+      afterUpdate: (await indexedDbQueueStore.list(scope)).length,
+      otherIsolated: (await indexedDbQueueStore.list(otherScope))[0].scope === otherScope
+    };
+  }, quota);
+  assert.deepEqual(quotaCheck, {
+    full: 100, updated: true, otherCount: 1,
+    afterUpdate: 100, otherIsolated: true
+  });
+  await quotaTab.close();
+  console.log('PASS: Two Chromium tabs enforce a 100-draft scoped cap atomically; CAS and other tenants unaffected');
+
   const storage = await page.evaluate(async () => {
     const { browserStorageStatus } = await import('/src/services/offlineStorageStatus.js');
     return browserStorageStatus();
