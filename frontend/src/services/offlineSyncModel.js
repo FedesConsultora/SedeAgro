@@ -20,7 +20,7 @@ export function sessionScope(session) {
 // applied to the expected scouting run. Require the server's full documented
 // response shape before removing a sealed IndexedDB draft or marking its
 // observation as applied. The server remains the authority for identity/RLS.
-const ACK_UUID = /^[a-f\\d]{8}-[a-f\\d]{4}-[1-8][a-f\\d]{3}-[89ab][a-f\\d]{3}-[a-f\\d]{12}$/i;
+const ACK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const validAckUuid = value => typeof value === 'string' && ACK_UUID.test(value);
 
 export function verifiedObservationBatchAck(reply, draft) {
