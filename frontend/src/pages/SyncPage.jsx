@@ -141,8 +141,13 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
           sendEvidence: (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence)
         });
       await Promise.all([loadData(), loadLocal()]);
+      const photoOnlyCount = Number.isSafeInteger(result.photoRecoveryRequired)
+        ? result.photoRecoveryRequired : 0;
       setNotice(result.skipped ? 'La cola ya está siendo procesada en otra pestaña.'
-        : `Envíos aplicados: ${result.sent}. Conflictos detectados: ${result.conflicts}.`);
+        : `Envíos aplicados: ${result.sent}. Conflictos detectados: ${result.conflicts}.` +
+          (photoOnlyCount > 0
+            ? ` ${photoOnlyCount} fotografía(s) requieren conciliación: no reenviamos sus observaciones. En «Conciliar observaciones», verificá el recibo personal y recuperá solo la foto.`
+            : ''));
     } catch (err) {
       setLocalError(err?.message || 'No se pudo procesar la cola.');
     } finally {
