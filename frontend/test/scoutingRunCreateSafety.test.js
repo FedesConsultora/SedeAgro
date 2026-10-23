@@ -69,6 +69,10 @@ test('optional assignment, schedule and summary require matching empty receipt',
   assert.equal(verifyCreatedScoutingRun(response, input, tenant), response.data);
   assert.throws(() => verifyCreatedScoutingRun(response,
     { ...input, assigned_to: assignee }, tenant), /no confirmó/i);
+  assert.throws(() => verifyCreatedScoutingRun({ data: { ...response.data,
+    scheduled_at: '2026-11-02T12:00:00.000Z' } }, input, tenant), /no confirmó/i);
+  assert.throws(() => verifyCreatedScoutingRun({ data: { ...response.data,
+    summary: 'Otro monitoreo' } }, input, tenant), /no confirmó/i);
 });
 
 test('double-tap gate remains blocked after confirmation and lost ACK', () => {
