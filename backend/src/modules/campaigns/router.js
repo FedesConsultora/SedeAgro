@@ -19,6 +19,26 @@ const campaignSchema = z.object({
   status: z.enum(['planned', 'active', 'closed', 'archived']).default('planned')
 });
 
+// PostgreSQL DATE CHECK is the final safeguard; reject bad periods at the
+// HTTP boundary so clients receive actionable 422 instead of a DB 500.
+// DATEONLY values from Sequelize are date strings, while Zod returns Date.
+function dateOrderValid(start, end) {
+  return start == null || end == null ||
+    new Date(end).getTime() >= new Date(start).getTime();
+}
+
+function assertChronology(start, end, field, description) {
+  if (!dateOrderValid(start, end)) {
+    throw new HttpError(422, description,
+      { fieldErrors: { [field]: [description] } }, 'VALIDATION_ERROR');
+  }
+}
+
+const campaignCreateSchema = campaignSchema.refine(
+  value => dateOrderValid(value.starts_at, value.ends_at),
+  { path: ['ends_at'], message: 'El fin de campaña debe ser igual o posterior al inicio.' }
+);
+
 const campaignFieldSchema = z.object({
   field_id: z.string().uuid(),
   crop_type_id: z.string().uuid(),
@@ -80,7 +100,7 @@ campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async
   res.json({ data: campaigns });
 }));
 
-campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignCreateSchema), asyncHandler(async (req, res) => {
   const campaign = await Campaign.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: campaign });
 }));
@@ -146,6 +166,14 @@ campaignsRouter.get('/:id', requireCapability('campaigns.read'), asyncHandler(as
 campaignsRouter.patch('/:id', requireCapability('campaigns.write'), validate(campaignSchema.partial()), asyncHandler(async (req, res) => {
   const campaign = await Campaign.findByPk(req.params.id, { transaction: req.dbTransaction });
   if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
+  // A partial PATCH can invalidate a valid persisted interval by moving just
+  // one endpoint. Compare the effective pair before any database write.
+  assertChronology(
+    req.body.starts_at ?? campaign.starts_at,
+    req.body.ends_at ?? campaign.ends_at,
+    'ends_at',
+    'El fin de campaña debe ser igual o posterior al inicio.'
+  );
   await campaign.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: campaign });
 }));
