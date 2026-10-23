@@ -8,6 +8,7 @@ import { requireCapability } from '../../infra/http/middlewares/requireCapabilit
 import { grantedProducerIds, isProducerViewer } from './producerAccess.js';
 import { assignedFarmIds, assignedFieldIds, isScout } from '../scouting/scoutFieldScope.js';
 import { farmCentroidSchema } from './farmCentroidPolicy.js';
+import { sameFarmCreation } from './farmCreateReplay.js';
 
 export const farmsRouter = Router();
 
@@ -96,8 +97,20 @@ farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyn
     if (!producer) throw new HttpError(404, 'Productor no encontrado en esta organización.',
       undefined, 'FARM_PRODUCER_NOT_FOUND');
   }
-  const farm = await Farm.create(req.body, { transaction: req.dbTransaction });
-  res.status(201).json({ data: farm });
+  // Farm names have tenant-local uniqueness. A lost HTTP 201 may be retried;
+  // use the same record for an identical payload, never create a new UUID or
+  // overwrite the producer/geography that controls historical visibility.
+  // findOrCreate uses a transaction savepoint for simultaneous requests.
+  const [farm, created] = await Farm.findOrCreate({
+    where: { tenant_id: req.tenantId, name: req.body.name },
+    defaults: req.body,
+    transaction: req.dbTransaction
+  });
+  if (!created && !sameFarmCreation(farm, req.body)) {
+    throw new HttpError(409, 'El establecimiento ya existe con otra configuración.',
+      undefined, 'FARM_CREATE_CONFLICT');
+  }
+  res.status(created ? 201 : 200).json({ data: farm, replayed: !created });
 }));
 
 farmsRouter.get('/:id', requireCapability('gis.read'), asyncHandler(async (req, res) => {
