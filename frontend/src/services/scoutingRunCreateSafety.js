@@ -17,10 +17,11 @@ export function scoutingRunCreateScope(session, dataMode) {
 
 export function verifyCreatedScoutingRun(response, requested, tenantId) {
   const run = response?.data;
-  const matchesSchedule = !requested?.scheduled_at ||
-    (typeof run?.scheduled_at === 'string' &&
-      Number.isFinite(Date.parse(run.scheduled_at)) &&
-      Date.parse(run.scheduled_at) === Date.parse(requested.scheduled_at));
+  const matchesSchedule = requested?.scheduled_at
+    ? (typeof run?.scheduled_at === 'string' &&
+        Number.isFinite(Date.parse(run.scheduled_at)) &&
+        Date.parse(run.scheduled_at) === Date.parse(requested.scheduled_at))
+    : run?.scheduled_at == null;
   if (!run || typeof run !== 'object' || Array.isArray(run) ||
       typeof run.id !== 'string' || !UUID.test(run.id) ||
       !tenantId || run.tenant_id !== tenantId ||
@@ -28,7 +29,7 @@ export function verifyCreatedScoutingRun(response, requested, tenantId) {
       (run.assigned_to ?? null) !== (requested.assigned_to ?? null) ||
       run.status !== requested.status ||
       !matchesSchedule ||
-      (requested.summary !== undefined && run.summary !== requested.summary)) {
+      (requested.summary === undefined ? run.summary != null : run.summary !== requested.summary)) {
     throw new Error('El servidor no confirmó la recorrida solicitada. Revisá Recorridas antes de crear otra.');
   }
   return run;
