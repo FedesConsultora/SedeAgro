@@ -1,15 +1,19 @@
-name: Offline photo receipt integrity
+name: Offline observation and photo receipt integrity
 
 on:
   pull_request:
     paths:
       - "frontend/src/services/offlineQueue.js"
+      - "frontend/src/services/offlineSyncModel.js"
+      - "frontend/test/offlineBatchAck.test.js"
       - "frontend/test/offlineEvidence.test.js"
       - ".github/workflows/offline-photo-ack.yml"
   push:
     branches: [main]
     paths:
       - "frontend/src/services/offlineQueue.js"
+      - "frontend/src/services/offlineSyncModel.js"
+      - "frontend/test/offlineBatchAck.test.js"
       - "frontend/test/offlineEvidence.test.js"
       - ".github/workflows/offline-photo-ack.yml"
 
@@ -38,10 +42,14 @@ jobs:
       - name: Validate syntax
         run: |
           node --check frontend/src/services/offlineQueue.js
+          node --check frontend/src/services/offlineSyncModel.js
+          node --check frontend/test/offlineBatchAck.test.js
           node --check frontend/test/offlineEvidence.test.js
-      - name: Verify photo ACK and idempotent offline regressions
+      - name: Verify observation/photo ACK bindings and offline regressions
         run: |
           node --test \
+            frontend/test/offlineBatchAck.test.js \
+            frontend/test/offlineCas.test.js \
             frontend/test/offlineEvidence.test.js \
             frontend/test/photoRecovery.test.js \
             frontend/test/offlineQueue.test.js \

@@ -1,6 +1,7 @@
 import {
   classifySyncError, createPendingObservation, isEligibleForAutoRetry,
-  MAX_PENDING_BATCHES, QUEUE_EVENT, retryDelayMs, sessionScope
+  MAX_PENDING_BATCHES, QUEUE_EVENT, retryDelayMs, sessionScope,
+  verifiedObservationBatchAck
 } from './offlineSyncModel.js';
 import { indexedDbQueueStore } from './offlineQueueStore.js';
 import { reconcileOfflineDraft } from './offlineReconciliation.js';
@@ -247,18 +248,8 @@ export function createOfflineQueue({
             const receipt = await send(item.body);
             // An unexpected empty or non-applied response is ambiguous. Preserve
             // the immutable batch for an idempotent retry rather than losing it.
-            if (receipt?.data?.status !== 'processed' ||
-                receipt?.data?.idempotency_key !== item.idempotencyKey ||
-                receipt?.data?.operations?.length !== item.body.operations.length ||
-                !receipt.data.operations.every((op, index) =>
-                  op.status === 'applied' &&
-                  op.entity_client_id === item.body.operations[index].entity_client_id &&
-                  typeof op.result?.observation_id === 'string')) {
-              throw new Error('La confirmación de sincronización no fue completa.');
-            }
+            const observationId = verifiedObservationBatchAck(receipt, item);
             if (item.evidence) {
-              const operation = receipt.data.operations[0];
-              const observationId = operation.result.observation_id;
               // The observation may have reached PostgreSQL before a disconnect.
               // Persist that partial success so the user can distinguish a
               // photo conflict from an entirely unsent observation.

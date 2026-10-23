@@ -33,11 +33,17 @@ function pending(runId = RUN_A, photo = false) {
   });
 }
 function ack(body) {
-  return { data: {
+  return { replayed: false, data: {
+    id: '2844c701-fc1f-4354-93a1-30aad645663e',
+    client_id: body.client_id,
     status: 'processed', idempotency_key: body.idempotency_key,
     operations: body.operations.map(op => ({
       entity_client_id: op.entity_client_id, status: 'applied',
-      result: { observation_id: OBS }
+      result: {
+        observation_id: OBS,
+        scouting_run_id: op.payload.scouting_run_id,
+        field_id: TENANT
+      }
     }))
   } };
 }

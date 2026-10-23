@@ -15,9 +15,13 @@ const session={token:'test',tenant:{id:TENANT},user:{id:USER}};
 const values={notes:'Private crop photo notes',observation_type:'pest',severity:'high'};
 const photo={original_name:'field.png',mime_type:'image/png',content_base64:IMAGE};
 const uuid=(()=>{let n=0;return ()=>`00000000-0000-4000-8000-${String(++n).padStart(12,'0')}`;})();
-const reply=(body)=>({data:{status:'processed',idempotency_key:body.idempotency_key,
+const reply=(body)=>({replayed:false,data:{
+  id:'0baf2acb-1dd0-4435-94cf-b22b0350d35e',
+  client_id:body.client_id,
+  status:'processed',idempotency_key:body.idempotency_key,
   operations:body.operations.map(op=>({entity_client_id:op.entity_client_id,status:'applied',
-    result:{observation_id:OBS}}))}});
+    result:{observation_id:OBS,scouting_run_id:op.payload.scouting_run_id,field_id:TENANT}}))
+}});
 const uploaded=(id,payload)=>({data:{
   id:'c1540167-5bcb-46f0-84ce-3e83245de72f',
   scouting_observation_id:id,
