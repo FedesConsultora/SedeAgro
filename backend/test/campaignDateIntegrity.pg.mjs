@@ -152,13 +152,13 @@ test('campaign and field date ranges remain chronologically valid across partial
     assert.equal(validPatch.status,200,JSON.stringify(validPatch.json));
 
     const campaigns=(await admin.query(
-      'SELECT id,starts_at,ends_at FROM campaigns WHERE tenant_id=$1',[tenantA])).rows;
+      'SELECT id,to_char(starts_at,'YYYY-MM-DD') AS starts_at,to_char(ends_at,'YYYY-MM-DD') AS ends_at FROM campaigns WHERE tenant_id=$1',[tenantA])).rows;
     assert.equal(campaigns.length,1);
     assert.equal(campaigns[0].id,campaignId);
     assert.equal(String(campaigns[0].starts_at).slice(0,10),'2026-10-01');
     assert.equal(String(campaigns[0].ends_at).slice(0,10),'2026-12-01');
     const fields=(await admin.query(
-      'SELECT id,planting_date,harvest_target_date FROM campaign_fields WHERE tenant_id=$1',
+      'SELECT id,to_char(planting_date,'YYYY-MM-DD') AS planting_date,to_char(harvest_target_date,'YYYY-MM-DD') AS harvest_target_date FROM campaign_fields WHERE tenant_id=$1',
       [tenantA])).rows;
     assert.equal(fields.length,1);
     assert.equal(fields[0].id,cfId);
