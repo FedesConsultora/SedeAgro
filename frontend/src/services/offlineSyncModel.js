@@ -16,6 +16,44 @@ export function sessionScope(session) {
   return `${tenantId}:${userId}`;
 }
 
+// A transport-level 2xx is not proof that this actor's immutable batch
+// applied to the expected scouting run. Require the server's full documented
+// response shape before removing a sealed IndexedDB draft or marking its
+// observation as applied. The server remains the authority for identity/RLS.
+const ACK_UUID = /^[a-f\\d]{8}-[a-f\\d]{4}-[1-8][a-f\\d]{3}-[89ab][a-f\\d]{3}-[a-f\\d]{12}$/i;
+const validAckUuid = value => typeof value === 'string' && ACK_UUID.test(value);
+
+export function verifiedObservationBatchAck(reply, draft) {
+  const response = reply?.data;
+  const body = draft?.body;
+  const operation = body?.operations?.[0];
+  const applied = response?.operations?.[0];
+  const result = applied?.result;
+  if (!body || !operation ||
+      !Array.isArray(body.operations) || body.operations.length !== 1 ||
+      operation.entity_type !== 'scouting_observation' ||
+      operation.operation !== 'create' ||
+      operation.payload?.scouting_run_id !== draft?.runId ||
+      !validAckUuid(draft?.runId) ||
+      !validAckUuid(draft?.idempotencyKey) ||
+      !validAckUuid(operation.entity_client_id) ||
+      body.idempotency_key !== draft.idempotencyKey ||
+      !validAckUuid(response?.id) ||
+      response.client_id !== body.client_id ||
+      response.idempotency_key !== draft.idempotencyKey ||
+      response.status !== 'processed' ||
+      !Array.isArray(response.operations) || response.operations.length !== 1 ||
+      applied.entity_client_id !== operation.entity_client_id ||
+      applied.status !== 'applied' ||
+      !validAckUuid(result?.observation_id) ||
+      result.scouting_run_id !== draft.runId ||
+      !validAckUuid(result?.field_id) ||
+      typeof reply.replayed !== 'boolean') {
+    throw new Error('El recibo del servidor no confirmó la observación exacta. La copia local se conserva.');
+  }
+  return result.observation_id;
+}
+
 export function createPendingObservation({ session, runId, values, uuid, now = new Date() }) {
   const scope = sessionScope(session);
   if (!scope) throw new Error('Iniciá sesión en la empresa correspondiente antes de guardar.');
