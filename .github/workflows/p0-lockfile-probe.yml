@@ -1,0 +1,48 @@
+name: Temporary P0 dependency lock regeneration probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/p0-lockfile-probe.yml'
+      - 'backend/package.json'
+      - 'backend/package-lock.json'
+      - 'package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  lock-regeneration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate registry locks without committing
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          npm install zod@4.6.6 --workspace backend --save-exact --package-lock-only --ignore-scripts --no-fund --no-audit
+          npm update body-parser --workspace backend --package-lock-only --ignore-scripts --no-fund --no-audit
+          npm install --prefix backend zod@4.6.6 --save-exact --package-lock-only --ignore-scripts --no-fund --no-audit --workspaces=false
+          npm update --prefix backend body-parser --package-lock-only --ignore-scripts --no-fund --no-audit --workspaces=false
+          npm ls body-parser zod --workspace backend --package-lock-only || true
+      - name: Export nonsecret locks in bounded log chunks
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const files = ['backend/package.json', 'backend/package-lock.json', 'package-lock.json'];
+          for (const path of files) {
+            const content = readFileSync(path, 'utf8');
+            const length = 1200;
+            for (let index = 0; index < content.length; index += length) {
+              console.log('SAFE_LOCK_CHUNK ' + JSON.stringify({
+                path, index, total: content.length, content: content.slice(index, index + length)
+              }));
+            }
+            console.log('SAFE_LOCK_END ' + JSON.stringify({ path, total: content.length }));
+          }
+          NODE
