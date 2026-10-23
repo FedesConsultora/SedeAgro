@@ -183,3 +183,74 @@ test('bad photo receipt retains retryable original and a later exact replay is a
   assert.equal(rows.size,0);
   assert.equal(seen,2);
 });
+
+test('global flush never resends an observation whose photo alone lacks ACK',async()=>{
+  const {queue,rows}=harness();
+  const draft=await queue.queueObservation(session,RUN,{...values,photo});
+  const first=await queue.flush(session,async body=>reply(body),{
+    sendEvidence:async()=>{throw new TypeError('photo ACK lost');}
+  });
+  assert.equal(first.sent,0);
+  const waiting=structuredClone(rows.get(draft.id));
+  assert.equal(waiting.syncedObservationId,OBS);
+  assert.equal(waiting.state,'pending');
+  let batches=0,uploads=0;
+  const second=await queue.flush(session,async()=>{
+    batches++; throw Error('must not replay an applied observation batch');
+  },{
+    force:true,sendEvidence:async()=>{uploads++;throw Error('requires fresh personal receipt');}
+  });
+  assert.equal(second.attempted,0);
+  assert.equal(second.sent,0);
+  assert.equal(second.photoRecoveryRequired,1);
+  assert.equal(batches,0);
+  assert.equal(uploads,0);
+  assert.deepEqual(rows.get(draft.id),waiting);
+});
+
+test('global flush sends other new observations without replaying a photo-only draft',async()=>{
+  const {queue,rows}=harness();
+  const first=await queue.queueObservation(session,RUN,{...values,photo});
+  await queue.flush(session,async body=>reply(body),{
+    sendEvidence:async()=>{throw Object.assign(new Error('Photo gateway unavailable'),{status:503});}
+  });
+  const partial=structuredClone(rows.get(first.id));
+  assert.equal(partial.syncedObservationId,OBS);
+  const other=await queue.queueObservation(session,RUN,values);
+  const batches=[];
+  const summary=await queue.flush(session,async body=>{
+    batches.push(body.idempotency_key);
+    return reply(body);
+  },{force:true,sendEvidence:async()=>{throw Error('photo must require receipt');}});
+  assert.deepEqual(batches,[other.idempotencyKey]);
+  assert.equal(summary.attempted,1);
+  assert.equal(summary.sent,1);
+  assert.equal(summary.photoRecoveryRequired,1);
+  assert.deepEqual(rows.get(first.id),partial);
+  assert.equal(rows.has(other.id),false);
+});
+
+test('freshly reread photo-only draft blocks a stale queue-list snapshot before network',async()=>{
+  const saved=createPendingObservation({
+    session,runId:RUN,values:{...values,photo},
+    uuid:(()=>{let n=0;return()=>`00000000-0000-4000-8000-${String(++n).padStart(12,'0')}`;})(),
+    now:new Date('2026-10-14T16:00:00Z')
+  });
+  const latest={...saved,syncedObservationId:OBS};
+  const records=new Map([[saved.id,structuredClone(latest)]]);
+  const queue=createOfflineQueue({
+    store:{
+      list:async()=>[structuredClone(saved)],
+      get:async id=>structuredClone(records.get(id)),
+      put:async()=>{throw Error('must not mutate recovery-only draft');},
+      delete:async()=>{throw Error('must not delete recovery-only draft');}
+    },isOnline:()=>true
+  });
+  let network=0;
+  const result=await queue.flush(session,async()=>{network++;throw Error('must not post');},
+    {force:true,sendEvidence:async()=>{network++;throw Error('must not upload');}});
+  assert.equal(result.attempted,0);
+  assert.equal(result.photoRecoveryRequired,1);
+  assert.equal(network,0);
+  assert.deepEqual(records.get(saved.id),latest);
+});
