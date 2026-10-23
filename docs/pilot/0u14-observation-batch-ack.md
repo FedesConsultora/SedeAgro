@@ -1,4 +1,4 @@
-# 0U.13 — Recibo de observación completo antes de retirar borrador offline
+# 0U.14 — Recibo de observación completo antes de retirar borrador offline
 
 ## Brecha del contrato frontend
 
