@@ -11,7 +11,8 @@ export function workOrderCreateScope(session, dataMode) {
     ? sessionScope(session) : null;
   const role = session?.membership?.roleCode;
   if (!principal || !CREATE_ROLES.has(role) ||
-      !session?.entitlements?.includes('work_orders')) return null;
+      !Array.isArray(session?.entitlements) ||
+      !session.entitlements.includes('work_orders')) return null;
   return JSON.stringify([principal, role,
     [...new Set(session.entitlements.filter(value => typeof value === 'string'))].sort()]);
 }
