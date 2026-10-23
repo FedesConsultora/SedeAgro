@@ -32,11 +32,16 @@ export function withinValidationBudget(root) {
     // programmatically injected graphs instead of processing indefinitely.
     if (seen.has(node)) return false;
     seen.add(node);
-    const keys = Array.isArray(node) ? null : Object.keys(node);
-    const children = Array.isArray(node) ? node : keys.map(key => node[key]);
-    // Include queued nodes in the limit before allocating any large stack.
-    if (counted + pending.length + children.length > MAX_VALIDATION_NODES) return false;
-    for (const child of children) pending.push(child);
+    const isArray = Array.isArray(node);
+    const keys = isArray ? null : Object.keys(node);
+    const length = isArray ? node.length : keys.length;
+    // Include queued nodes in the limit before pushing child nodes.
+    if (counted + pending.length + length > MAX_VALIDATION_NODES) return false;
+    if (isArray) {
+      for (const child of node) pending.push(child);
+    } else {
+      for (const key of keys) pending.push(node[key]);
+    }
   }
   return true;
 }
