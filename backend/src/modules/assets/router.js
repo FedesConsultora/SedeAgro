@@ -74,6 +74,23 @@ assetsRouter.get('/inputs', requireCapability('assets.read'), asyncHandler(async
 }));
 
 assetsRouter.post('/inputs', requireCapability('assets.write'), validate(inputSchema), asyncHandler(async (req, res) => {
-  const input = await AgriculturalInput.create(req.body, { transaction: req.dbTransaction });
-  res.status(201).json({ data: input });
+  // UNIQUE(tenant_id,name) is an existing catalog identity. A changed unit,
+  // formulation, registration or metadata is not an idempotent retry: it could
+  // reinterpret doses in work orders already using the original input ID.
+  const [input, created] = await AgriculturalInput.findOrCreate({
+    where: { tenant_id: req.tenantId, name: req.body.name },
+    defaults: req.body,
+    transaction: req.dbTransaction
+  });
+  if (!created && (
+    input.category !== req.body.category ||
+    input.unit !== req.body.unit ||
+    (input.active_ingredient ?? null) !== (req.body.active_ingredient ?? null) ||
+    (input.registration_number ?? null) !== (req.body.registration_number ?? null) ||
+    !isDeepStrictEqual(input.metadata, req.body.metadata)
+  )) {
+    throw new HttpError(409, 'El insumo ya existe con otra unidad, categoría o formulación.',
+      undefined, 'ASSET_INPUT_CONFLICT');
+  }
+  res.status(created ? 201 : 200).json({ data: input, replayed: !created });
 }));
