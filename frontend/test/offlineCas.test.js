@@ -28,9 +28,13 @@ function draft(photo = false) {
   });
 }
 function serverAck(body) {
-  return { data: { status: 'processed', idempotency_key: body.idempotency_key,
+  return { replayed: false, data: {
+    id: '8b3c48d1-f43a-4c20-9dc7-28164f16a0a6',
+    client_id: body.client_id,
+    status: 'processed', idempotency_key: body.idempotency_key,
     operations: [{ status: 'applied', entity_client_id: body.operations[0].entity_client_id,
-      result: { observation_id: OBS, scouting_run_id: RUN } }] } };
+      result: { observation_id: OBS, scouting_run_id: RUN, field_id: TENANT } }]
+  } };
 }
 function receipt(d) {
   return { id: '8b3c48d1-f43a-4c20-9dc7-28164f16a0a6', submitted_by: ACTOR,
