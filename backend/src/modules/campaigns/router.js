@@ -49,6 +49,12 @@ const campaignFieldSchema = z.object({
   status: z.enum(['planned', 'active', 'harvested', 'closed']).default('planned')
 });
 
+const campaignFieldCreateSchema = campaignFieldSchema.refine(
+  value => dateOrderValid(value.planting_date, value.harvest_target_date),
+  { path: ['harvest_target_date'],
+    message: 'La cosecha objetivo no puede ser anterior a la siembra.' }
+);
+
 // Both columns have valid independent FKs, but those FKs do not prove that the
 // selected variety actually belongs to the selected crop. The global catalogs
 // are read-only through the tenant API; validate the pair in the same request
@@ -105,7 +111,7 @@ campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaig
   res.status(201).json({ data: campaign });
 }));
 
-campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldCreateSchema), asyncHandler(async (req, res) => {
   const [campaign, field] = await Promise.all([
     Campaign.findOne({
       where: { id: req.params.campaignId, tenant_id: req.tenantId },
@@ -202,6 +208,14 @@ campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.
       : cf.crop_variety_id;
     await assertCropVarietyForCampaign(req, effectiveTypeId, effectiveVarietyId);
   }
+  // Check the effective dates even when PATCH changes only one endpoint.
+  // A trusted DB CHECK remains in place for concurrent or direct SQL writes.
+  assertChronology(
+    req.body.planting_date ?? cf.planting_date,
+    req.body.harvest_target_date ?? cf.harvest_target_date,
+    'harvest_target_date',
+    'La cosecha objetivo no puede ser anterior a la siembra.'
+  );
   await cf.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: cf });
 }));
