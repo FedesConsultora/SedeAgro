@@ -7,6 +7,7 @@ import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { grantedProducerIds, isProducerViewer } from './producerAccess.js';
 import { assignedFarmIds, assignedFieldIds, isScout } from '../scouting/scoutFieldScope.js';
+import { farmCentroidSchema } from './farmCentroidPolicy.js';
 
 export const farmsRouter = Router();
 
@@ -30,7 +31,7 @@ const farmSchema = z.object({
   locality: z.string().max(140).optional(),
   province: z.string().max(140).optional(),
   country: z.string().max(80).default('Argentina'),
-  centroid: z.any().optional(),
+  centroid: farmCentroidSchema.nullable().optional(),
   notes: z.string().optional()
 });
 
@@ -84,6 +85,17 @@ farmsRouter.get('/', requireCapability('gis.read'), asyncHandler(async (req, res
 }));
 
 farmsRouter.post('/', requireCapability('gis.write'), validate(farmSchema), asyncHandler(async (req, res) => {
+  // The composite FK is the final tenant boundary; reject unknown and foreign
+  // producer IDs before INSERT with the same scoped 404 used by the PATCH path.
+  if (req.body.producer_id) {
+    const producer = await Producer.findOne({
+      where: { id: req.body.producer_id, tenant_id: req.tenantId },
+      attributes: ['id'],
+      transaction: req.dbTransaction
+    });
+    if (!producer) throw new HttpError(404, 'Productor no encontrado en esta organización.',
+      undefined, 'FARM_PRODUCER_NOT_FOUND');
+  }
   const farm = await Farm.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: farm });
 }));
