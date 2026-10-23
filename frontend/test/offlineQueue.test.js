@@ -42,13 +42,19 @@ function harness() {
   };
 }
 const receipt = (item) => ({
+  replayed: false,
   data: {
     id: '7b76a312-a801-4140-beb6-1e68b02e3ee0',
+    client_id: item.client_id,
     idempotency_key: item.idempotency_key,
     status: 'processed',
     operations: item.operations.map((operation) => ({
       entity_client_id: operation.entity_client_id, status: 'applied',
-      result: { observation_id: '528676ab-aac7-4735-9ffd-20db5b22c0cf' }
+      result: {
+        observation_id: '528676ab-aac7-4735-9ffd-20db5b22c0cf',
+        scouting_run_id: operation.payload.scouting_run_id,
+        field_id: T1
+      }
     }))
   }
 });
