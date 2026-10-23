@@ -19,6 +19,26 @@ const campaignSchema = z.object({
   status: z.enum(['planned', 'active', 'closed', 'archived']).default('planned')
 });
 
+// PostgreSQL DATE CHECK is the final safeguard; reject bad periods at the
+// HTTP boundary so clients receive actionable 422 instead of a DB 500.
+// DATEONLY values from Sequelize are date strings, while Zod returns Date.
+function dateOrderValid(start, end) {
+  return start == null || end == null ||
+    new Date(end).getTime() >= new Date(start).getTime();
+}
+
+function assertChronology(start, end, field, description) {
+  if (!dateOrderValid(start, end)) {
+    throw new HttpError(422, description,
+      { fieldErrors: { [field]: [description] } }, 'VALIDATION_ERROR');
+  }
+}
+
+const campaignCreateSchema = campaignSchema.refine(
+  value => dateOrderValid(value.starts_at, value.ends_at),
+  { path: ['ends_at'], message: 'El fin de campaña debe ser igual o posterior al inicio.' }
+);
+
 const campaignFieldSchema = z.object({
   field_id: z.string().uuid(),
   crop_type_id: z.string().uuid(),
@@ -28,6 +48,12 @@ const campaignFieldSchema = z.object({
   expected_yield: z.coerce.number().nonnegative().optional(),
   status: z.enum(['planned', 'active', 'harvested', 'closed']).default('planned')
 });
+
+const campaignFieldCreateSchema = campaignFieldSchema.refine(
+  value => dateOrderValid(value.planting_date, value.harvest_target_date),
+  { path: ['harvest_target_date'],
+    message: 'La cosecha objetivo no puede ser anterior a la siembra.' }
+);
 
 // Both columns have valid independent FKs, but those FKs do not prove that the
 // selected variety actually belongs to the selected crop. The global catalogs
@@ -80,12 +106,12 @@ campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async
   res.json({ data: campaigns });
 }));
 
-campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignCreateSchema), asyncHandler(async (req, res) => {
   const campaign = await Campaign.create(req.body, { transaction: req.dbTransaction });
   res.status(201).json({ data: campaign });
 }));
 
-campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldSchema), asyncHandler(async (req, res) => {
+campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldCreateSchema), asyncHandler(async (req, res) => {
   const [campaign, field] = await Promise.all([
     Campaign.findOne({
       where: { id: req.params.campaignId, tenant_id: req.tenantId },
@@ -146,6 +172,14 @@ campaignsRouter.get('/:id', requireCapability('campaigns.read'), asyncHandler(as
 campaignsRouter.patch('/:id', requireCapability('campaigns.write'), validate(campaignSchema.partial()), asyncHandler(async (req, res) => {
   const campaign = await Campaign.findByPk(req.params.id, { transaction: req.dbTransaction });
   if (!campaign) return res.status(404).json({ error: { message: 'Campaña no encontrada.' } });
+  // A partial PATCH can invalidate a valid persisted interval by moving just
+  // one endpoint. Compare the effective pair before any database write.
+  assertChronology(
+    req.body.starts_at ?? campaign.starts_at,
+    req.body.ends_at ?? campaign.ends_at,
+    'ends_at',
+    'El fin de campaña debe ser igual o posterior al inicio.'
+  );
   await campaign.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: campaign });
 }));
@@ -174,6 +208,14 @@ campaignsRouter.patch('/:campaignId/fields/:cfId', requireCapability('campaigns.
       : cf.crop_variety_id;
     await assertCropVarietyForCampaign(req, effectiveTypeId, effectiveVarietyId);
   }
+  // Check the effective dates even when PATCH changes only one endpoint.
+  // A trusted DB CHECK remains in place for concurrent or direct SQL writes.
+  assertChronology(
+    req.body.planting_date ?? cf.planting_date,
+    req.body.harvest_target_date ?? cf.harvest_target_date,
+    'harvest_target_date',
+    'La cosecha objetivo no puede ser anterior a la siembra.'
+  );
   await cf.update(req.body, { transaction: req.dbTransaction });
   res.json({ data: cf });
 }));
