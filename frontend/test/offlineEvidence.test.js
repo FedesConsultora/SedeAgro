@@ -18,8 +18,16 @@ const uuid=(()=>{let n=0;return ()=>`00000000-0000-4000-8000-${String(++n).padSt
 const reply=(body)=>({data:{status:'processed',idempotency_key:body.idempotency_key,
   operations:body.operations.map(op=>({entity_client_id:op.entity_client_id,status:'applied',
     result:{observation_id:OBS}}))}});
-const uploaded=(id,payload)=>({data:{scouting_observation_id:id,
-  client_upload_id:payload.client_upload_id,size_bytes:12,id:'c1540167-5bcb-46f0-84ce-3e83245de72f'}});
+const uploaded=(id,payload)=>({data:{
+  id:'c1540167-5bcb-46f0-84ce-3e83245de72f',
+  scouting_observation_id:id,
+  uploaded_by:USER,
+  client_upload_id:payload.client_upload_id,
+  kind:payload.kind,
+  mime_type:payload.mime_type,
+  original_name:payload.original_name,
+  size_bytes:12
+}});
 
 function harness() {
   const rows=new Map();
@@ -109,4 +117,69 @@ test('invalid photo receipt cannot discard the encrypted upload and the retry st
   const [item]=await queue.list(session);
   assert.equal(item.state,'pending');
   assert.ok(item.syncedObservationId);
+});
+
+test('auto photo ACK must bind asset identity, user, MIME, name and exact size before deleting draft',async()=>{
+  // A server 200 alone cannot prove that the photo persisted belongs to this
+  // scout/observation. The test uses the real flush path, not a mock validator.
+  const attacks=[
+    ['missing asset UUID',out=>{delete out.data.id;}],
+    ['invalid asset UUID',out=>{out.data.id='not-an-id';}],
+    ['wrong uploader',out=>{out.data.uploaded_by=TENANT;}],
+    ['missing uploader',out=>{delete out.data.uploaded_by;}],
+    ['wrong kind',out=>{out.data.kind='document';}],
+    ['wrong MIME',out=>{out.data.mime_type='image/jpeg';}],
+    ['wrong original name',out=>{out.data.original_name='other.png';}],
+    ['wrong byte count',out=>{out.data.size_bytes=1;}],
+    ['noninteger byte count',out=>{out.data.size_bytes='12';}],
+    ['wrong observation',out=>{out.data.scouting_observation_id=TENANT;}],
+    ['wrong stable upload id',out=>{out.data.client_upload_id=OBS;}]
+  ];
+  for(const [label,mutate] of attacks){
+    const {queue,rows}=harness();
+    const draft=await queue.queueObservation(session,RUN,{...values,photo});
+    const original=structuredClone(draft.evidence);
+    const result=await queue.flush(session,async body=>reply(body),{
+      sendEvidence:async(id,payload)=>{
+        const out=uploaded(id,payload);
+        mutate(out);
+        return out;
+      }
+    });
+    assert.equal(result.attempted,1,label);
+    assert.equal(result.sent,0,label);
+    assert.equal(rows.size,1,label);
+    const [retained]=await queue.list(session);
+    assert.equal(retained.state,'pending',label);
+    assert.equal(retained.syncedObservationId,OBS,label);
+    assert.equal(retained.attempts,1,label);
+    assert.deepEqual(retained.evidence,original,label);
+    assert.equal(retained.idempotencyKey,draft.idempotencyKey,label);
+  }
+});
+
+test('bad photo receipt retains retryable original and a later exact replay is acknowledged',async()=>{
+  const {queue,rows}=harness();
+  const draft=await queue.queueObservation(session,RUN,{...values,photo});
+  let seen=0;
+  const sender=async(id,payload)=>{
+    seen++;
+    const out=uploaded(id,payload);
+    if(seen===1)out.data.original_name='wrong-name.png';
+    else out.replayed=true;
+    return out;
+  };
+  const first=await queue.flush(session,async body=>reply(body),{sendEvidence:sender});
+  assert.equal(first.sent,0);
+  assert.equal(rows.size,1);
+  const pending=(await queue.list(session))[0];
+  assert.equal(pending.evidence.client_upload_id,draft.evidence.client_upload_id);
+  assert.equal(pending.state,'pending');
+  await queue.allowRetry(session,draft.id);
+  const second=await queue.flush(session,async body=>reply(body),{
+    force:true,sendEvidence:sender
+  });
+  assert.equal(second.sent,1);
+  assert.equal(rows.size,0);
+  assert.equal(seen,2);
 });
