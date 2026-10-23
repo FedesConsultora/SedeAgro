@@ -1,6 +1,7 @@
 import {
   generateLocalKey, isSealedRecord, openOfflineDraft, sealOfflineDraft
 } from './offlineDraftCrypto.js';
+import { MAX_PENDING_BATCHES } from './offlineSyncModel.js';
 
 const DB_NAME = 'sedeagro-offline-sync';
 const DB_VERSION = 2;
@@ -188,10 +189,25 @@ export const indexedDbQueueStore = Object.freeze({
       const revision = expected ? checkedExpected(expected, item.id) : null;
       const encrypted = await sealOfflineDraft(item, key);
       if (!expected) {
-        // UUID insertion must not overwrite an existing local record.
-        await transact([STORE], 'readwrite', tx => {
-          tx.objectStore(STORE).add(encrypted);
+        // Enforce the per-actor limit in the SAME write transaction as add.
+        // The queue's earlier list() is only a UI preflight: two tabs could
+        // both see 99 rows. IDB serializes readwrite transactions on STORE,
+        // so only one of their inserts can commit at the 100-row boundary.
+        const inserted = await transact([STORE], 'readwrite', (tx, setValue) => {
+          const rows = tx.objectStore(STORE);
+          const count = rows.index('scope').count(IDBKeyRange.only(item.scope));
+          count.onsuccess = () => {
+            if (count.result >= MAX_PENDING_BATCHES) {
+              setValue(false); // No mutation, commit cleanly, report refusal.
+              return;
+            }
+            rows.add(encrypted); // Fails atomically on duplicate UUID.
+            setValue(true);
+          };
         });
+        if (!inserted) {
+          throw new Error(`La cola local llegó al límite de ${MAX_PENDING_BATCHES} observaciones.`);
+        }
         return item.id;
       }
       const saved = await compareAndWrite(item.id, revision, store => store.put(encrypted));
