@@ -202,6 +202,15 @@ export function createOfflineQueue({
             // receipt and an independent photo-only ACK, not another batch.
             return { ...summary, photoRecoveryRequired: true };
           }
+          if (!single && saved.evidence && saved.syncedObservationId) {
+            // A photo failure must not trigger another observation POST on
+            // automatic or force-all retry. Manual recovery requires a fresh
+            // actor-scoped /sync/my-batches receipt before photo-only upload.
+            if (saved.state === 'pending') {
+              summary.photoRecoveryRequired = (summary.photoRecoveryRequired || 0) + 1;
+            }
+            continue;
+          }
           if (saved.state !== 'pending' && !(
             single && manualReview && ['auth', 'conflict'].includes(saved.state))) continue;
           if (!single && !force && !isEligibleForAutoRetry(saved, now().getTime())) continue;
@@ -219,6 +228,14 @@ export function createOfflineQueue({
           }
           if (single && item.evidence && item.syncedObservationId) {
             return { ...summary, photoRecoveryRequired: true };
+          }
+          if (!single && item.evidence && item.syncedObservationId) {
+            // Recheck the latest persisted draft: another tab may have
+            // recorded partial success after the initial queue listing.
+            if (item.state === 'pending') {
+              summary.photoRecoveryRequired = (summary.photoRecoveryRequired || 0) + 1;
+            }
+            continue;
           }
           if (item.state !== 'pending' && !(
             single && manualReview && ['auth', 'conflict'].includes(item.state))) continue;
