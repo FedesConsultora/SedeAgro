@@ -8,7 +8,10 @@ const orders = read('workOrders/router.js');
 const publisher = read('notifications/assignmentNotifications.js');
 
 test('scouting creation and locked reassignment emit only when a real user is assigned', () => {
-  assert.match(scouting, /ScoutingRun\.create\(req\.body, \{ transaction: req\.dbTransaction \}\);[\s\S]*?shouldNotifyRunAssignment\(null, run\.assigned_to\)/);
+  const create = scouting.split("scoutingRouter.post('/runs',")[1]
+    .split("scoutingRouter.get('/runs/:id/audit'")[0];
+  assert.match(create, /if \(reservation\.kind === 'replay'\)[\s\S]*?return res\.status\(200\)/);
+  assert.match(create, /ScoutingRun\.create\(runInput, \{ transaction: req\.dbTransaction \}\);[\s\S]*?completeScoutingRunCreate\(req, reservation, run\.id\);[\s\S]*?shouldNotifyRunAssignment\(null, run\.assigned_to\)/);
   assert.match(scouting, /const run = await findRun\(req, req\.params\.id, true\);/);
   assert.match(scouting, /await run\.update\(update, \{ transaction: req\.dbTransaction \}\);\s*if \(shouldNotifyRunAssignment\(previous\.assigned_to, run\.assigned_to\)\)/);
   assert.match(scouting, /await verifyAssignee\(req, req\.body\.assigned_to\)/);
