@@ -150,3 +150,74 @@ test('modal wires render-time scope fence and safe close around POST', () => {
   assert.match(jsx, /onClose=\{safeClose\}/);
   assert.doesNotMatch(jsx, /await api\.createScoutingRun\([\s\S]*?\);\s*onCreated\?\.\(\)/);
 });
+
+
+test('idempotent create ACK requires explicit replay outcome when client_request_id was sent', () => {
+  const keyed = { ...request, client_request_id: otherTenant };
+  assert.equal(verifyCreatedScoutingRun({ ...reply, replayed: false }, keyed, tenant), reply.data);
+  assert.equal(verifyCreatedScoutingRun({ ...reply, replayed: true }, keyed, tenant), reply.data);
+  for (const bad of [undefined, null, 'true', 0]) {
+    assert.throws(() => verifyCreatedScoutingRun({ ...reply, replayed: bad }, keyed, tenant),
+      /no confirmó/i);
+  }
+  // Backward-compatible helper use for historical callers without client UUID.
+  assert.equal(verifyCreatedScoutingRun(reply, request, tenant), reply.data);
+});
+
+test('explicit retry of uncertain ticket serializes exactly one second dispatch', () => {
+  const scope = scoutingRunCreateScope(session, 'live');
+  const gate = createScoutingRunSubmitGate();
+  assert.equal(gate.retry(scope), null);
+  const initial = gate.acquire(scope);
+  assert.ok(initial);
+  assert.equal(gate.retry(scope), null, 'pending request can never be retried');
+  assert.equal(gate.finish(initial, 'uncertain'), true);
+  assert.equal(gate.acquire(scope), null, 'normal create stays sticky');
+  const retry = gate.retry(scope);
+  assert.ok(retry);
+  assert.notEqual(retry, initial);
+  assert.equal(gate.isPending(scope), true);
+  assert.equal(gate.retry(scope), null, 'rapid double retry may not dispatch twice');
+  assert.equal(gate.finish(initial, 'confirmed'), false, 'stale original ACK cannot complete a retry');
+  assert.equal(gate.finish(retry, 'confirmed'), true);
+  assert.equal(gate.retry(scope), null, 'confirmed request cannot retry');
+  assert.equal(gate.isBlocked(scope), true);
+  gate.reset();
+  assert.equal(gate.finish(retry, 'uncertain'), false);
+  assert.equal(gate.retry(scope), null);
+});
+
+test('retry binds unchanged UUID and body, and does not silently recreate a run', async () => {
+  const scope = scoutingRunCreateScope(session, 'live');
+  const gate = createScoutingRunSubmitGate();
+  const body = Object.freeze({ ...request, client_request_id: otherTenant });
+  const sent = [];
+  async function send(ticket, fail) {
+    sent.push(body);
+    if (fail) {
+      gate.finish(ticket, 'uncertain');
+      return 'uncertain';
+    }
+    verifyCreatedScoutingRun({ ...reply, replayed: true }, body, tenant);
+    gate.finish(ticket, 'confirmed');
+    return 'confirmed';
+  }
+  const first = gate.acquire(scope);
+  assert.equal(await send(first, true), 'uncertain');
+  const same = gate.retry(scope);
+  assert.equal(await send(same, false), 'confirmed');
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0], sent[1]);
+  assert.equal(sent[0].client_request_id, otherTenant);
+});
+
+test('scouting modal wires browser UUID only once and uses saved request on explicit retry', () => {
+  const jsx = readFileSync(new URL('../src/components/ScoutingRunFormModal.jsx', import.meta.url), 'utf8');
+  assert.match(jsx, /crypto\.randomUUID\(\)/);
+  assert.match(jsx, /client_request_id:/);
+  assert.match(jsx, /requestRef\.current =/);
+  assert.match(jsx, /submitGate\.current\.retry\(authority\)/);
+  assert.match(jsx, /sendCreate\(ticket, saved\.body, saved\.api\)/);
+  assert.match(jsx, /verifyCreatedScoutingRun\(response, body, session\?\.tenant\?\.id\)/);
+  assert.doesNotMatch(jsx, /sessionStorage|localStorage/);
+});
