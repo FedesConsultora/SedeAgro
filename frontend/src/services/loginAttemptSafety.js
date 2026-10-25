@@ -23,7 +23,7 @@ export function verifyTenantChoices(reply) {
   return Object.freeze(members.map(member => {
     if (!member || !UUID.test(member.tenantId || '') ||
         typeof member.tenantSlug !== 'string' ||
-        !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(member.tenantSlug) ||
+        !/^[a-z0-9-]{3,90}$/.test(member.tenantSlug) ||
         typeof member.tenantName !== 'string' || !member.tenantName.trim() ||
         typeof member.roleCode !== 'string' || !member.roleCode.trim() ||
         ids.has(member.tenantId) || slugs.has(member.tenantSlug)) {
