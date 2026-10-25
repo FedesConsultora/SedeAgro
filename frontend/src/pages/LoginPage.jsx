@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Leaf, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { API_URL } from '../services/api.js';
 import { useSession } from '../context/SessionContext.jsx';
+import { createLoginAttemptGate } from '../services/loginAttemptSafety.js';
 
 export function LoginPage({ onSwitchToRegister }) {
   const { login } = useSession();
@@ -11,43 +12,88 @@ export function LoginPage({ onSwitchToRegister }) {
   const [showPassword, setShowPassword] = useState(false);
   const [tenantChoices, setTenantChoices] = useState(null);
 
-  const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
+  const gate = useRef(null);
+  if (!gate.current) gate.current = createLoginAttemptGate();
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; gate.current.reset(); };
+  }, []);
 
-  const doLogin = async (body) => {
+  const set = (key) => (event) => {
+    if (gate.current.phase() !== 'idle') return;
+    const value = event.target.value;
+    setForm(previous => ({ ...previous, [key]: value }));
+  };
+
+  const doLogin = async (ticket) => {
+    if (!ticket) return;
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API_URL}/auth/login`, {
+      const res = await fetch(API_URL + '/auth/login', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'content-type': 'application/json', 'x-sedeagro-session': 'cookie', 'x-sedeagro-request': '1' },
-        body: JSON.stringify(body)
+        headers: {
+          'content-type': 'application/json',
+          'x-sedeagro-session': 'cookie',
+          'x-sedeagro-request': '1'
+        },
+        body: JSON.stringify(ticket.body)
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(data.error?.message || 'Email o contraseña incorrectos.');
-        return;
+        const error = new Error(typeof data?.error?.message === 'string'
+          ? data.error.message : 'No se pudo iniciar sesión.');
+        error.status = res.status;
+        throw error;
       }
-      if (data.requiresTenantSelection) {
-        setTenantChoices(data.memberships);
-        return;
+      if (!alive.current || !gate.current.isCurrent(ticket)) return;
+      const next = gate.current.complete(ticket, data);
+      if (next?.kind === 'choices') setTenantChoices(next.memberships);
+      else if (next?.kind === 'session') login(next.session);
+    } catch (err) {
+      if (!alive.current || !gate.current.isCurrent(ticket)) return;
+      gate.current.fail(ticket);
+      // An expired/forbidden second challenge must not keep old membership
+      // names or the original credential pair eligible for another request.
+      if (ticket.kind === 'selected' && [401, 403].includes(err?.status)) {
+        gate.current.reset();
+        setTenantChoices(null);
+        setForm({ email: form.email, password: '' });
       }
-      login(data);
-    } catch {
-      setError('No se pudo conectar al servidor.');
+      setError(err?.message || 'No se pudo conectar al servidor.');
     } finally {
-      setLoading(false);
+      if (alive.current) setLoading(false);
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    doLogin({ email: form.email, password: form.password });
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    let ticket;
+    try {
+      ticket = gate.current.begin(form);
+    } catch (err) {
+      setError(err?.message || 'Revisá el email y la contraseña.');
+      return;
+    }
+    if (ticket) void doLogin(ticket);
   };
 
-  const handleTenantSelect = (tenantSlug) => {
-    doLogin({ email: form.email, password: form.password, tenantSlug });
+  const handleTenantSelect = (slug) => {
+    const ticket = gate.current.choose(slug);
+    if (ticket) void doLogin(ticket);
   };
+
+  const handleBack = () => {
+    if (gate.current.busy()) return;
+    gate.current.reset();
+    setTenantChoices(null);
+    setForm(previous => ({ ...previous, password: '' }));
+    setError('');
+  };
+
+  const locked = loading || gate.current.busy();
 
   return (
     <div className="auth-shell">
@@ -88,6 +134,7 @@ export function LoginPage({ onSwitchToRegister }) {
                   required
                   autoComplete="email"
                   autoFocus
+                  disabled={locked}
                 />
               </label>
 
@@ -101,12 +148,14 @@ export function LoginPage({ onSwitchToRegister }) {
                   onChange={set('password')}
                   required
                   autoComplete="current-password"
+                  disabled={locked}
                   style={{ paddingRight: 44 }}
                 />
                 <button
                   type="button"
                   className="auth-eye-btn"
                   onClick={() => setShowPassword((v) => !v)}
+                  disabled={locked}
                   tabIndex={-1}
                   aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
                 >
@@ -118,7 +167,7 @@ export function LoginPage({ onSwitchToRegister }) {
                 id="login-submit"
                 type="submit"
                 className="primary-action"
-                disabled={loading}
+                disabled={locked}
                 style={{ marginTop: 8 }}
               >
                 {loading ? 'Ingresando…' : 'Ingresar'}
@@ -137,6 +186,7 @@ export function LoginPage({ onSwitchToRegister }) {
             <div style={{ textAlign: 'center', marginBottom: 24 }}>
               <h1 style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>Elegí tu empresa</h1>
               <p style={{ color: '#64748b', fontSize: 14 }}>Tu usuario tiene acceso a varias organizaciones</p>
+              {error && <div className="auth-error" role="alert"><AlertCircle size={16} /><span>{error}</span></div>}
             </div>
             <div style={{ display: 'grid', gap: 10 }}>
               {tenantChoices.map((m) => (
@@ -145,6 +195,7 @@ export function LoginPage({ onSwitchToRegister }) {
                   type="button"
                   className="tenant-choice-btn"
                   onClick={() => handleTenantSelect(m.tenantSlug)}
+                  disabled={locked}
                 >
                   <span className="tenant-choice-btn__name">{m.tenantName}</span>
                   <span className="tenant-choice-btn__role">{m.roleCode}</span>
