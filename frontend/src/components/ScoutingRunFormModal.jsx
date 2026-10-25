@@ -20,6 +20,7 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
   openRef.current = isOpen;
   const submitGate = useRef(null);
   if (!submitGate.current) submitGate.current = createScoutingRunSubmitGate();
+  const requestRef = useRef(null);
 
   // Lists can contain tenant-private lot and user names. Never show a previous
   // account's response while an effect is still clearing its React state.
@@ -39,6 +40,7 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
   useEffect(() => {
     // A new opening/actor/role/permission set starts with a new one-shot ticket.
     submitGate.current.reset();
+    requestRef.current = null;
     setForm(emptyForm());
     setSaving(false);
     setSubmitStatus('');
@@ -89,7 +91,33 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
     onClose?.();
   };
 
-  const handleSubmit = async (event) => {
+  const sendCreate = async (ticket, body, requestApi) => {
+    const current = () => openRef.current && scopeRef.current === authority &&
+      apiRef.current === requestApi && submitGate.current.isCurrent(ticket) &&
+      requestRef.current?.body === body;
+    setSaving(true);
+    setError('');
+    let confirmed = false;
+    try {
+      const response = await requestApi.createScoutingRun(body);
+      if (!current()) return;
+      verifyCreatedScoutingRun(response, body, session?.tenant?.id);
+      submitGate.current.finish(ticket, 'confirmed');
+      setSubmitStatus('confirmed');
+      confirmed = true;
+    } catch (err) {
+      if (!current()) return;
+      // The server may have COMMITted before the network/ACK failed.
+      submitGate.current.finish(ticket, 'uncertain');
+      setSubmitStatus('uncertain');
+      setError('No pudimos confirmar la creación. Podés reintentar ESTE MISMO envío de forma segura, o cerrar y revisar Recorridas antes de crear otra.');
+    } finally {
+      if (current()) setSaving(false);
+    }
+    if (confirmed && current()) onCreated?.();
+  };
+
+  const handleSubmit = (event) => {
     event.preventDefault();
     if (!isOpen || !authority || loading || visible?.phase !== 'ready' ||
         !campaignFields.some(field => field.id === form.campaign_field_id)) return;
@@ -106,42 +134,32 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
       setError('La fecha planificada no es válida.');
       return;
     }
-    const body = {
+    if (!globalThis.crypto || typeof crypto.randomUUID !== 'function') {
+      setError('Este navegador no permite crear un identificador seguro de recorrida. Usá HTTPS o localhost.');
+      return;
+    }
+    // Immutable body and UUID: retry MUST replay this identical request.
+    const body = Object.freeze({
+      client_request_id: crypto.randomUUID(),
       campaign_field_id: form.campaign_field_id,
       assigned_to: form.assigned_to || null,
       ...(scheduledDate ? { scheduled_at: scheduledDate.toISOString() } : {}),
       status: form.status,
       ...(form.summary ? { summary: form.summary } : {})
-    };
+    });
     const ticket = submitGate.current.acquire(authority);
-    if (!ticket) return; // synchronous barrier before awaiting any network call
-    const requestApi = api;
-    const current = () => openRef.current && scopeRef.current === authority &&
-      apiRef.current === requestApi && submitGate.current.isCurrent(ticket);
-    setSaving(true);
-    setError('');
-    let transmitted = false;
-    let confirmed = false;
-    try {
-      transmitted = true;
-      const response = await requestApi.createScoutingRun(body);
-      if (!current()) return;
-      verifyCreatedScoutingRun(response, body, session?.tenant?.id);
-      confirmed = true;
-      submitGate.current.finish(ticket, 'confirmed');
-      setSubmitStatus('confirmed');
-    } catch (err) {
-      if (!current()) return;
-      // Even an HTTP error can arrive after a DB commit. No automatic replay.
-      submitGate.current.finish(ticket, transmitted ? 'uncertain' : 'preflight-rejected');
-      setSubmitStatus(transmitted ? 'uncertain' : '');
-      setError(transmitted
-        ? 'No se pudo confirmar si la recorrida quedó creada. Cerrá este formulario, actualizá la lista de Recorridas y revisá antes de intentar otra.'
-        : err?.message || 'No se pudo preparar la recorrida.');
-    } finally {
-      if (current()) setSaving(false);
-    }
-    if (confirmed && current()) onCreated?.();
+    if (!ticket) return; // barrier before any POST and before React rerender
+    requestRef.current = { scope: authority, api, body };
+    void sendCreate(ticket, body, api);
+  };
+
+  const handleRetry = () => {
+    const saved = requestRef.current;
+    if (submitStatus !== 'uncertain' || !saved ||
+        saved.scope !== authority || saved.api !== api) return;
+    const ticket = submitGate.current.retry(authority);
+    if (!ticket) return; // blocks double retry even before setSaving renders
+    void sendCreate(ticket, saved.body, saved.api);
   };
 
   const blocked = saving || submitStatus !== '' || submitGate.current.isBlocked(authority);
@@ -167,6 +185,12 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
           <button type="button" onClick={() => setReload(value => value + 1)}>Reintentar</button>
         </div>}
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
+        {submitStatus === 'uncertain' && authority && (
+          <button type="button" className="ghost-action" onClick={handleRetry}
+            disabled={saving || !requestRef.current || !submitGate.current.isBlocked(authority)}>
+            Reintentar el mismo envío (sin duplicar)
+          </button>
+        )}
         {!loading && authority && !optionsError && campaignFields.length === 0 &&
           <p role="status">No hay lotes asociados a campañas disponibles para planificar recorridas.</p>}
         <label className="form-field">
