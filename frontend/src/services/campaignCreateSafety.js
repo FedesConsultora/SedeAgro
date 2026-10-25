@@ -66,7 +66,11 @@ export function verifyCreatedCampaign(response, requested, tenantId) {
   if (!data || typeof data !== 'object' || Array.isArray(data) ||
       typeof data.id !== 'string' || !UUID.test(data.id) ||
       !tenantId || data.tenant_id !== tenantId ||
-      !requested || data.name !== requested.name ||
+      !requested || (requested.client_request_id !== undefined &&
+        (typeof requested.client_request_id !== 'string' ||
+         !UUID.test(requested.client_request_id) ||
+         typeof response.replayed !== 'boolean')) ||
+      data.name !== requested.name ||
       data.season_year !== requested.season_year ||
       data.starts_at !== requested.starts_at ||
       (data.ends_at ?? null) !== (requested.ends_at ?? null) ||
@@ -76,14 +80,21 @@ export function verifyCreatedCampaign(response, requested, tenantId) {
   return data;
 }
 
-// Without a durable request key, a transport error can occur after COMMIT.
-// Block a second POST from this modal even when the result was ambiguous.
+// Backend now accepts durable actor/tenant scoped client_request_id.
+// Only a user-initiated retry from uncertain state can resend the SAME key
+// and immutable body. acquire() still blocks any changed or duplicate POST.
 export function createCampaignSubmitGate() {
   let active = null;
   let serial = 0;
   return Object.freeze({
     acquire(scope) {
       if (!scope || active) return null;
+      const ticket = Object.freeze({ scope, id: ++serial });
+      active = { ticket, phase: 'pending' };
+      return ticket;
+    },
+    retry(scope) {
+      if (!scope || active?.ticket.scope !== scope || active.phase !== 'uncertain') return null;
       const ticket = Object.freeze({ scope, id: ++serial });
       active = { ticket, phase: 'pending' };
       return ticket;
