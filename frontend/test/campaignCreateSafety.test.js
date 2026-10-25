@@ -143,3 +143,76 @@ test('modal uses synchronous safety ticket and session fencing before success ca
   assert.match(jsx, /onClose=\{safeClose\}/);
   assert.doesNotMatch(jsx, /dataMode === 'mock'\) \{ onCreated/);
 });
+
+
+test('keyed campaign ACK requires explicit boolean replay outcome', () => {
+  const keyed = { ...request, client_request_id: otherId };
+  const created = { ...receipt, replayed: false };
+  assert.equal(verifyCreatedCampaign(created, keyed, tenant), created.data);
+  const replay = { ...receipt, replayed: true };
+  assert.equal(verifyCreatedCampaign(replay, keyed, tenant), replay.data);
+  for (const value of [undefined, null, 'false', 0]) {
+    assert.throws(() => verifyCreatedCampaign({ ...receipt, replayed: value }, keyed, tenant),
+      /no confirmó/i);
+  }
+  assert.equal(verifyCreatedCampaign(receipt, request, tenant), receipt.data,
+    'legacy caller has no replay flag requirement');
+});
+
+test('uncertain keyed attempt allows only explicit same-scope retry, one at a time', () => {
+  const gate = createCampaignSubmitGate();
+  const scope = campaignCreateScope(session, 'live');
+  assert.equal(gate.retry(scope), null);
+  const original = gate.acquire(scope);
+  assert.ok(original);
+  assert.equal(gate.retry(scope), null, 'cannot retry while request pending');
+  assert.equal(gate.finish(original, 'uncertain'), true);
+  assert.equal(gate.acquire(scope), null, 'new payload is never sent after uncertain ACK');
+  assert.equal(gate.retry('another-scope'), null);
+  const attempt = gate.retry(scope);
+  assert.ok(attempt);
+  assert.equal(gate.retry(scope), null, 'double tap is synchronous');
+  assert.equal(gate.finish(original, 'confirmed'), false, 'stale first ACK never confirms retry');
+  assert.equal(gate.finish(attempt, 'uncertain'), true);
+  const again = gate.retry(scope);
+  assert.ok(again);
+  assert.equal(gate.finish(again, 'confirmed'), true);
+  assert.equal(gate.retry(scope), null, 'confirmed payload must not repeat');
+  gate.reset();
+  assert.equal(gate.finish(again, 'uncertain'), false);
+});
+
+test('manual retry sends exact same frozen campaign UUID and body', async () => {
+  const gate = createCampaignSubmitGate();
+  const scope = campaignCreateScope(session, 'live');
+  const body = Object.freeze({ ...request, client_request_id: otherId });
+  const dispatched = [];
+  async function dispatch(ticket, shouldFail) {
+    dispatched.push(body);
+    if (shouldFail) {
+      gate.finish(ticket, 'uncertain');
+      return 'uncertain';
+    }
+    verifyCreatedCampaign({ ...receipt, replayed: true }, body, tenant);
+    gate.finish(ticket, 'confirmed');
+    return 'confirmed';
+  }
+  const first = gate.acquire(scope);
+  assert.equal(await dispatch(first, true), 'uncertain');
+  assert.equal(await dispatch(gate.retry(scope), false), 'confirmed');
+  assert.equal(dispatched.length, 2);
+  assert.equal(dispatched[0], dispatched[1]);
+  assert.equal(dispatched[0].client_request_id, otherId);
+});
+
+test('campaign creation UI generates key once, retains immutable body and exposes intentional retry', () => {
+  const jsx = readFileSync(new URL('../src/components/CampaignFormModal.jsx', import.meta.url), 'utf8');
+  assert.match(jsx, /crypto\.randomUUID\(\)/);
+  assert.match(jsx, /client_request_id:/);
+  assert.match(jsx, /requestRef\.current =/);
+  assert.match(jsx, /submitGate\.current\.retry\(authority\)/);
+  assert.match(jsx, /sendCreate\(ticket, saved\.body, saved\.api\)/);
+  assert.match(jsx, /verifyCreatedCampaign\(response, body, session\?\.tenant\?\.id\)/);
+  assert.doesNotMatch(jsx, /localStorage|sessionStorage/);
+  assert.match(jsx, /submitGate\.current\.isPending\(authority\)/);
+});
