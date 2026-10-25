@@ -113,7 +113,7 @@ test('form validates receipt, gates submit and prevents close during pending POS
   const jsx=source('../src/components/WorkOrderFormModal.jsx');
   assert.match(jsx,/workOrderCreateScope\(session, dataMode\)/);
   assert.match(jsx,/submitGate\.current\.acquire\(authority\)/);
-  assert.match(jsx,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id\)/);
+  assert.match(jsx,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
   assert.match(jsx,/submitGate\.current\.finish\(ticket, 'uncertain'\)/);
   assert.match(jsx,/submitGate\.current\.isPending\(authority\)/);
   assert.match(jsx,/scopeRef\.current === authority/);
