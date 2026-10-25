@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Leaf, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { API_URL } from '../services/api.js';
 import { useSession } from '../context/SessionContext.jsx';
+import { createCompanyRegistrationGate, verifyRegisteredCompany } from '../services/companyRegistrationSafety.js';
 
 export function RegisterPage({ onSwitchToLogin }) {
   const { login } = useSession();
@@ -15,8 +16,18 @@ export function RegisterPage({ onSwitchToLogin }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const gate = useRef(null);
+  if (!gate.current) gate.current = createCompanyRegistrationGate();
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; gate.current.reset(); };
+  }, []);
+  const blocked = loading || gate.current.isBlocked();
+
 
   const set = (key) => (e) => {
+    if (gate.current.isBlocked()) return;
     let value = e.target.value;
     if (key === 'slug') value = value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
     if (key === 'organizationName' && !form.slug) {
@@ -27,31 +38,57 @@ export function RegisterPage({ onSwitchToLogin }) {
     setForm((f) => ({ ...f, [key]: value }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    let ticket;
+    try {
+      ticket = gate.current.acquire(form);
+    } catch (err) {
+      setError(err?.message || 'Revisá los datos de la empresa.');
+      return;
+    }
+    if (!ticket) return; // synchronous one-shot barrier, before React rerender
     setLoading(true);
     setError('');
-    try {
-      const res = await fetch(`${API_URL}/auth/register-tenant`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'content-type': 'application/json', 'x-sedeagro-session': 'cookie', 'x-sedeagro-request': '1' },
-        body: JSON.stringify({ ...form, planCode: 'starter' })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const msg = data.error?.details
-          ? Object.values(data.error.details).flat().join('. ')
-          : data.error?.message || 'Error al registrar.';
-        setError(msg);
-        return;
+    void (async () => {
+      try {
+        const res = await fetch(API_URL + '/auth/register-tenant', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'content-type': 'application/json',
+            'x-sedeagro-session': 'cookie',
+            'x-sedeagro-request': '1'
+          },
+          body: JSON.stringify(ticket.body)
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          const message = typeof data?.error?.message === 'string'
+            ? data.error.message : 'No se pudo registrar la empresa.';
+          const err = new Error(message);
+          err.status = res.status;
+          throw err;
+        }
+        if (!alive.current || !gate.current.isCurrent(ticket)) return;
+        const session = verifyRegisteredCompany(data, ticket.body);
+        gate.current.finish(ticket, 'confirmed');
+        login(session);
+      } catch (err) {
+        if (!alive.current || !gate.current.isCurrent(ticket)) return;
+        // Known validation/conflict/rate-limit replies reject the operation.
+        // Timeouts, 5xx and inconsistent success ACKs can follow COMMIT.
+        if ([400, 401, 403, 409, 422, 429].includes(err?.status)) {
+          gate.current.finish(ticket, 'rejected');
+          setError(err?.message || 'Revisá los datos e intentá nuevamente.');
+        } else {
+          gate.current.finish(ticket, 'uncertain');
+          setError('No pudimos confirmar si la empresa se creó. No vuelvas a enviarla todavía: probá ingresar con esta cuenta y revisá el resultado.');
+        }
+      } finally {
+        if (alive.current) setLoading(false);
       }
-      login(data);
-    } catch {
-      setError('No se pudo conectar al servidor.');
-    } finally {
-      setLoading(false);
-    }
+    })();
   };
 
   return (
@@ -87,6 +124,7 @@ export function RegisterPage({ onSwitchToLogin }) {
               placeholder="Agro Norte SRL"
               value={form.organizationName}
               onChange={set('organizationName')}
+              disabled={blocked}
               required
               minLength={2}
             />
@@ -100,6 +138,7 @@ export function RegisterPage({ onSwitchToLogin }) {
               placeholder="agro-norte"
               value={form.slug}
               onChange={set('slug')}
+              disabled={blocked}
               required
               minLength={3}
               maxLength={40}
@@ -115,6 +154,7 @@ export function RegisterPage({ onSwitchToLogin }) {
                 placeholder="Juan García"
                 value={form.fullName}
                 onChange={set('fullName')}
+              disabled={blocked}
                 required
                 minLength={2}
               />
@@ -127,6 +167,7 @@ export function RegisterPage({ onSwitchToLogin }) {
                 placeholder="juan@empresa.com"
                 value={form.email}
                 onChange={set('email')}
+              disabled={blocked}
                 required
                 autoComplete="email"
               />
@@ -141,6 +182,7 @@ export function RegisterPage({ onSwitchToLogin }) {
               placeholder="••••••••••••"
               value={form.password}
               onChange={set('password')}
+              disabled={blocked}
               required
               minLength={12}
               autoComplete="new-password"
@@ -150,6 +192,7 @@ export function RegisterPage({ onSwitchToLogin }) {
               type="button"
               className="auth-eye-btn"
               onClick={() => setShowPassword((v) => !v)}
+              disabled={blocked}
               tabIndex={-1}
               aria-label="Mostrar contraseña"
             >
@@ -161,7 +204,7 @@ export function RegisterPage({ onSwitchToLogin }) {
             id="register-submit"
             type="submit"
             className="primary-action"
-            disabled={loading}
+            disabled={blocked}
             style={{ marginTop: 8 }}
           >
             {loading ? 'Creando cuenta…' : 'Crear cuenta'}
@@ -170,7 +213,7 @@ export function RegisterPage({ onSwitchToLogin }) {
 
         <div className="auth-divider"><span>o</span></div>
 
-        <button type="button" className="ghost-action" style={{ width: '100%', justifyContent: 'center' }} onClick={onSwitchToLogin}>
+        <button type="button" className="ghost-action" style={{ width: '100%', justifyContent: 'center' }} onClick={onSwitchToLogin} disabled={loading}>
           Ya tengo cuenta — Ingresar
         </button>
       </div>
