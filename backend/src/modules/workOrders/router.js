@@ -23,6 +23,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
+import { reserveWorkOrderCreate, completeWorkOrderCreate } from './createIdempotency.js';
 import { canSubmitExecution, canReviewExecution, canCloseReviewedOrder, validExecutionWindow, MAX_EXECUTION_REPORTS } from './executionPolicy.js';
 import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
@@ -54,6 +55,7 @@ export const workOrdersRouter = Router();
 workOrdersRouter.use(requireEntitlement('work_orders'));
 
 const workOrderSchema = z.object({
+  client_request_id: z.string().uuid().optional(),
   campaign_field_id: z.string().uuid().optional().nullable(),
   field_id: z.string().uuid(),
   type: z.enum(['application', 'sowing', 'fertilization', 'harvest', 'irrigation', 'inspection', 'other']),
@@ -218,6 +220,11 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
 }));
 
 workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
+  const reservation = await reserveWorkOrderCreate(req, req.body);
+  res.set('Cache-Control', 'private, no-store');
+  if (reservation.kind === 'replay') {
+    return res.status(200).json({ data: reservation.order, replayed: true });
+  }
   // Two independent tenant-scoped FKs do not prove that this campaign-field
   // actually belongs to the field on the order. Resolve both under the
   // request's FORCE RLS transaction before any persistent order is created.
@@ -245,12 +252,15 @@ workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrder
         undefined, 'WORK_ORDER_CAMPAIGN_FIELD_MISMATCH');
     }
   }
+  const { client_request_id: _clientRequestId, ...orderInput } = req.body;
   const order = await WorkOrder.create({
-    ...req.body,
+    ...orderInput,
     status: 'draft',
     requested_by: req.auth.user.id
   }, { transaction: req.dbTransaction });
-  res.status(201).json({ data: order });
+  await completeWorkOrderCreate(req, reservation, order.id);
+  res.status(201).json({ data: order,
+    ...(reservation.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 // Bounded, tenant-isolated advisory queue for coordinators. Do not use this
