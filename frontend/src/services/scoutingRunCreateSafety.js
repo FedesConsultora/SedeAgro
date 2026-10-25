@@ -25,7 +25,11 @@ export function verifyCreatedScoutingRun(response, requested, tenantId) {
   if (!run || typeof run !== 'object' || Array.isArray(run) ||
       typeof run.id !== 'string' || !UUID.test(run.id) ||
       !tenantId || run.tenant_id !== tenantId ||
-      !requested || run.campaign_field_id !== requested.campaign_field_id ||
+      !requested || (requested.client_request_id !== undefined &&
+        (typeof requested.client_request_id !== 'string' ||
+         !UUID.test(requested.client_request_id) ||
+         typeof response.replayed !== 'boolean')) ||
+      run.campaign_field_id !== requested.campaign_field_id ||
       (run.assigned_to ?? null) !== (requested.assigned_to ?? null) ||
       run.status !== requested.status ||
       !matchesSchedule ||
@@ -35,15 +39,22 @@ export function verifyCreatedScoutingRun(response, requested, tenantId) {
   return run;
 }
 
-// POST /scouting/runs creates a new row without a client idempotency key.
-// Keep the ticket sticky after any dispatched request, including lost ACK.
-// A new modal may be used only after the operator checks the current run list.
+// POST /scouting/runs now supports a durable actor-scoped client_request_id.
+// Keep normal create sticky after a lost ACK. A user-initiated retry is
+// allowed ONLY from uncertain phase, and the component must send the exact
+// originally recorded body+UUID to let the backend replay the original row.
 export function createScoutingRunSubmitGate() {
   let active = null;
   let serial = 0;
   return Object.freeze({
     acquire(scope) {
       if (!scope || active) return null;
+      const ticket = Object.freeze({ scope, id: ++serial });
+      active = { ticket, phase: 'pending' };
+      return ticket;
+    },
+    retry(scope) {
+      if (!scope || active?.ticket.scope !== scope || active.phase !== 'uncertain') return null;
       const ticket = Object.freeze({ scope, id: ++serial });
       active = { ticket, phase: 'pending' };
       return ticket;
