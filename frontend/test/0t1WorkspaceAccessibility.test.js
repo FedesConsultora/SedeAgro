@@ -51,10 +51,15 @@ test('shared workspace primitives preserve truthful empty, filtered, and loading
 test('live farm and work order forms reject fabricated lookup choices', () => {
   assert.doesNotMatch(farmForm, /catch\s*\{\s*setProducers\(mockData/);
   assert.doesNotMatch(orderForm, /catch\s*\{\s*setFields\(mockData/);
-  assert.match(farmForm, /if \(!Array\.isArray\(response\?\.data\)\)/);
+  assert.match(farmForm, /!Array\.isArray\(rows\)/);
+  assert.match(farmForm, /scopeRef\.current === requestScope/);
+  assert.match(farmForm, /producerSnapshot\?\.scope === authority/);
+  assert.match(farmForm, /prepareFarmCreate\(form, producers, session\?\.tenant\?\.id\)/);
+  assert.match(farmForm, /visible\?\.phase === 'ready' && !blocked/);
   assert.match(orderForm, /if \(!Array\.isArray\(response\?\.data\)\)/);
   assert.match(orderForm, /fields\.some\(field => field\.id === form\.field_id\)/);
-  assert.match(farmForm, /producersLoading \|\| producersError/);
+  assert.match(farmForm, /producersError && <ResourceLoadNotice/);
+  assert.match(farmForm, /disabled=\{!editable\}/);
 });
 
 test('actual Chromium flow proves focus cycle and blocked live lookups', () => {
