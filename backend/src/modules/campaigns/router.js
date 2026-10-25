@@ -6,6 +6,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
+import { reserveCampaignCreate, completeCampaignCreate } from './createIdempotency.js';
 
 export const campaignsRouter = Router();
 
@@ -34,7 +35,9 @@ function assertChronology(start, end, field, description) {
   }
 }
 
-const campaignCreateSchema = campaignSchema.refine(
+const campaignCreateSchema = campaignSchema.extend({
+  client_request_id: z.string().uuid().optional()
+}).refine(
   value => dateOrderValid(value.starts_at, value.ends_at),
   { path: ['ends_at'], message: 'El fin de campaña debe ser igual o posterior al inicio.' }
 );
@@ -107,8 +110,18 @@ campaignsRouter.get('/', requireCapability('campaigns.read'), asyncHandler(async
 }));
 
 campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaignCreateSchema), asyncHandler(async (req, res) => {
-  const campaign = await Campaign.create(req.body, { transaction: req.dbTransaction });
-  res.status(201).json({ data: campaign });
+  // The capability check and RLS transaction precede receipt lookup. A key
+  // alone cannot read someone else's campaign even if its UUID is known.
+  const reservation = await reserveCampaignCreate(req, req.body);
+  res.set('Cache-Control', 'private, no-store');
+  if (reservation.kind === 'replay') {
+    return res.status(200).json({ data: reservation.campaign, replayed: true });
+  }
+  const { client_request_id: _clientRequestId, ...campaignInput } = req.body;
+  const campaign = await Campaign.create(campaignInput, { transaction: req.dbTransaction });
+  await completeCampaignCreate(req, reservation, campaign.id);
+  res.status(201).json({ data: campaign,
+    ...(reservation.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldCreateSchema), asyncHandler(async (req, res) => {
