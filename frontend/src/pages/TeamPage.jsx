@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mail, Plus, Shield, ShieldCheck, UserPlus, Users as UsersIcon } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { extractCollection } from '../services/useTenantCollection.js';
+import { teamPrivateListScope, checkedTeamPrivateRows } from '../services/teamPrivateListScope.js';
 
 const ROLE_LABELS = {
   platform_admin: 'Admin Plataforma',
@@ -140,63 +141,79 @@ function TeamCard({ team }) {
 }
 
 export function TeamPage() {
-  const { api, dataMode } = useSession();
-  const [members, setMembers] = useState([]);
-  const [teams, setTeams] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [errors, setErrors] = useState({ members: null, teams: null });
+  const { api, dataMode, session } = useSession();
+  const scope = teamPrivateListScope(session, dataMode);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const [snapshot, setSnapshot] = useState(null);
+  // The previous user's private names never survive into a new React render,
+  // even before the effect clearing the previous request is dispatched.
+  const visible = snapshot?.scope === scope && snapshot?.api === api ? snapshot : null;
+  const members = visible?.members || [];
+  const teams = visible?.teams || [];
+  const loading = Boolean(scope && (!visible || visible.loading));
+  const errors = visible?.errors || { members: null, teams: null };
   const [revision, setRevision] = useState(0);
   const [showInvite, setShowInvite] = useState(false);
 
   useEffect(() => {
-    let mounted = true;
-    async function load() {
-      setLoading(true);
-      setErrors({ members: null, teams: null });
-      setMembers([]);
-      setTeams([]);
-      if (dataMode === 'mock') {
-        setMembers([
+    let active = true;
+    const requestScope = scope;
+    const requestApi = api;
+    const requestTenant = session?.tenant?.id;
+    const current = () => active && scopeRef.current === requestScope &&
+      apiRef.current === requestApi;
+    const pending = { scope: requestScope, api: requestApi, members: [], teams: [],
+      loading: Boolean(requestScope), errors: { members: null, teams: null } };
+    setSnapshot(pending);
+    if (!requestScope) return () => { active = false; };
+    if (dataMode === 'mock') {
+      setSnapshot({
+        ...pending, loading: false,
+        members: [
           { id: '1', role_code: 'tenant_admin', status: 'active', User: { full_name: 'Ana López (Admin)', email: 'admin@agro-demo.test', status: 'active', is_platform_admin: true } },
           { id: '2', role_code: 'agronomic_coordinator', status: 'active', User: { full_name: 'Carlos Martínez (Coord)', email: 'coordinador@agro-demo.test', status: 'active' } },
           { id: '3', role_code: 'scout', status: 'active', User: { full_name: 'Laura Gómez (Scout)', email: 'monitor@agro-demo.test', status: 'active' } },
           { id: '4', role_code: 'contractor', status: 'active', User: { full_name: 'Pedro Ruiz (Contratista)', email: 'contratista@agro-demo.test', status: 'active' } },
           { id: '5', role_code: 'producer_viewer', status: 'active', User: { full_name: 'María Torres (Productor)', email: 'productor@agro-demo.test', status: 'active' } }
-        ]);
-        setTeams(mockData.teams || []);
-        setLoading(false);
-        return;
-      }
-      const results = await Promise.allSettled([api.members(), api.teams()]);
-      if (!mounted) return;
-      const nextErrors = { members: null, teams: null };
-      for (let index = 0; index < results.length; index += 1) {
-        const key = index === 0 ? 'members' : 'teams';
+        ],
+        teams: mockData.teams || []
+      });
+      return () => { active = false; };
+    }
+
+    void (async () => {
+      const responses = await Promise.allSettled([requestApi.members(), requestApi.teams()]);
+      if (!current()) return;
+      const next = { ...pending, loading: false, errors: { members: null, teams: null } };
+      for (let index = 0; index < responses.length; index += 1) {
+        const name = index === 0 ? 'members' : 'teams';
+        const label = name === 'members' ? 'miembros' : 'equipos';
         try {
-          if (results[index].status === 'rejected') throw results[index].reason;
-          const rows = extractCollection(results[index].value, key === 'members' ? 'miembros' : 'equipos');
-          if (index === 0) setMembers(rows);
-          else setTeams(rows);
+          if (responses[index].status === 'rejected') throw responses[index].reason;
+          const rows = extractCollection(responses[index].value, label);
+          next[name] = checkedTeamPrivateRows(rows, requestTenant, label);
         } catch (err) {
-          nextErrors[key] = err?.message || 'Error de consulta.';
+          next[name] = [];
+          next.errors[name] = err?.message || 'Error de consulta.';
         }
       }
-      setErrors(nextErrors);
-      setLoading(false);
-    }
-    load();
-    return () => { mounted = false; };
-  }, [api, dataMode, revision]);
+      if (current()) setSnapshot(next);
+    })();
+    return () => { active = false; };
+  }, [api, dataMode, scope, session?.tenant?.id, revision]);
 
   const handleInvited = (data) => {
-    if (dataMode !== 'mock') return; // No invitation API implemented.
-    // In explicit demo mode, simulate the invitation in local state
-    setMembers(prev => [...prev, {
-      id: `mock-${Date.now()}`,
-      role_code: data.role,
-      status: 'active',
-      User: { full_name: data.fullName, email: data.email, status: 'active' }
-    }]);
+    if (dataMode !== 'mock' || scope !== 'demo') return;
+    setSnapshot(previous => {
+      if (previous?.scope !== 'demo' || previous.api !== api) return previous;
+      return { ...previous, members: [...previous.members, {
+        id: 'mock-' + Date.now(), role_code: data.role, status: 'active',
+        User: { full_name: data.fullName, email: data.email, status: 'active' }
+      }] };
+    });
   };
 
   const platformAdmins = members.filter(m => m.User?.is_platform_admin);
@@ -223,6 +240,8 @@ export function TeamPage() {
         onRetry={() => setRevision(value => value + 1)} />}
       {errors.teams && <ResourceLoadNotice title="equipos" error={errors.teams}
         onRetry={() => setRevision(value => value + 1)} />}
+      {dataMode === 'live' && !scope &&
+        <div className="auth-error" role="alert">La sesión no permite consultar miembros de esta empresa.</div>}
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
       ) : (
