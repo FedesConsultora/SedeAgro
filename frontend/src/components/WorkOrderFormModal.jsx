@@ -29,6 +29,7 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
   openRef.current = isOpen;
   const submitGate = useRef(null);
   if (!submitGate.current) submitGate.current = createWorkOrderSubmitGate();
+  const requestRef = useRef(null);
 
   const [fieldsSnapshot, setFieldsSnapshot] = useState(null);
   const fieldsVisible = fieldsSnapshot?.scope === authority && fieldsSnapshot?.api === api
@@ -46,12 +47,13 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     // Every new modal/authentication context receives a fresh creation gate.
     // No stale response can release the gate of the next tenant or user.
     submitGate.current.reset();
+    requestRef.current = null;
     setForm(emptyForm());
     setSaving(false);
     setSubmitStatus('');
     setError('');
     setFieldsSnapshot(null);
-    return () => { submitGate.current.reset(); };
+    return () => { submitGate.current.reset(); requestRef.current = null; };
   }, [isOpen, authority, api]);
 
   useEffect(() => {
@@ -82,8 +84,11 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     return () => { active = false; };
   }, [isOpen, authority, api, dataMode, revision]);
 
-  const set = (key) => (event) =>
-    setForm((previous) => ({ ...previous, [key]: event.target.value }));
+  const set = (key) => (event) => {
+    if (submitGate.current.isBlocked(authority)) return;
+    const value = event.target.value;
+    setForm(previous => ({ ...previous, [key]: value }));
+  };
 
   const safeClose = () => {
     // A POST may have committed even if the connection later fails. Don't let
@@ -92,48 +97,72 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     onClose?.();
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!isOpen || !authority || fieldsLoading || fieldsError ||
-        !fields.some(field => field.id === form.field_id) ||
-        form.title.trim().length < 2) return;
-    const body = { ...form, due_at: form.due_at || undefined };
-    const requestApi = api;
-    const ticket = submitGate.current.acquire(authority);
-    if (!ticket) return; // synchronous guard against two events before render
+  const sendCreate = async (ticket, body, requestApi) => {
     const current = () => openRef.current && scopeRef.current === authority &&
-      apiRef.current === requestApi && submitGate.current.isCurrent(ticket);
+      apiRef.current === requestApi && submitGate.current.isCurrent(ticket) &&
+      requestRef.current?.body === body;
     setSaving(true);
     setError('');
-    let transmitted = false;
-    let created = false;
+    let confirmed = false;
     try {
       if (dataMode === 'mock') {
-        created = true;
+        confirmed = true; // Demo only; no server persistence is claimed.
       } else {
-        transmitted = true;
         const response = await requestApi.createWorkOrder(body);
         if (!current()) return;
-        verifyCreatedWorkOrder(response, body, session?.user?.id);
-        created = true;
+        verifyCreatedWorkOrder(response, body, session?.user?.id, session?.tenant?.id);
+        confirmed = true;
       }
       if (!current()) return;
       submitGate.current.finish(ticket, 'confirmed');
       setSubmitStatus('confirmed');
     } catch (err) {
       if (!current()) return;
-      // No creation idempotency key exists in the current work-order API.
-      // Even a 500 or lost ACK may follow a committed insert: never POST
-      // again from this form. The operator must inspect the order list first.
-      submitGate.current.finish(ticket, transmitted ? 'uncertain' : 'preflight-rejected');
-      setSubmitStatus(transmitted ? 'uncertain' : '');
-      setError(transmitted
-        ? 'No se pudo confirmar si la orden quedó creada. Cerrá este formulario, actualizá la lista de órdenes y revisá antes de intentar crear otra.'
-        : err?.message || 'No se pudo preparar la orden.');
+      // COMMIT may precede a dropped ACK. No automatic replay and no fresh UUID.
+      submitGate.current.finish(ticket, 'uncertain');
+      setSubmitStatus('uncertain');
+      setError('No pudimos confirmar la orden. Podés reintentar el mismo envío sin duplicar, o cerrar y revisar el listado de Órdenes.');
     } finally {
       if (current()) setSaving(false);
     }
-    if (created && current()) onCreated?.();
+    if (confirmed && current()) onCreated?.();
+  };
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!isOpen || !authority || fieldsLoading || fieldsError ||
+        !fields.some(field => field.id === form.field_id) ||
+        form.title.trim().length < 2) return;
+    let due;
+    if (form.due_at) {
+      const timestamp = new Date(form.due_at);
+      if (!Number.isFinite(timestamp.getTime())) {
+        setError('La fecha límite de la orden es inválida.');
+        return;
+      }
+      due = timestamp.toISOString();
+    }
+    if (dataMode === 'live' && (!globalThis.crypto || typeof crypto.randomUUID !== 'function')) {
+      setError('Este navegador no permite generar una clave de orden segura. Usá HTTPS o localhost.');
+      return;
+    }
+    const ticket = submitGate.current.acquire(authority);
+    if (!ticket) return;
+    const body = Object.freeze({
+      ...form, due_at: due,
+      ...(dataMode === 'live' ? { client_request_id: crypto.randomUUID() } : {})
+    });
+    requestRef.current = { scope: authority, api, body };
+    void sendCreate(ticket, body, api);
+  };
+
+  const handleRetry = () => {
+    const saved = requestRef.current;
+    if (dataMode !== 'live' || submitStatus !== 'uncertain' ||
+        !saved || saved.scope !== authority || saved.api !== api) return;
+    const ticket = submitGate.current.retry(authority);
+    if (!ticket) return;
+    void sendCreate(ticket, saved.body, saved.api);
   };
 
   const blocked = saving || submitStatus !== '' ||
@@ -159,6 +188,12 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
         {!fieldsLoading && !fieldsError && fields.length === 0 &&
           <p role="status">No hay lotes disponibles. Registrá un lote antes de crear la orden.</p>}
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
+        {submitStatus === 'uncertain' && dataMode === 'live' && authority && (
+          <button type="button" className="ghost-action" onClick={handleRetry}
+            disabled={saving}>
+            Reintentar el mismo envío
+          </button>
+        )}
 
         <label className="form-field">
           <span>Título de la orden *</span>
