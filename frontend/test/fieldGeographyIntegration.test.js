@@ -31,12 +31,16 @@ test('the preview distinguishes georeferenced perimeter from farm location', () 
   assert.match(panel, /rel="noopener noreferrer"/);
 });
 
-test('field creation does not silently use demo farms on live API failures', () => {
-  assert.doesNotMatch(form, /catch\s*\{\s*setFarms\(mockData\.farms\)/);
-  assert.match(form, /if \(dataMode === 'mock'\)/);
-  assert.match(form, /if \(!Array\.isArray\(res\?\.data\)\)/);
-  assert.match(form, /setFarmLoadError\(err\?\.message/);
-  assert.match(form, /!farms\.some\(\(farm\) => farm\.id === form\.farm_id\)/);
+test('field creation never substitutes mock farms into an authenticated tenant', () => {
+  assert.doesNotMatch(form, /mockData\./);
+  assert.match(form, /dataMode !== 'live'/);
+  assert.match(form, /requestApi\.farms\(\)/);
+  assert.match(form, /!Array\.isArray\(records\)/);
+  assert.match(form, /scopeRef\.current === requestScope/);
+  assert.match(form, /phase: 'error', farms: \[\]/);
+  assert.match(form, /farmLoadError/);
+  assert.match(form, /prepareFieldCreate\(form, farms, session\?\.tenant\?\.id, preselectedFarmId\)/);
+  assert.match(form, /verifyCreatedField\(response, body, session\?\.tenant\?\.id\)/);
 });
 
 test('the displayed geometry resets when actor authorization or entitlements change', () => {
