@@ -17,11 +17,18 @@ export function workOrderCreateScope(session, dataMode) {
     [...new Set(session.entitlements.filter(value => typeof value === 'string'))].sort()]);
 }
 
-export function verifyCreatedWorkOrder(response, body, actorId) {
+export function verifyCreatedWorkOrder(response, body, actorId, tenantId = undefined) {
   const data = response?.data;
   if (!data || typeof data !== 'object' || Array.isArray(data) ||
       typeof data.id !== 'string' || !UUID.test(data.id) ||
       !actorId || data.requested_by !== actorId ||
+      (body?.client_request_id !== undefined && (
+        !UUID.test(body.client_request_id) || !tenantId ||
+        data.tenant_id !== tenantId || typeof response.replayed !== 'boolean' ||
+        (data.campaign_field_id ?? null) !== (body.campaign_field_id ?? null) ||
+        (data.instructions ?? null) !== (body.instructions ?? null) ||
+        (data.due_at ?? null) !== (body.due_at ?? null)
+      )) ||
       data.field_id !== body?.field_id || data.type !== body?.type ||
       data.priority !== body?.priority || data.title !== body?.title ||
       data.status !== 'draft') {
@@ -30,9 +37,9 @@ export function verifyCreatedWorkOrder(response, body, actorId) {
   return data;
 }
 
-// This API does NOT offer a client idempotency key on work-order creation.
-// Until the modal is closed, *any* dispatched POST holds its ticket, even on
-// transport failure: an ACK may be lost after the database committed a row.
+// The backend now accepts durable actor-scoped client_request_id on creation.
+// A second POST is allowed only after an uncertain ACK and only if the UI
+// sends the exact same immutable body and request UUID intentionally.
 export function createWorkOrderSubmitGate() {
   let active = null;
   let sequence = 0;
@@ -41,6 +48,12 @@ export function createWorkOrderSubmitGate() {
       if (!scope || active) return null;
       const ticket = Object.freeze({scope, id: ++sequence});
       active = {ticket, phase: 'pending'};
+      return ticket;
+    },
+    retry(scope) {
+      if (!scope || active?.ticket.scope !== scope || active.phase !== 'uncertain') return null;
+      const ticket = Object.freeze({ scope, id: ++sequence });
+      active = { ticket, phase: 'pending' };
       return ticket;
     },
     isCurrent(ticket) { return Boolean(ticket && active?.ticket === ticket); },
