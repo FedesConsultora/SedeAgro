@@ -1,31 +1,31 @@
-# PILOT-SCOUTING-RUN-CREATE-ACK — Alta segura de recorridas
+# PILOT-SCOUTING-RUN-CREATE-ACK — alta y reintento seguro de recorridas
 
-**Alcance:** frontend de \`Nueva recorrida de monitoreo\`, sin cambios de servidor, JWT, RLS, tablas, cola offline o infra. Base de trabajo \`main@098fb9049f7e10999b38bd958a7929cdc7a6c03c\`; coordinación #18; matriz de piloto #166; release #130 sigue NO-GO.
+**Alcance:** frontend de `Nueva recorrida de monitoreo`; backend idempotente integrado en PR #209. Base `main@0f4fefe400f31cabf096ebccf8c0d723906faa48`; coordinación #18, matriz #166, release #130 NO-GO. Sin cambios de JWT, RLS, tablas, cola offline ni infraestructura.
 
-## Defecto detectado leyendo main
+## Contrato actual después de #209
 
-\`ScoutingRunFormModal\` usaba sólo el estado React \`saving\` para impedir doble submit. Dos eventos antes del próximo render podían ejecutar dos \`POST /scouting/runs\` y crear recorridas con UUID distintos. El formulario consideraba exitosa cualquier promesa resuelta sin verificar la identidad de la recorrida devuelta. \`campaignFields()\` y \`scoutingAssignees()\` dependían sólo de cancelación en un efecto, pero podían conservar nombres privados del tenant previo hasta que corriera el siguiente efecto.
+`POST /scouting/runs` acepta opcionalmente `client_request_id: UUID`. Si el **mismo actor autenticado y autorizado** vuelve a enviar la **misma solicitud** con la misma clave dentro del mismo tenant, el backend devuelve el mismo ID y `replayed:true`, sin repetir notificación ni auditoría. Si reutiliza la clave con contenido distinto, devuelve conflicto 409. Las autorizaciones `scouting.plan` y FORCE RLS siguen obligatorias en cada replay; la clave nunca es una credencial.
 
-## Nuevo contrato en el navegador
+## Integración de navegador de este bloque
 
-- Sólo sesiones \`live\` autenticadas con usuario/tenant y rol tenant_admin o agronomic_coordinator, más entitlement \`scouting\`, pueden solicitar opciones o guardar. El backend sigue aplicando \`scouting.plan\`, membresía activa y FORCE RLS. La UI no concede permisos.
-- Listas de lotes de campaña y responsables se unen al mismo scope, identidad de API y apertura del formulario. Una respuesta lenta de otra identidad/rol no puede volver a mostrarse. Estructuras inválidas se rechazan y hay reintento manual de lectura.
-- Antes del primer \`await\` de creación se adquiere un ticket síncrono por formulario. No se acepta un segundo POST, ni una segunda creación tras un ACK confirmado, sin cerrar y abrir la ventana.
-- El ACK del servidor debe contener UUID de recorrida válido, tenant, vínculo al lote/campaña exacto, responsable elegido, estado inicial, hora normalizada cuando se envió y resumen cuando se envió. Un 2xx genérico no basta.
-- Después de **cualquier POST despachado** sin acuse completo, el estado queda \`uncertain\`: se bloquea el botón y se pide cerrar, actualizar Recorridas y revisar posibles altas antes de intentar otra. No hay retry automático ni afirmación exactly-once.
-- Cerrar con Cancelar, X, Escape o overlay se impide durante la solicitud en curso. Un éxito del usuario/tenant anterior no puede completar el modal de una cuenta nueva.
-- Sin backend (modo demo) el formulario no simula una recorrida guardada.
+1. El modal exige sesión live autenticada, empresa, usuario, rol tenant_admin o agronomic_coordinator y entitlement scouting. Las opciones se conservan por scope/API y las respuestas tardías de otra sesión no se muestran.
+2. Al confirmar el formulario, genera **un UUID criptográfico** con `crypto.randomUUID()` y envía un cuerpo congelado que incluye `client_request_id`. Si el navegador no tiene un generador seguro en el contexto actual, bloquea el alta y muestra un error.
+3. Un ticket síncrono antes del primer POST impide doble toque. El ACK sólo es válido si incluye UUID de recorrida, tenant, lote de campaña, responsable, estado, fecha/resumen exactos y un **`replayed` booleano** para solicitudes con clave.
+4. Tras un ACK incierto el modal muestra **Reintentar el mismo envío (sin duplicar)**. Esta acción explícita reutiliza el *mismo objeto inmutable con la misma clave y parámetros*. El backend responde con la recorrida original o un conflicto real; nunca se cambia silenciosamente el UUID al reintentar.
+5. Una segunda pulsación de reintento queda bloqueada sincrónicamente mientras la primera está pendiente. Si falla de nuevo, se permite otro reintento explícito idéntico. Confirmado ya no se puede enviar de nuevo desde el mismo modal.
+6. Cancelar/X/Escape/overlay no cierran el formulario mientras un POST está pendiente; cambio de tenant, usuario, rol o API invalida el ticket anterior y su respuesta tardía. No existe reintento automático.
+7. Demo no simula creación.
 
-## Verificación de código
+## Aceptación técnica
 
-\`frontend/test/scoutingRunCreateSafety.test.js\`: prueba scopes por tenant/usuario/rol/membresía/entitlements, doble evento asíncrono antes de render, confirmación, respuesta ambigua, respuesta de tenant/lote/responsable/estado/fecha/resumen incorrectos y wiring del modal.
+`frontend/test/scoutingRunCreateSafety.test.js` comprueba el ticket inicial, retry sólo tras estado incierto, doble retry, descarte de ACK viejos, payload/UUID inmutable, `replayed` explícito y aislamiento de cuenta, además de la validación heredada de recibos y permisos. `backend/test/scoutingRunCreateIdempotency.pg.mjs` (PR #209) ejecutó la idempotencia real en PostgreSQL FORCE RLS para múltiples solicitudes concurrentes, replay, conflicto, tombstones y efectos laterales.
 
-## Aceptación pendiente con backend real
+## Aceptación con operador pendiente
 
-1. Autenticarse como coordinador del tenant A en staging autorizado. Crear una recorrida con fecha, responsable y resumen; recargar la lista y comprobar **una sola fila** y asignación coherente.
-2. Enviar dos toques rápidos en móvil; comprobar una sola solicitud y una sola fila. Repetir con timeout artificial después de enviar y simular ACK perdido: el formulario exige revisar la lista, sin auto-reintento.
-3. Cambiar de tenant o cuenta mientras se cargan lotes/responsables; no deben verse opciones ajenas ni permitir submit. Repetir durante el POST; el acuse tardío anterior no debe afectar la identidad actual.
-4. Roles scout/contractor/producer o entitlement revocado no ven opciones de planificación; el servidor debe rechazar POST directo no autorizado, conservando RLS.
-5. Verificar creación planificada sin asignado, y en curso con asignado. Error de fecha inválida no despacha POST.
+- En staging aislado, realizar una recorrida planificada, forzar pérdida del primer ACK **después del COMMIT**, usar el botón explícito de reintento y comprobar exactamente una fila y un solo aviso/auditoría.
+- Doble toque en primer POST y en botón de reintento; sólo un request en vuelo por fase.
+- Cambiar a otra empresa/actor o revocar rol antes del replay: no recuperar datos ni confirmar una creación no autorizada.
+- Probar `client_request_id` con contenido modificado: 409 visible, sin mutar la recorrida anterior.
+- Repetir en Android/iOS físicos y con conexión intermitente. **NOT_RUN**.
 
-**Límites:** la API no acepta clave idempotente persistente en la creación de recorridas. Un refresco de pestaña u otro dispositivo aún podría emitir un POST duplicado; el guard cubre sólo una apertura del formulario. La prueba CI del helper no certifica el dispositivo real, ni un 2xx confirma la persistencia final ante caída/rollback externo. \`MOB-05 #163\`, revisión de seguridad y staging/Android/iOS siguen pendientes. Sin deploy autorizado.
+**Límite de garantía:** el UUID y el cuerpo se guardan sólo **en memoria del modal abierto**, sin tokens en storage. Tras refresh, cerrar pestaña, cambiar dispositivo o cerrar el modal incierto, **NO hay replay recuperable garantizado**: el usuario debe consultar el listado antes de crear otra recorrida. La persistencia segura de clave y cuerpo/fingerprint entre sesiones queda como seguimiento separado en #207. Los tests CI no certifican campo real, staging ni producción. Release #130 sigue NO-GO.
