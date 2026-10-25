@@ -19,6 +19,7 @@ import { encodeEvidencePageCursor, parseEvidencePageQuery } from './evidencePagi
 import { recordScoutingAudit } from './audit.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
 import { shouldNotifyRunAssignment } from '../notifications/assignmentNotificationPolicy.js';
+import { reserveScoutingRunCreate, completeScoutingRunCreate } from './runCreateIdempotency.js';
 
 export const scoutingRouter = Router();
 scoutingRouter.use(requireEntitlement('scouting'));
@@ -28,6 +29,7 @@ const pointSchema = z.object({
   coordinates: z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90)])
 }).strict();
 const runSchema = z.object({
+  client_request_id: z.string().uuid().optional(),
   campaign_field_id: z.string().uuid(),
   assigned_to: z.string().uuid().optional().nullable(),
   scheduled_at: z.coerce.date().optional(),
@@ -121,13 +123,23 @@ scoutingRouter.get('/runs', requireCapability('scouting.read'), asyncHandler(asy
 }));
 
 scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSchema), asyncHandler(async (req, res) => {
+  // A durable receipt is reserved before any side effects. A previously
+  // committed request can be replayed only by the same currently authorized
+  // actor. Its immutable payload hash is checked against the original input.
+  const reservation = await reserveScoutingRunCreate(req, req.body);
+  res.set('Cache-Control', 'private, no-store');
+  if (reservation.kind === 'replay') {
+    return res.status(200).json({ data: reservation.run, replayed: true });
+  }
   const campaignField = await CampaignField.findByPk(req.body.campaign_field_id, { transaction: req.dbTransaction });
   if (!campaignField) throw new HttpError(404, 'Lote de campaña no encontrado.');
   await verifyAssignee(req, req.body.assigned_to);
   if (req.body.status === 'in_progress') {
     assertRunReadyToStart(null, req.body.assigned_to);
   }
-  const run = await ScoutingRun.create(req.body, { transaction: req.dbTransaction });
+  const { client_request_id: _clientRequestId, ...runInput } = req.body;
+  const run = await ScoutingRun.create(runInput, { transaction: req.dbTransaction });
+  await completeScoutingRunCreate(req, reservation, run.id);
   if (shouldNotifyRunAssignment(null, run.assigned_to)) {
     await createAssignmentNotification(req, {
       entityType: 'scouting_run', entityId: run.id, userId: run.assigned_to
@@ -138,7 +150,7 @@ scoutingRouter.post('/runs', requireCapability('scouting.plan'), validate(runSch
     action: 'scouting.run.created',
     after: { status: run.status, assigned_to: run.assigned_to, campaign_field_id: run.campaign_field_id }
   });
-  res.status(201).json({ data: run });
+  res.status(201).json({ data: run, ...(reservation.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 scoutingRouter.get('/runs/:id/audit', requireCapability('scouting.audit.read'), asyncHandler(async (req, res) => {
