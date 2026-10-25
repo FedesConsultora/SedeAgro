@@ -26,7 +26,7 @@ const templateSchema = z.object({
   code: z.string().min(2).max(80).regex(/^[a-z0-9_-]+$/i),
   scope: z.enum(['field', 'campaign', 'producer', 'tenant', 'work_order']),
   format: z.enum(['pdf', 'xlsx', 'csv']).default('pdf'),
-  config: z.record(z.any()).default({}),
+  config: z.record(z.string(), z.any()).default({}),
   is_active: z.boolean().default(true)
 });
 

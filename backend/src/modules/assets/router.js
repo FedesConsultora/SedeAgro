@@ -17,7 +17,7 @@ const machinerySchema = z.object({
   model: z.string().max(120).optional(),
   serial_number: z.string().max(120).optional(),
   status: z.enum(['active', 'maintenance', 'inactive', 'archived']).default('active'),
-  metadata: z.record(z.any()).default({})
+  metadata: z.record(z.string(), z.any()).default({})
 });
 
 const inputSchema = z.object({
@@ -26,7 +26,7 @@ const inputSchema = z.object({
   unit: z.string().min(1).max(40),
   active_ingredient: z.string().max(180).optional(),
   registration_number: z.string().max(120).optional(),
-  metadata: z.record(z.any()).default({})
+  metadata: z.record(z.string(), z.any()).default({})
 });
 
 assetsRouter.get('/machinery', requireCapability('assets.read'), asyncHandler(async (req, res) => {

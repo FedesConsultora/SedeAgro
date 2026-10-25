@@ -75,7 +75,11 @@ export function createApp() {
   app.use(helmet());
   app.use(requestLogger);
   app.use(cors(corsOptions()));
-  app.use(express.json({ limit: '10mb' }));
+  // API clients send plain JSON, never compressed request bodies. Disallow
+  // decompression before routing/auth: older body-parser versions can crash
+  // after accepting a compressed frame followed by trailing bytes.
+  // Keep the 10 MB limit required for offline photo/sync payloads.
+  app.use(express.json({ limit: '10mb', inflate: false }));
 
   app.use('/health', healthRouter);
   mountPublicRoutes(app, '/api');
