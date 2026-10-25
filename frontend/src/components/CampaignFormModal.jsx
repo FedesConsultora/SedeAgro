@@ -27,6 +27,7 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
   openRef.current = isOpen;
   const submitGate = useRef(null);
   if (!submitGate.current) submitGate.current = createCampaignSubmitGate();
+  const requestRef = useRef(null);
 
   // The form may contain a tenant's confidential campaign name. A new session
   // cannot render the old form while waiting for an effect to reset state.
@@ -39,11 +40,12 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
 
   useEffect(() => {
     submitGate.current.reset();
+    requestRef.current = null;
     setFormSnapshot({ scope: authority, api, value: emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
-    return () => { submitGate.current.reset(); };
+    return () => { submitGate.current.reset(); requestRef.current = null; };
   }, [isOpen, authority, api]);
 
   const safeClose = () => {
@@ -66,28 +68,14 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
     }));
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!isOpen || !authority) return;
-    let body;
-    try {
-      // All preflight validation happens before acquiring the one-shot ticket.
-      body = prepareCampaignCreate(form);
-    } catch (err) {
-      setError(err?.message || 'Revisá los datos de campaña.');
-      return;
-    }
-    const ticket = submitGate.current.acquire(authority);
-    if (!ticket) return; // synchronous barrier before React rerender
-    const requestApi = api;
+  const sendCreate = async (ticket, body, requestApi) => {
     const current = () => openRef.current && scopeRef.current === authority &&
-      apiRef.current === requestApi && submitGate.current.isCurrent(ticket);
+      apiRef.current === requestApi && submitGate.current.isCurrent(ticket) &&
+      requestRef.current?.body === body;
     setSaving(true);
     setError('');
-    let transmitted = false;
     let confirmed = false;
     try {
-      transmitted = true;
       const response = await requestApi.createCampaign(body);
       if (!current()) return;
       verifyCreatedCampaign(response, body, session?.tenant?.id);
@@ -96,16 +84,45 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
       confirmed = true;
     } catch (err) {
       if (!current()) return;
-      // A 500 or transport timeout is not proof no row was committed.
-      submitGate.current.finish(ticket, transmitted ? 'uncertain' : 'preflight-rejected');
-      setSubmitStatus(transmitted ? 'uncertain' : '');
-      setError(transmitted
-        ? 'No pudimos confirmar si se creó la campaña. Cerrá este formulario, actualizá la lista de Campañas y revisá antes de intentar otra.'
-        : err?.message || 'No se pudo preparar la campaña.');
+      // A transport failure or inconsistent HTTP 2xx may follow COMMIT.
+      // No automatic resend and no new request key from this opening.
+      submitGate.current.finish(ticket, 'uncertain');
+      setSubmitStatus('uncertain');
+      setError('No pudimos confirmar la campaña. Podés reintentar exactamente el mismo envío de forma segura, o cerrar y revisar la lista de Campañas.');
     } finally {
       if (current()) setSaving(false);
     }
     if (confirmed && current()) onCreated?.();
+  };
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    if (!isOpen || !authority) return;
+    let prepared;
+    try {
+      prepared = prepareCampaignCreate(form);
+    } catch (err) {
+      setError(err?.message || 'Revisá los datos de campaña.');
+      return;
+    }
+    if (!globalThis.crypto || typeof crypto.randomUUID !== 'function') {
+      setError('Este navegador no puede generar una clave segura. Usá HTTPS o localhost.');
+      return;
+    }
+    const ticket = submitGate.current.acquire(authority);
+    if (!ticket) return; // one-shot fence before any async request
+    const body = Object.freeze({ ...prepared, client_request_id: crypto.randomUUID() });
+    requestRef.current = { scope: authority, api, body };
+    void sendCreate(ticket, body, api);
+  };
+
+  const handleRetry = () => {
+    const saved = requestRef.current;
+    if (!saved || submitStatus !== 'uncertain' ||
+        saved.scope !== authority || saved.api !== api) return;
+    const ticket = submitGate.current.retry(authority);
+    if (!ticket) return; // double retry blocked synchronously
+    void sendCreate(ticket, saved.body, saved.api);
   };
 
   return (
@@ -125,6 +142,12 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
         {dataMode !== 'live' &&
           <p role="status">Vista demo. Conectá el backend para guardar una campaña real.</p>}
         {error && <div className="auth-error" role="alert" style={{ marginBottom: 0 }}><span>{error}</span></div>}
+        {submitStatus === 'uncertain' && authority && (
+          <button type="button" className="ghost-action" onClick={handleRetry}
+            disabled={saving}>
+            Reintentar el mismo envío
+          </button>
+        )}
 
         <label className="form-field">
           <span>Nombre de la campaña *</span>
