@@ -134,7 +134,7 @@ export function WorkOrdersPage({ focusOrderId = null }) {
         </section>
       )}
       {focusError && !error && <p className="orders-workspace__error" role="status">{focusError}</p>}
-      {scope && <WorkOrderReviewInbox key={scope} revision={revision} onOpenOrder={selectOrder} />}
+      {scope && scoped && <WorkOrderReviewInbox key={scope} revision={revision} onOpenOrder={selectOrder} />}
 
       {!error && (
         <>
