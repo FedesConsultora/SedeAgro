@@ -11,7 +11,7 @@ test('GIS view is only shown after authorized live run detail loads', () => {
   assert.match(runDetail, /<ScoutingObservationGeoPanel/);
   assert.match(runDetail, /observations=\{observations\}/);
   assert.match(runDetail, /boundary=\{details\.CampaignField\?\.Field\?\.boundary\}/);
-  assert.match(runDetail, /parseScoutingRunDetail\(response, run\.id\)/);
+  assert.match(runDetail, /parseScoutingRunDetail\(response, run\.id, session\?\.tenant\?\.id\)/);
   assert.doesNotMatch(runDetail, /api\.getField\(/);
 });
 

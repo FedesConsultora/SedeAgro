@@ -39,7 +39,7 @@ test('no local field record or GPS point is falsely counted as a persisted obser
 });
 
 test('scouting-to-sync navigation is access-checked in Shell, not a hardcoded external link', () => {
-  assert.match(page, /onOpenSync=\{\(\) => onNavigate\?\.\('sync', \{ id: details\.id \}\)\}/);
+  assert.match(page, /onOpenSync=\{\(\) => onNavigate\?\.\('sync', \{ id: run\.id \}\)\}/);
   assert.match(app, /onNavigate=\{handleViewChange\}/);
   assert.match(app, /if \(!canNavigateView\(id, access\)\) return;/);
   assert.match(panel, /onOpenSync\?\.\(\)/);
