@@ -127,6 +127,11 @@ export function createApiClient(session, feedback, authEpoch = 0) {
       method: 'DELETE', silent: true
     }),
     members: () => request('/auth/members'),
+    memberInvitations: () => request('/auth/invitations', { silent: true }),
+    createMemberInvitation: (body) => request('/auth/invitations', { method: 'POST', body, silent: true }),
+    revokeMemberInvitation: (id) => request(`/auth/invitations/${encodeURIComponent(id)}`, {
+      method: 'DELETE', silent: true
+    }),
     bootstrap: () => request('/catalogs/bootstrap'),
     producers: () => request('/farms/producers'),
     createProducer: (body) => request('/farms/producers', { method: 'POST', body }),

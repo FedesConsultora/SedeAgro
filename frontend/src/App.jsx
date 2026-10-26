@@ -34,6 +34,7 @@ import { TenantAdminPage } from './pages/TenantAdminPage.jsx';
 import { PlatformAdminPage } from './pages/PlatformAdminPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
 import { RegisterPage } from './pages/RegisterPage.jsx';
+import { InviteAcceptancePage } from './pages/InviteAcceptancePage.jsx';
 
 const views = [
   { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard, entitlement: null },
@@ -157,8 +158,10 @@ export function App() {
   );
 
   if (!isAuthenticated) {
+    if (authView === 'invite') return <InviteAcceptancePage onSwitchToLogin={() => setAuthView('login')} />;
     return authView === 'login'
-      ? <LoginPage onSwitchToRegister={() => setAuthView('register')} />
+      ? <LoginPage onSwitchToRegister={() => setAuthView('register')}
+          onSwitchToInvite={() => setAuthView('invite')} />
       : <RegisterPage onSwitchToLogin={() => setAuthView('login')} />;
   }
 
