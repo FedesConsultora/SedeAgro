@@ -183,6 +183,46 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
       'SELECT count(*)::int n FROM memberships WHERE tenant_id=$1 AND user_id=$2',
       [b, existing.id])).rows[0].n, 1);
 
+    // Expired bearer tokens must fail without creating a new user. The
+    // expired pending email is then reusable for a completely new secret.
+    const expiredEmail = 'expired-' + suffix + '@example.test';
+    const expiring = await invite(adminA, a, expiredEmail);
+    assert.equal(expiring.status, 201, JSON.stringify(expiring.json));
+    await owner.query(
+      "UPDATE member_invitations SET expires_at=now()-interval '1 second' WHERE id=$1",
+      [expiring.json.data.id]);
+    const past = await api('/invite/accept', { method: 'POST', body: {
+      token: expiring.json.delivery.token, password: 'FreshStrongPassword903', fullName: 'Expired'
+    } });
+    assert.equal(past.status, 410);
+    const reissued = await invite(adminA, a, expiredEmail);
+    assert.equal(reissued.status, 201, JSON.stringify(reissued.json));
+    assert.notEqual(reissued.json.data.id, expiring.json.data.id);
+
+    // Concurrent acceptance must serialize on tenant/invitation row and not
+    // produce duplicate credentials, members or two successful responses.
+    const raceEmail = 'race-' + suffix + '@example.test';
+    const raceInvite = await invite(adminA, a, raceEmail);
+    assert.equal(raceInvite.status, 201, JSON.stringify(raceInvite.json));
+    const raceBody = { token: raceInvite.json.delivery.token,
+      password: 'ConcurrentTesting903', fullName: 'Concurrent Scout' };
+    const races = await Promise.all([
+      api('/invite/accept', { method: 'POST', body: raceBody }),
+      api('/invite/accept', { method: 'POST', body: raceBody })
+    ]);
+    assert.deepEqual(races.map(x => x.status).sort(), [201, 410], JSON.stringify(races));
+    const racedUsers = (await owner.query('SELECT id FROM users WHERE email=$1', [raceEmail])).rows;
+    assert.equal(racedUsers.length, 1);
+    users.push(racedUsers[0].id);
+    assert.equal((await owner.query(
+      'SELECT count(*)::int n FROM memberships WHERE tenant_id=$1 AND user_id=$2',
+      [a, racedUsers[0].id])).rows[0].n, 1);
+    const auditRows = (await owner.query(
+      'SELECT before,after FROM audit_events WHERE entity_id=$1',
+      [raceInvite.json.data.id])).rows;
+    assert.equal(auditRows.length, 2);
+    assert.equal(JSON.stringify(auditRows).includes(raceInvite.json.delivery.token), false);
+
     // Per-tenant RLS reads use the runtime role, not the owner connection.
     await appClient.query('BEGIN');
     try {
