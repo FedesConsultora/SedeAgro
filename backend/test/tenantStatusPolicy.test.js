@@ -52,6 +52,9 @@ test('platform update locks tenant and revokes matching sessions before ACK, ret
   assert.match(patch,/planTenantStatusChange\(/);
   assert.match(patch,/private, no-store/);
   assert.match(patch,/platform.tenant.lifecycle_updated/);
+  assert.match(patch,/tenant_id: tenant.id/);
+  assert.match(patch,/skipTenantScope: true\s*\}\);\s*\}\s*res.setHeader/,
+    'platform audit must not be reassigned to actor home tenant by ALS hooks');
   assert.match(source,/if \(tenantId === req.tenantId\) return operation\(\)/);
   assert.match(source,/finally \{\s*await setLocalTenant\(req.dbTransaction, req.tenantId\)/);
 });
