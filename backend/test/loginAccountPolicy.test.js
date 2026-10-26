@@ -25,3 +25,14 @@ test('public tenant selection requires global status after password and before m
   assert.match(login,/new HttpError\(401, 'Email o contraseña incorrectos\.'/);
   assert.match(login,/requiresTenantSelection: true/);
 });
+
+test('session reservation rechecks status under a row-level lock after password verification', () => {
+  const src = readFileSync(new URL('../src/modules/auth/sessionPolicy.js', import.meta.url), 'utf8');
+  assert.match(src,/User\.findByPk\(userId,/);
+  assert.match(src,/lock: transaction\.LOCK\.UPDATE/);
+  assert.match(src,/attributes: \['id', 'status'\]/);
+  assert.match(src,/!canIssueLoginForGlobalAccount\(owner\)/);
+  assert.ok(src.indexOf('!canIssueLoginForGlobalAccount(owner)') <
+    src.indexOf('const active = await AuthSession.findAll'),
+    'must fail before evicting any existing session or reserving a new one');
+});
