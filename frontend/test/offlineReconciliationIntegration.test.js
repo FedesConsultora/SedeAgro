@@ -12,8 +12,9 @@ test('SyncPage embeds reconciliation and scopes decrypted rows to current accoun
   assert.match(page, /drafts=\{visiblePending\}/);
   assert.match(page, /filterSyncRunDrafts\(scopedPending, activeScope, focus\)/);
   assert.match(page, /pending\.filter\(row => row\.scope === activeScope\)/);
-  assert.match(page, /loadedServerScope === serverScope \? batches : \[\]/);
-  assert.match(page, /serverRequest\.current !== requestId \|\| serverScopeRef\.current !== serverScope/);
+  // Server receipts must match both session scope and API transport.
+  assert.match(page, /visibleSyncReceiptRows\(batches, loadedServerScope, loadedServerApi, serverScope, api\)/);
+  assert.match(page, /serverApiRef\.current === api/);
 });
 
 test('reconciliation uses only /sync/my-batches and hides data from another account', () => {
