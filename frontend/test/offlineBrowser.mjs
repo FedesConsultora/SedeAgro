@@ -448,6 +448,112 @@ try {
   console.log('PASS: mobile fallback photo persisted encrypted and reopened on reload');
   await mobile.close();
 
+  // Earlier sections intentionally closed their browser context. Campaign
+  // recovery uses its own origin-isolated Chromium context for both tabs.
+  const campaignContext = await browser.newContext();
+  const campaignPage = await campaignContext.newPage();
+  await campaignPage.goto('http://127.0.0.1:4173/');
+
+  // Pilot campaign recovery: real WebCrypto + IndexedDB, reload, two tabs
+  // and byte inspection. A manual retry must preserve the original UUID.
+  const campaignRecoveryInput = {
+    scope: JSON.stringify(['tenant-a:user-a', 'member-a', 'tenant_admin', ['campaigns']]),
+    otherScope: JSON.stringify(['tenant-b:user-b', 'member-b', 'tenant_admin', ['campaigns']]),
+    body: {
+      client_request_id: '9b000000-0000-4000-8000-000000000001',
+      name: 'PRIVATE-CAMPAIGN-NAME-NEVER-IN-PLAINTEXT',
+      season_year: 2026, starts_at: '2026-09-01', ends_at: '2027-06-30',
+      status: 'planned'
+    }
+  };
+  const savedCampaign = await campaignPage.evaluate(async ({scope, body}) => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    await service.saveCampaignRecovery(scope, body);
+    const row = await service.readCampaignRecovery(scope);
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('sedeagro-campaign-recovery', 1);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const tx = db.transaction('pending-creates', 'readonly');
+      const req = tx.objectStore('pending-creates').get(scope);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return {
+      key: row.body.client_request_id, name: row.body.name,
+      encrypted: raw.ciphertext instanceof ArrayBuffer,
+      leaked: JSON.stringify(raw).includes(body.name)
+    };
+  }, campaignRecoveryInput);
+  assert.deepEqual(savedCampaign, {
+    key: campaignRecoveryInput.body.client_request_id,
+    name: campaignRecoveryInput.body.name, encrypted: true, leaked: false
+  });
+  await campaignPage.reload({ waitUntil: 'domcontentloaded' });
+  const afterCampaignReload = await campaignPage.evaluate(async ({scope,otherScope,body}) => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    const restored = await service.readCampaignRecovery(scope);
+    return { body: restored.body, foreign: await service.readCampaignRecovery(otherScope) };
+  }, campaignRecoveryInput);
+  assert.deepEqual(afterCampaignReload.body, campaignRecoveryInput.body);
+  assert.equal(afterCampaignReload.foreign, null);
+  console.log('PASS: encrypted campaign replay body/UUID survives real reload, foreign scope sealed');
+
+  const campaignTab = await campaignContext.newPage();
+  await campaignTab.goto('http://127.0.0.1:4173/');
+  const fromOtherTab = await campaignTab.evaluate(async scope => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    return (await service.readCampaignRecovery(scope)).body.client_request_id;
+  }, campaignRecoveryInput.scope);
+  assert.equal(fromOtherTab, campaignRecoveryInput.body.client_request_id);
+  const staleDelete = await campaignTab.evaluate(async ({scope}) => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    return service.discardCampaignRecovery(scope, '9b000000-0000-4000-8000-000000000099');
+  }, campaignRecoveryInput);
+  assert.equal(staleDelete, false);
+  await assert.rejects(
+    campaignPage.evaluate(async ({scope,body}) => {
+      const service = await import('/src/services/campaignRecoveryStore.js');
+      return service.saveCampaignRecovery(scope, {...body,
+        client_request_id: '9b000000-0000-4000-8000-000000000002'});
+    }, campaignRecoveryInput), /pendiente/);
+  const originalGone = await campaignTab.evaluate(async ({scope,body}) => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    return service.discardCampaignRecovery(scope, body.client_request_id);
+  }, campaignRecoveryInput);
+  assert.equal(originalGone, true);
+
+  const race = await Promise.allSettled([
+    campaignPage.evaluate(async ({scope,body}) => {
+      const service = await import('/src/services/campaignRecoveryStore.js');
+      return service.saveCampaignRecovery(scope, {
+        ...body, client_request_id: '9b000000-0000-4000-8000-000000000003',
+        name: 'CAMPAIGN-TAB-A-PRIVATE'
+      });
+    }, campaignRecoveryInput),
+    campaignTab.evaluate(async ({scope,body}) => {
+      const service = await import('/src/services/campaignRecoveryStore.js');
+      return service.saveCampaignRecovery(scope, {
+        ...body, client_request_id: '9b000000-0000-4000-8000-000000000004',
+        name: 'CAMPAIGN-TAB-B-PRIVATE'
+      });
+    }, campaignRecoveryInput)
+  ]);
+  assert.deepEqual(race.map(x=>x.status).sort(), ['fulfilled','rejected'],
+    'only one browser tab may reserve an uncertain campaign slot');
+  const campaignRaceBody = await campaignPage.evaluate(async scope => {
+    const service = await import('/src/services/campaignRecoveryStore.js');
+    return (await service.readCampaignRecovery(scope)).body;
+  }, campaignRecoveryInput.scope);
+  assert.ok(['CAMPAIGN-TAB-A-PRIVATE','CAMPAIGN-TAB-B-PRIVATE'].includes(campaignRaceBody.name));
+  console.log('PASS: concurrent tabs cannot overwrite pending creation or discard wrong UUID');
+
+  await campaignTab.close();
+  await campaignContext.close();
+
   // Exercise production service-worker shell under a real offline reload.
   server.kill();
   server = run(process.execPath, [
