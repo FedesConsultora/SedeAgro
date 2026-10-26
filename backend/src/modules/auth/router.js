@@ -21,6 +21,7 @@ import { rateLimit } from '../../infra/http/middlewares/rateLimit.js';
 import { reserveSessionSlot, MAX_ACTIVE_SESSIONS } from './sessionPolicy.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { invitationPublicRouter, invitationScopedRouter } from './invitations.js';
+import { memberLifecycleRouter } from './memberLifecycle.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
@@ -29,6 +30,7 @@ export const authScopedRouter = Router();
 // Administration stays behind scoped auth + tenant RLS.
 authPublicRouter.use('/invite', invitationPublicRouter);
 authScopedRouter.use('/invitations', invitationScopedRouter);
+authScopedRouter.use('/members', memberLifecycleRouter);
 
 const registerTenantSchema = z.object({
   organizationName: z.string().min(2).max(180),

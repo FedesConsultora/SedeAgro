@@ -7,6 +7,7 @@ import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { MemberInvitationPanel } from '../components/MemberInvitationPanel.jsx';
 import { extractCollection } from '../services/useTenantCollection.js';
 import { teamPrivateListScope, checkedTeamPrivateRows } from '../services/teamPrivateListScope.js';
+import { canManageMember, prepareMemberStatus, confirmMemberStatus } from '../services/memberLifecycleSafety.js';
 
 const ROLE_LABELS = {
   platform_admin: 'Admin Plataforma',
@@ -73,7 +74,7 @@ function InviteMemberModal({ open, onClose, onInvited }) {
   );
 }
 
-function MemberCard({ member }) {
+function MemberCard({ member, manageable = false, onStatusChange = null, changing = false }) {
   const user = member.User || {};
   const roleCode = member.role_code;
   const tone = ROLE_TONES[roleCode] || 'slate';
@@ -102,9 +103,16 @@ function MemberCard({ member }) {
         <span className={`status-badge status-badge--${tone}`}>
           {ROLE_LABELS[roleCode] || roleCode}
         </span>
-        <span className={`status-badge status-badge--${user.status === 'active' ? 'green' : 'slate'}`}>
-          {user.status === 'active' ? 'Activo' : user.status || '–'}
+        <span className={`status-badge status-badge--${member.status === 'active' && user.status === 'active' ? 'green' : 'slate'}`}>
+          {member.status === 'blocked' ? 'Acceso suspendido' :
+            user.status !== 'active' ? 'Cuenta inhabilitada' :
+              member.status === 'active' ? 'Activo' : member.status || '–'}
         </span>
+        {manageable && <button type="button" className="ghost-action"
+          disabled={changing} aria-busy={changing}
+          onClick={() => onStatusChange?.(member)}>
+          {changing ? 'Guardando…' : member.status === 'active' ? 'Suspender acceso' : 'Reactivar acceso'}
+        </button>}
       </div>
     </div>
   );
@@ -158,6 +166,18 @@ export function TeamPage() {
   const errors = visible?.errors || { members: null, teams: null };
   const [revision, setRevision] = useState(0);
   const [showInvite, setShowInvite] = useState(false);
+  const mutationRef = useRef(null);
+  // Render-time fencing: a late response cannot apply a status change to an
+  // account which replaced the current tenant/actor/API transport.
+  if (mutationRef.current &&
+      (mutationRef.current.scope !== scope || mutationRef.current.api !== api)) {
+    mutationRef.current = null;
+  }
+  const [statusPending, setStatusPending] = useState(null);
+  const [statusError, setStatusError] = useState(null);
+  const changing = statusPending?.scope === scope && statusPending?.api === api;
+  const visibleStatusError = statusError?.scope === scope && statusError?.api === api
+    ? statusError.message : null;
 
   useEffect(() => {
     let active = true;
@@ -217,6 +237,47 @@ export function TeamPage() {
     });
   };
 
+  const handleMemberStatusChange = async (member) => {
+    if (!canManageMember(member, session, dataMode) || errors.members || loading ||
+        mutationRef.current) return;
+    const target = member.status === 'active' ? 'blocked' : 'active';
+    const label = target === 'blocked'
+      ? '¿Suspender el acceso a esta empresa? Se revocarán sus sesiones abiertas.'
+      : '¿Reactivar el acceso a esta empresa? Tendrá que iniciar sesión nuevamente.';
+    if (!window.confirm(label)) return;
+    let operation;
+    try { operation = prepareMemberStatus(member, target, session, dataMode); }
+    catch { return; }
+    const requestScope = scope;
+    const requestApi = api;
+    const ticket = { scope: requestScope, api: requestApi, id: member.id };
+    mutationRef.current = ticket;
+    setStatusPending(ticket);
+    setStatusError(null);
+    try {
+      const response = await requestApi.changeMemberStatus(member.id, target);
+      if (scopeRef.current !== requestScope || apiRef.current !== requestApi ||
+          mutationRef.current !== ticket) return;
+      confirmMemberStatus(response, operation);
+      setRevision(value => value + 1);
+    } catch (err) {
+      if (scopeRef.current === requestScope && apiRef.current === requestApi &&
+          mutationRef.current === ticket) {
+        setStatusError({ scope: requestScope, api: requestApi,
+          message: 'No se confirmó el cambio de acceso. Actualizá el listado antes de reintentar. ' +
+            (err?.message || '') });
+        setRevision(value => value + 1);
+      }
+    } finally {
+      if (mutationRef.current === ticket) {
+        mutationRef.current = null;
+        if (scopeRef.current === requestScope && apiRef.current === requestApi) {
+          setStatusPending(null);
+        }
+      }
+    }
+  };
+
   const platformAdmins = members.filter(m => m.User?.is_platform_admin);
   const regularMembers = members.filter(m => !m.User?.is_platform_admin);
 
@@ -244,6 +305,7 @@ export function TeamPage() {
       {dataMode === 'live' && !scope &&
         <div className="auth-error" role="alert">La sesión no permite consultar miembros de esta empresa.</div>}
       <MemberInvitationPanel api={api} session={session} dataMode={dataMode} />
+      {visibleStatusError && <p role="alert" className="resource-error">{visibleStatusError}</p>}
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
       ) : (
@@ -277,7 +339,10 @@ export function TeamPage() {
               </div>
             ) : (
               <div className="member-grid">
-                {regularMembers.map(m => <MemberCard key={m.id} member={m} />)}
+                {regularMembers.map(m => <MemberCard key={m.id} member={m}
+                  manageable={canManageMember(m, session, dataMode)}
+                  changing={Boolean(changing)}
+                  onStatusChange={handleMemberStatusChange} />)}
               </div>
             )}
           </section>}
