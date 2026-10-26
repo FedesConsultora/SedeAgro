@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { AuthSession, Membership, PlatformAuditLog, User } from '../../models/index.js';
+import { AuthSession, PlatformAuditLog, Tenant, User } from '../../models/index.js';
 import { setLocalTenant } from '../../core/db.js';
 import { isPlatformAdministrator } from '../../infra/security/securityGuards.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
@@ -51,16 +51,19 @@ globalUserLifecycleRouter.patch('/:userId/status', validate(statusSchema),
 
     let revokedSessions = 0;
     if (next === 'blocked') {
-      // memberships currently remains global for public multiempresa login.
-      // This is a *platform-admin-only*, DB-row-locked enumeration, not an
-      // untrusted tenant API read and not an assertion of membership FORCE RLS.
-      const memberships = await Membership.findAll({
-        where: { user_id: target.id }, attributes: ['tenant_id'],
-        transaction, skipTenantScope: true
+      // Enumerate *all* tenant IDs through this already-authorized platform
+      // route. An old JTI may survive the deletion of its membership; revoking
+      // only CURRENT memberships would resurrect that JTI if membership were
+      // later recreated. auth_sessions is FORCE RLS, so switch the GUC for each
+      // tenant and update only this target user without bypassing its policy.
+      // Rare global blocks are intentionally O(tenant count) for correctness;
+      // benchmark the duration before enabling large-scale platform operations.
+      const tenants = await Tenant.findAll({
+        attributes: ['id'], transaction, skipTenantScope: true,
+        order: [['id', 'ASC']]
       });
-      const tenants = [...new Set(memberships.map(row => row.tenant_id))];
       try {
-        for (const tenantId of tenants) {
+        for (const { id: tenantId } of tenants) {
           await setLocalTenant(transaction, tenantId);
           const [count] = await AuthSession.update({ revoked_at: now }, {
             where: { tenant_id: tenantId, user_id: target.id, revoked_at: null },
