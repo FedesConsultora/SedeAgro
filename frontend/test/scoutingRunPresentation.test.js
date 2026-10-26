@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable,
-  scoutingRunCapabilities
+  scoutingRunCapabilities, scoutingPrivateViewScope, visibleScoutingRuns
 } from '../src/services/scoutingRunPresentation.js';
 
 const ID = 'run-1';
@@ -65,4 +66,60 @@ test('admins and coordinators can manage; outsiders, expired sessions and demo c
   assert.equal(scoutingRunCapabilities(run(), session('tenant_admin'), 'mock').canManage, false);
   assert.equal(scoutingRunCapabilities(null, session('tenant_admin'), 'live').canManage, false);
   assert.equal(scoutingRunCapabilities(run(), { ...session('scout'), authenticated: false }, 'live').canObserve, false);
+});
+
+test('scouting list scope fences tenant, actor, membership, role and entitlements', () => {
+  const initial = { ...session('scout'),
+    membership: { id: 'member-1', roleCode: 'scout' },
+    entitlements: ['scouting', 'gis'] };
+  const scope = scoutingPrivateViewScope(initial, 'live');
+  assert.ok(scope);
+  assert.equal(scoutingPrivateViewScope({ ...initial,
+    entitlements: ['gis', 'scouting', 'gis'] }, 'live'), scope);
+  for (const patch of [
+    { tenant: { id: 'tenant-B' } }, { user: { id: 'other' } },
+    { membership: { id: 'member-2', roleCode: 'scout' } },
+    { membership: { id: 'member-1', roleCode: 'tenant_admin' } },
+    { entitlements: ['scouting', 'reports'] }
+  ]) assert.notEqual(scoutingPrivateViewScope({ ...initial, ...patch }, 'live'), scope);
+  for (const patch of [
+    { authenticated: false }, { user: {} }, { tenant: {} },
+    { membership: null }, { membership: { roleCode: 'scout' } },
+    { entitlements: ['gis'] }, { entitlements: null }
+  ]) assert.equal(scoutingPrivateViewScope({ ...initial, ...patch }, 'live'), null);
+  assert.equal(scoutingPrivateViewScope(initial, 'mock'), 'demo');
+});
+
+test('same tenant with another API transport never displays previous run GPS or lot names', () => {
+  const api = {};
+  const rows = [run()];
+  const scope = 'authorized-scope';
+  assert.equal(visibleScoutingRuns(rows, scope, api, scope, api), rows);
+  assert.deepEqual(visibleScoutingRuns(rows, scope, api, scope, {}), []);
+  assert.deepEqual(visibleScoutingRuns(rows, scope, api, 'other', api), []);
+  assert.deepEqual(visibleScoutingRuns(rows, scope, api, null, api), []);
+});
+
+test('explicit foreign-tenant scouting lists and details are rejected', () => {
+  const own = { ...run(), tenant_id: 'tenant-A' };
+  assert.deepEqual(parseScoutingRuns({ data: [own] }, 'tenant-A'), [own]);
+  assert.equal(parseScoutingRunDetail({ data: own }, ID, 'tenant-A'), own);
+  assert.throws(() => parseScoutingRuns({
+    data: [{ ...own, tenant_id: 'tenant-B' }]
+  }, 'tenant-A'), /lista de recorridas inválida/);
+  assert.throws(() => parseScoutingRunDetail({
+    data: { ...own, tenant_id: 'tenant-B' }
+  }, ID, 'tenant-A'), /detalle de recorrida inválido/);
+});
+
+test('scouting component remounts details after membership or API change before showing old names', () => {
+  const source = readFileSync(new URL('../src/pages/ScoutingPage.jsx', import.meta.url), 'utf8');
+  assert.match(source, /scoutingPrivateViewScope\(session, dataMode\)/);
+  assert.match(source, /setLoadedApi\(api\)/);
+  assert.match(source, /visibleScoutingRuns\(runs, loadedScope, loadedApi, scope, api\)/);
+  assert.match(source, /listApiRef\.current === api/);
+  assert.match(source, /parseScoutingRuns\(response, session\.tenant\.id\)/);
+  assert.match(source, /parseScoutingRunDetail\(response, run\.id, session\?\.tenant\?\.id\)/);
+  assert.match(source, /<RunDetail key=\{scope \+ ':' \+ run\.id\}/);
+  assert.match(source, /\{showModal && canPlan && <ScoutingRunFormModal/);
 });
