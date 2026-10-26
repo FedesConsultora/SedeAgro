@@ -40,6 +40,9 @@ test('global suspension locks user, revokes by tenant RLS and resets original sc
   const reply = source.indexOf('res.json({ data:');
   assert.ok(lock >= 0 && mutate > lock && revoke > mutate && reset > revoke && reply > reset);
   assert.match(source,/globalUserStatusDecision\(req\.auth\.user, target, req\.body\.status\)/);
+  assert.match(source,/Tenant\.findAll\(/);
+  assert.doesNotMatch(source,/Membership\.findAll\(/,
+    'must revoke orphaned JWT sessions from tenants without a current membership');
   assert.match(source,/await setLocalTenant\(transaction, tenantId\)/);
   assert.match(source,/where: \{ tenant_id: tenantId, user_id: target\.id, revoked_at: null \}/);
   assert.match(source,/PlatformAuditLog\.create\(/);
