@@ -123,7 +123,12 @@ platformRouter.patch('/tenants/:id', validate(tenantIdParams, 'params'), asyncHa
         before, after: { status: tenant.status, plan_id: tenant.plan_id },
         revoked_sessions: revokedSessions
       }
-    }, { transaction });
+    }, {
+      transaction,
+      // The global ALS tenant hook defaults to the platform admin's HOME
+      // tenant. This event belongs to the TARGET tenant; do not overwrite it.
+      skipTenantScope: true
+    });
   }
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ data: tenant, changed, revokedSessions });
