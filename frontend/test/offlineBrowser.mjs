@@ -626,6 +626,104 @@ try {
   await runCtx.close();
   console.log('PASS: scouting run encrypted UUID survives reload; tabs and campaigns remain isolated');
 
+  // Work-order recovery in a fresh Chromium context. The previous tests
+  // closed their contexts intentionally, but encrypted state must survive a
+  // genuine reload and remain inaccessible through another actor's scope.
+  const orderContext = await browser.newContext();
+  const orderPage = await orderContext.newPage();
+  await orderPage.goto('http://127.0.0.1:4173/');
+  const orderScope = JSON.stringify(['tenant-e:actor-e','tenant_admin',['work_orders']]);
+  const otherOrderScope = JSON.stringify(['tenant-f:actor-f','tenant_admin',['work_orders']]);
+  const orderBody = {
+    client_request_id: '9d000000-0000-4000-8000-000000000001',
+    field_id: '9d000000-0000-4000-8000-000000000002',
+    type: 'inspection', priority: 'high',
+    title: 'PRIVATE-WORK-ORDER-CREATION',
+    instructions: 'PRIVATE-FIELD-INSTRUCTIONS',
+    due_at: '2026-11-01T12:00:00.000Z'
+  };
+  const firstOrder = await orderPage.evaluate(async ({ scope, otherScope, body }) => {
+    const orders = await import('/src/services/workOrderRecoveryStore.js');
+    const campaigns = await import('/src/services/campaignRecoveryStore.js');
+    const runs = await import('/src/services/scoutingRunRecoveryStore.js');
+    await orders.saveWorkOrderRecovery(scope, body);
+    const active = await orders.readWorkOrderRecovery(scope);
+    const foreign = await orders.readWorkOrderRecovery(otherScope);
+    const campaign = await campaigns.readCampaignRecovery(scope);
+    const scouting = await runs.readScoutingRunRecovery(scope);
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('sedeagro-work-order-recovery', 1);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const request = db.transaction('pending-creates','readonly')
+        .objectStore('pending-creates').get(scope);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return {
+      body: active.body, foreign, campaign, scouting,
+      sealed: raw.ciphertext instanceof ArrayBuffer,
+      leaked: JSON.stringify(raw).includes(body.title) ||
+        JSON.stringify(raw).includes(body.instructions)
+    };
+  }, {scope:orderScope,otherScope:otherOrderScope,body:orderBody});
+  assert.deepEqual(firstOrder, {
+    body:orderBody,foreign:null,campaign:null,scouting:null,sealed:true,leaked:false
+  });
+  await orderPage.reload({waitUntil:'domcontentloaded'});
+  const resumedOrder = await orderPage.evaluate(async scope => {
+    const {readWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+    return (await readWorkOrderRecovery(scope)).body;
+  },orderScope);
+  assert.deepEqual(resumedOrder,orderBody);
+
+  const orderOtherTab = await orderContext.newPage();
+  await orderOtherTab.goto('http://127.0.0.1:4173/');
+  const wrongOrderDiscard = await orderOtherTab.evaluate(async scope => {
+    const {discardWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+    return discardWorkOrderRecovery(scope, '9d000000-0000-4000-8000-000000000099');
+  },orderScope);
+  assert.equal(wrongOrderDiscard,false);
+  await assert.rejects(orderOtherTab.evaluate(async ({scope,body}) => {
+    const {saveWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+    return saveWorkOrderRecovery(scope,{...body,
+      client_request_id:'9d000000-0000-4000-8000-000000000003'});
+  },{scope:orderScope,body:orderBody}),/pendiente/);
+  assert.equal(await orderOtherTab.evaluate(async ({scope,id}) => {
+    const {discardWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+    return discardWorkOrderRecovery(scope,id);
+  },{scope:orderScope,id:orderBody.client_request_id}),true);
+
+  const racedOrders = await Promise.allSettled([
+    orderPage.evaluate(async ({scope,body}) => {
+      const {saveWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+      return saveWorkOrderRecovery(scope,{...body,
+        client_request_id:'9d000000-0000-4000-8000-000000000004',
+        title:'ORDER-RECOVERY-RACE-A'});
+    },{scope:orderScope,body:orderBody}),
+    orderOtherTab.evaluate(async ({scope,body}) => {
+      const {saveWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+      return saveWorkOrderRecovery(scope,{...body,
+        client_request_id:'9d000000-0000-4000-8000-000000000005',
+        title:'ORDER-RECOVERY-RACE-B'});
+    },{scope:orderScope,body:orderBody})
+  ]);
+  assert.deepEqual(racedOrders.map(x=>x.status).sort(),['fulfilled','rejected'],
+    'exactly one tab can commit the next pending work-order request');
+  const racedOrder = await orderPage.evaluate(async scope => {
+    const {readWorkOrderRecovery} = await import('/src/services/workOrderRecoveryStore.js');
+    return (await readWorkOrderRecovery(scope)).body;
+  },orderScope);
+  assert.ok(['ORDER-RECOVERY-RACE-A','ORDER-RECOVERY-RACE-B'].includes(racedOrder.title));
+  assert.ok(['9d000000-0000-4000-8000-000000000004',
+    '9d000000-0000-4000-8000-000000000005'].includes(racedOrder.client_request_id));
+  await orderOtherTab.close();
+  await orderContext.close();
+  console.log('PASS: encrypted work-order UUID/body survives real reload, tabs and separate namespaces');
+
   // Exercise production service-worker shell under a real offline reload.
   server.kill();
   server = run(process.execPath, [
