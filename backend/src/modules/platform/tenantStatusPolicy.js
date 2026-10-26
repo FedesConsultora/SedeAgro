@@ -1,12 +1,12 @@
 // Tenant suspension is not a delete. All previous session JTIs must be
 // revoked BEFORE a suspended tenant can ever be restored to active.
 export function planTenantStatusChange({
-  actorTenantId, targetTenantId, previousStatus, nextStatus
+  actorTenantId, targetTenantId, previousStatus, nextStatus, planChangeRequested = false
 }) {
   if (!actorTenantId || !targetTenantId) {
     return { allowed: false, code: 'TENANT_STATUS_CONTEXT_INVALID' };
   }
-  if (previousStatus === 'deleted' && nextStatus !== undefined && nextStatus !== 'deleted') {
+  if (previousStatus === 'deleted' && (nextStatus !== 'deleted' || planChangeRequested)) {
     return { allowed: false, code: 'TENANT_DELETED_TERMINAL' };
   }
   if (nextStatus !== undefined &&
