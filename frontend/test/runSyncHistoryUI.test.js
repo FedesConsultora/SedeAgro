@@ -10,7 +10,7 @@ const api = read('services/offlineReconciliation.js');
 
 test('history only mounts below a loaded, authorized live scouting run detail', () => {
   assert.match(detail, /dataMode === 'live' && !loading && !error && details && \(\s*<RunSyncHistory runId=\{details\.id\}/);
-  assert.match(detail, /parseScoutingRunDetail\(response, run\.id\)/);
+  assert.match(detail, /parseScoutingRunDetail\(response, run\.id, session\?\.tenant\?\.id\)/);
   assert.match(detail, /<RunOfflineCaptures runId=\{details\.id\}/);
   assert.match(detail, /<ScoutingObservationGeoPanel/);
   assert.doesNotMatch(panel, /api\.getScoutingRun|api\.getScoutingObservations/);
