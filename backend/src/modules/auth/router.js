@@ -22,6 +22,7 @@ import { reserveSessionSlot, MAX_ACTIVE_SESSIONS } from './sessionPolicy.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { invitationPublicRouter, invitationScopedRouter } from './invitations.js';
 import { memberLifecycleRouter } from './memberLifecycle.js';
+import { canIssueLoginForGlobalAccount } from './loginAccountPolicy.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
@@ -173,7 +174,13 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
     where: { email },
     skipTenantScope: true
   });
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
+  // A tenant membership can remain active after the global user account
+  // is blocked/deleted by platform administration. Check GLOBAL status before
+  // enumerating tenant names or creating a new persisted login session.
+  // Keep the response identical to incorrect credentials to avoid disclosing
+  // whether the email, password or account status was responsible.
+  if (!user || !(await verifyPassword(password, user.password_hash)) ||
+      !canIssueLoginForGlobalAccount(user)) {
     throw new HttpError(401, 'Email o contraseña incorrectos.');
   }
 
