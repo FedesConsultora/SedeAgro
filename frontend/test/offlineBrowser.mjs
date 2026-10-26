@@ -538,11 +538,11 @@ try {
   ]);
   assert.deepEqual(race.map(x=>x.status).sort(), ['fulfilled','rejected'],
     'only one browser tab may reserve an uncertain campaign slot');
-  const raced = await page.evaluate(async scope => {
+  const campaignRaceBody = await page.evaluate(async scope => {
     const service = await import('/src/services/campaignRecoveryStore.js');
     return (await service.readCampaignRecovery(scope)).body;
   }, campaignRecoveryInput.scope);
-  assert.ok(['CAMPAIGN-TAB-A-PRIVATE','CAMPAIGN-TAB-B-PRIVATE'].includes(raced.name));
+  assert.ok(['CAMPAIGN-TAB-A-PRIVATE','CAMPAIGN-TAB-B-PRIVATE'].includes(campaignRaceBody.name));
   console.log('PASS: concurrent tabs cannot overwrite pending creation or discard wrong UUID');
 
   await campaignTab.close();
