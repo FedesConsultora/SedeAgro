@@ -6,6 +6,9 @@ import { mockData } from '../services/mockData.js';
 import {
   createWorkOrderSubmitGate, verifyCreatedWorkOrder, workOrderCreateScope
 } from '../services/workOrderCreateSafety.js';
+import {
+  readWorkOrderRecovery, saveWorkOrderRecovery, discardWorkOrderRecovery
+} from '../services/workOrderRecoveryStore.js';
 
 const emptyForm = () => ({
   field_id: '',
@@ -15,6 +18,13 @@ const emptyForm = () => ({
   instructions: '',
   due_at: ''
 });
+
+function localDatetime(instant) {
+  if (!instant) return '';
+  const value = new Date(instant);
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60000)
+    .toISOString().slice(0, 16);
+}
 
 export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
   const { api, dataMode, session } = useSession();
@@ -38,23 +48,64 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
   const fieldsLoading = Boolean(isOpen && authority && (!fieldsVisible || fieldsVisible.phase === 'loading'));
   const fieldsError = fieldsVisible?.phase === 'error' ? fieldsVisible.error : null;
   const [revision, setRevision] = useState(0);
-  const [form, setForm] = useState(emptyForm);
+  // Sensitive lot/order details cannot outlive a tenant or auth transport
+  // even for the render preceding a cleanup effect.
+  const [formSnapshot, setFormSnapshot] = useState(null);
+  const form = formSnapshot?.scope === authority && formSnapshot?.api === api
+    ? formSnapshot.value : emptyForm();
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [error, setError] = useState('');
+  const [recoveryState, setRecoveryState] = useState(null);
+  const recoveryView = recoveryState?.scope === authority && recoveryState?.api === api
+    ? recoveryState : null;
+  const recoveryLoading = Boolean(isOpen && dataMode === 'live' && authority &&
+    (!recoveryView || recoveryView.phase === 'loading'));
+  const recoveryBlocked = Boolean(isOpen && dataMode === 'live' && authority &&
+    recoveryView?.phase === 'error');
 
   useEffect(() => {
-    // Every new modal/authentication context receives a fresh creation gate.
-    // No stale response can release the gate of the next tenant or user.
+    let active = true;
     submitGate.current.reset();
     requestRef.current = null;
-    setForm(emptyForm());
+    setFormSnapshot({ scope: authority, api, value: emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
     setFieldsSnapshot(null);
-    return () => { submitGate.current.reset(); requestRef.current = null; };
-  }, [isOpen, authority, api]);
+    setRecoveryState({ scope: authority, api,
+      phase: isOpen && dataMode === 'live' && authority ? 'loading' : 'idle' });
+
+    if (isOpen && dataMode === 'live' && authority) {
+      // No HTTP operation is triggered on restore: authentication and the
+      // operator's explicit action are required for every server replay.
+      void readWorkOrderRecovery(authority).then(saved => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        if (saved) {
+          requestRef.current = { scope: authority, api, body: saved.body };
+          setFormSnapshot({ scope: authority, api, value: {
+            field_id: saved.body.field_id,
+            type: saved.body.type,
+            priority: saved.body.priority,
+            title: saved.body.title,
+            instructions: saved.body.instructions || '',
+            due_at: localDatetime(saved.body.due_at)
+          } });
+          setSubmitStatus('uncertain');
+          setError('Hay una orden pendiente de confirmar. Revisá Órdenes o reintentá exactamente el mismo envío.');
+        }
+        setRecoveryState({ scope: authority, api, phase: 'ready' });
+      }).catch(err => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        setRecoveryState({ scope: authority, api, phase: 'error' });
+        setError((err?.message || 'No se pudo recuperar la orden pendiente.') +
+          ' No se enviará una orden nueva hasta revisar el almacenamiento.');
+      });
+    }
+    return () => { active = false; submitGate.current.reset(); requestRef.current = null; };
+  }, [isOpen, authority, api, dataMode]);
 
   useEffect(() => {
     if (!isOpen || !authority) return undefined;
@@ -85,9 +136,13 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
   }, [isOpen, authority, api, dataMode, revision]);
 
   const set = (key) => (event) => {
-    if (submitGate.current.isBlocked(authority)) return;
+    if (!editable) return;
     const value = event.target.value;
-    setForm(previous => ({ ...previous, [key]: value }));
+    setFormSnapshot(previous => ({
+      scope: authority, api,
+      value: { ...(previous?.scope === authority && previous?.api === api
+        ? previous.value : emptyForm()), [key]: value }
+    }));
   };
 
   const safeClose = () => {
@@ -111,6 +166,9 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
         const response = await requestApi.createWorkOrder(body);
         if (!current()) return;
         verifyCreatedWorkOrder(response, body, session?.user?.id, session?.tenant?.id);
+        const removed = await discardWorkOrderRecovery(authority, body.client_request_id);
+        if (!current()) return;
+        if (!removed) throw new Error('No se pudo retirar el envío pendiente.');
         confirmed = true;
       }
       if (!current()) return;
@@ -128,9 +186,10 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     if (confirmed && current()) onCreated?.();
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!isOpen || !authority || fieldsLoading || fieldsError ||
+    if (!isOpen || !authority || recoveryLoading || recoveryBlocked ||
+        fieldsLoading || fieldsError ||
         !fields.some(field => field.id === form.field_id) ||
         form.title.trim().length < 2) return;
     let due;
@@ -153,19 +212,69 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
       ...(dataMode === 'live' ? { client_request_id: crypto.randomUUID() } : {})
     });
     requestRef.current = { scope: authority, api, body };
-    void sendCreate(ticket, body, api);
+    if (dataMode === 'mock') {
+      void sendCreate(ticket, body, api);
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      // Durability-before-network. If local storage fails or two tabs race,
+      // never POST with a new UUID and risk a duplicate after lost ACK.
+      await saveWorkOrderRecovery(authority, body);
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      void sendCreate(ticket, body, api);
+    } catch (err) {
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      submitGate.current.finish(ticket, 'preflight-rejected');
+      requestRef.current = null;
+      setRecoveryState({ scope: authority, api, phase: 'error' });
+      setError((err?.message || 'No se pudo guardar el envío cifrado.') +
+        ' No se envió la orden. Cerrá y reabrí para revisar su estado local.');
+      setSaving(false);
+    }
   };
 
   const handleRetry = () => {
     const saved = requestRef.current;
     if (dataMode !== 'live' || submitStatus !== 'uncertain' ||
-        !saved || saved.scope !== authority || saved.api !== api) return;
-    const ticket = submitGate.current.retry(authority);
+        recoveryLoading || recoveryBlocked || !saved ||
+        saved.scope !== authority || saved.api !== api) return;
+    const ticket = submitGate.current.isBlocked(authority)
+      ? submitGate.current.retry(authority)
+      : submitGate.current.acquire(authority);
     if (!ticket) return;
     void sendCreate(ticket, saved.body, saved.api);
   };
 
-  const blocked = saving || submitStatus !== '' ||
+  const handleDiscard = async () => {
+    const saved = requestRef.current;
+    if (dataMode !== 'live' || !saved || submitStatus !== 'uncertain' ||
+        saving || recoveryLoading || recoveryBlocked ||
+        saved.scope !== authority || saved.api !== api ||
+        !window.confirm('Revisá primero Órdenes: el servidor podría haber creado esta orden. ¿Descartar la recuperación y permitir una nueva?')) return;
+    setSaving(true);
+    try {
+      const removed = await discardWorkOrderRecovery(authority, saved.body.client_request_id);
+      if (!openRef.current || scopeRef.current !== authority || apiRef.current !== api) return;
+      if (!removed) throw new Error('Otra pestaña modificó la solicitud pendiente.');
+      submitGate.current.reset();
+      requestRef.current = null;
+      setFormSnapshot({ scope: authority, api, value: emptyForm() });
+      setSubmitStatus('');
+      setError('');
+    } catch (err) {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setError(err?.message || 'No se pudo descartar la recuperación.');
+      }
+    } finally {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) setSaving(false);
+    }
+  };
+
+  const blocked = saving || recoveryLoading || recoveryBlocked || submitStatus !== '' ||
     submitGate.current.isBlocked(authority);
   const editable = !blocked && Boolean(authority);
   return (
@@ -183,16 +292,24 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
         {!authority && dataMode === 'live' &&
           <div className="auth-error" role="alert">Tu sesión no permite crear órdenes de trabajo.</div>}
         {fieldsLoading && <p role="status">Cargando lotes autorizados…</p>}
+        {recoveryLoading && <p role="status">Buscando órdenes pendientes cifradas…</p>}
+        {recoveryBlocked && <p role="alert">La recuperación de órdenes no está disponible. No se enviarán nuevas órdenes.</p>}
         {fieldsError && <ResourceLoadNotice title="lotes de la orden" error={fieldsError}
           onRetry={() => setRevision(value => value + 1)} />}
         {!fieldsLoading && !fieldsError && fields.length === 0 &&
           <p role="status">No hay lotes disponibles. Registrá un lote antes de crear la orden.</p>}
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
         {submitStatus === 'uncertain' && dataMode === 'live' && authority && (
-          <button type="button" className="ghost-action" onClick={handleRetry}
-            disabled={saving}>
-            Reintentar el mismo envío
-          </button>
+          <>
+            <button type="button" className="ghost-action" onClick={handleRetry}
+              disabled={saving || recoveryLoading || recoveryBlocked}>
+              Reintentar el mismo envío
+            </button>
+            <button type="button" className="ghost-action" onClick={handleDiscard}
+              disabled={saving || recoveryLoading || recoveryBlocked}>
+              Descartar tras revisar Órdenes
+            </button>
+          </>
         )}
 
         <label className="form-field">
