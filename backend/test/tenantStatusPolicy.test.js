@@ -29,6 +29,9 @@ test('platform tenant suspension forbids self lockout and deletion resurrection'
   assert.deepEqual(planTenantStatusChange({...base,previousStatus:'deleted',nextStatus:'active'}),{
     allowed:false,code:'TENANT_DELETED_TERMINAL'
   });
+  assert.deepEqual(planTenantStatusChange({...base,previousStatus:'deleted',nextStatus:undefined,planChangeRequested:true}),{
+    allowed:false,code:'TENANT_DELETED_TERMINAL'
+  });
   assert.deepEqual(planTenantStatusChange({...base,nextStatus:'invalid'}),{
     allowed:false,code:'TENANT_STATUS_INVALID'
   });
