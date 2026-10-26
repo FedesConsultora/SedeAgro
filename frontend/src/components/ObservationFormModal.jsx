@@ -4,7 +4,6 @@ import { Modal } from './Modal.jsx';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { cameraPhotoPlan, readOfflinePhoto } from '../services/offlinePhoto.js';
 import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
-import { sessionScope } from '../services/offlineSyncModel.js';
 import { localObservationDateTime } from '../services/observationLocation.js';
 import { createMobileCaptureFence, createMobileCaptureSubmitGate } from '../services/mobileCaptureSafety.js';
 import { observationCaptureViewScope, visibleObservationCapture } from '../services/observationCaptureViewScope.js';
