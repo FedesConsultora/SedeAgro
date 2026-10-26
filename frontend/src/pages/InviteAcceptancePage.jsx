@@ -3,8 +3,8 @@ import { Leaf } from 'lucide-react';
 import { API_URL } from '../services/api.js';
 import { confirmMemberActivation, createMemberInviteGate } from '../services/memberInvitationSafety.js';
 
-// No token is read from URLs, cookies, localStorage or sessionStorage.
-// Recipients paste the one-time code given to them through a private channel.
+// Recipient must paste the one-time code. It is never loaded from a URL
+// or persisted in browser storage. No bearer is included in navigation.
 export function InviteAcceptancePage({ onSwitchToLogin }) {
   const [form, setForm] = useState({ token: '', fullName: '', password: '' });
   const [busy, setBusy] = useState(false);
