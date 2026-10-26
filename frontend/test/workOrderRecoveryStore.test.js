@@ -54,8 +54,12 @@ test('modal saves original UUID/body before POST and never auto-replays on resto
   assert.match(modal,/readWorkOrderRecovery\(authority\)/);
   assert.match(modal,/await saveWorkOrderRecovery\(authority, body\)/);
   assert.match(modal,/void sendCreate\(ticket, body, api\)/);
-  assert.ok(modal.indexOf('await saveWorkOrderRecovery(authority, body)') <
-    modal.indexOf('void sendCreate(ticket, body, api)'));
+  const liveCreate = modal.slice(modal.indexOf('await saveWorkOrderRecovery(authority, body)'),
+    modal.indexOf("submitGate.current.finish(ticket, 'preflight-rejected')"));
+  assert.ok(liveCreate.indexOf('await saveWorkOrderRecovery(authority, body)') <
+    liveCreate.indexOf('void sendCreate(ticket, body, api)'),
+    'the live branch must commit encrypted data before network dispatch');
+  assert.match(modal, /if \(dataMode === 'mock'\) \{[\s\S]*?void sendCreate\(ticket, body, api\)/);
   assert.match(modal,/await discardWorkOrderRecovery\(authority, body.client_request_id\)/);
   assert.match(modal,/requestRef\.current = \{ scope: authority, api, body: saved\.body \}/);
   assert.match(modal,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
