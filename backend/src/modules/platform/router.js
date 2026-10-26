@@ -85,7 +85,8 @@ platformRouter.patch('/tenants/:id', validate(tenantIdParams, 'params'), asyncHa
 
   const decision = planTenantStatusChange({
     actorTenantId: req.tenantId, targetTenantId: tenant.id,
-    previousStatus: tenant.status, nextStatus: parsed.status
+    previousStatus: tenant.status, nextStatus: parsed.status,
+    planChangeRequested: parsed.plan_id !== undefined
   });
   if (!decision.allowed) {
     throw new HttpError(409, 'No se permite esta transición de empresa.',
