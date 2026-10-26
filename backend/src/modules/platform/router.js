@@ -4,6 +4,7 @@ import { setLocalTenant } from '../../core/db.js';
 import { Tenant, User, Plan, TenantModule, Module, Membership } from '../../models/index.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { isPlatformAdministrator } from '../../infra/security/securityGuards.js';
+import { globalUserLifecycleRouter } from './globalUserLifecycle.js';
 
 export const platformRouter = Router();
 
@@ -56,6 +57,10 @@ platformRouter.get('/users', asyncHandler(async (req, res) => {
   });
   res.json({ data: users });
 }));
+
+// Audited global user suspension (with all-tenant session invalidation).
+// Platform-only middleware above runs before this nested router.
+platformRouter.use('/users', globalUserLifecycleRouter);
 
 // PATCH tenant status / plan (Tenant master controls)
 const tenantIdParams = z.object({ id: z.string().uuid() });
