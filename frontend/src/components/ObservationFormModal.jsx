@@ -7,6 +7,7 @@ import { ObservationLocationPicker } from './ObservationLocationPicker.jsx';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { localObservationDateTime } from '../services/observationLocation.js';
 import { createMobileCaptureFence, createMobileCaptureSubmitGate } from '../services/mobileCaptureSafety.js';
+import { observationCaptureViewScope, visibleObservationCapture } from '../services/observationCaptureViewScope.js';
 
 const emptyObservation = () => ({
   observation_type: 'weed',
@@ -17,15 +18,20 @@ const emptyObservation = () => ({
 
 export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, runId }) {
   const { dataMode, session } = useSession();
-  const [form, setForm] = useState(emptyObservation);
+  const locationKey = observationCaptureViewScope(session, dataMode, runId);
+  // Notes and camera photos belong to one authenticated actor/membership/run.
+  // Render cannot wait for useEffect to clear a previous operator's state.
+  const [formSnapshot, setFormSnapshot] = useState(null);
+  const form = visibleObservationCapture(formSnapshot, locationKey) || emptyObservation();
   const [saving, setSaving] = useState(false);
   const [savedLocally, setSavedLocally] = useState(false);
-  const [photo, setPhoto] = useState(null);
-  const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoSnapshot, setPhotoSnapshot] = useState(null);
+  const photo = visibleObservationCapture(photoSnapshot, locationKey);
+  const [photoPreviewSnapshot, setPhotoPreviewSnapshot] = useState(null);
+  const photoPreview = photo ? visibleObservationCapture(photoPreviewSnapshot, locationKey) : null;
   const [photoError, setPhotoError] = useState('');
   const [location, setLocation] = useState(null);
   const [locating, setLocating] = useState(false);
-  const locationKey = `${dataMode}:${sessionScope(session) || 'anonymous'}:${runId}`;
   const captureFence = useRef(null);
   if (!captureFence.current) captureFence.current = createMobileCaptureFence();
   const submitGate = useRef(null);
@@ -50,25 +56,34 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
     submitGate.current.reset();
     setSaving(false);
     setSavedLocally(false);
-    setForm(emptyObservation());
+    setFormSnapshot({ scope: locationKey, value: emptyObservation() });
     setLocation(null);
     setLocating(false);
-    setPhoto(null);
+    setPhotoSnapshot(null);
     setPhotoError('');
     setError('');
   }, [isOpen, locationKey]);
 
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const set = (k) => (e) => {
+    const value = e.target.value;
+    setFormSnapshot(previous => ({
+      scope: locationKey,
+      value: {
+        ...(previous?.scope === locationKey ? previous.value : emptyObservation()),
+        [k]: value
+      }
+    }));
+  };
 
   useEffect(() => {
     if (!photo) {
-      setPhotoPreview(null);
+      setPhotoPreviewSnapshot(null);
       return undefined;
     }
     const url = URL.createObjectURL(photo);
-    setPhotoPreview(url);
+    setPhotoPreviewSnapshot({ scope: locationKey, value: url });
     return () => URL.revokeObjectURL(url);
-  }, [photo]);
+  }, [photo, locationKey]);
 
   const onPhotoSelected = (event) => {
     const selected = event.target.files?.[0] || null;
@@ -78,9 +93,9 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
     if (!selected) return;
     try {
       cameraPhotoPlan(selected);
-      setPhoto(selected);
+      setPhotoSnapshot({ scope: locationKey, value: selected });
     } catch (err) {
-      setPhoto(null);
+      setPhotoSnapshot(null);
       setPhotoError(err?.message || 'No se pudo seleccionar esta fotografía.');
     }
   };
@@ -193,7 +208,7 @@ export function ObservationFormModal({ isOpen, onClose, onCreated, onQueued, run
                 onChange={onPhotoSelected} disabled={saving} aria-label="Elegir fotografía del dispositivo" />
             </label>
             {photo && <button type="button" className="ghost-action" disabled={saving}
-              onClick={() => setPhoto(null)}>Quitar foto</button>}
+              onClick={() => setPhotoSnapshot(null)}>Quitar foto</button>}
           </div>
           {photo && (
             <div className="field-photo-picker__selected">
