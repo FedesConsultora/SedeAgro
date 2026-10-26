@@ -41,8 +41,8 @@ test('focused SyncPage does not silently imply selective upload or expose unrela
 });
 
 test('server fetch remains scoped and does not invent missing historical receipts', () => {
-  assert.match(sync, /loadedServerScope === serverScope \? batches : \[\]/);
-  assert.match(sync, /serverRequest\.current !== requestId \|\| serverScopeRef\.current !== serverScope/);
+  assert.match(sync, /visibleSyncReceiptRows\(batches, loadedServerScope, loadedServerApi, serverScope, api\)/);
+  assert.match(sync, /serverApiRef\.current === api/);
   assert.match(sync, /entre los 100 recientes/);
   assert.match(sync, /Sin recibos identificables en esta recorrida/);
   assert.match(sync, /No se muestran capturas ni recibos por una referencia inválida/);
