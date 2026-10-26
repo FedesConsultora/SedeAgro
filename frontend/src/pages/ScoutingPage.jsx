@@ -13,7 +13,10 @@ import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGe
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
 import { RunSyncHistory } from '../components/RunSyncHistory.jsx';
 import { RunEvidenceProvenance } from '../components/RunEvidenceProvenance.jsx';
-import { parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable, scoutingRunCapabilities } from '../services/scoutingRunPresentation.js';
+import {
+  parseScoutingRuns, parseScoutingRunDetail, isFocusedScoutingRunUnavailable,
+  scoutingRunCapabilities, scoutingPrivateViewScope, visibleScoutingRuns
+} from '../services/scoutingRunPresentation.js';
 import './scouting-workspace.css';
 
 const RUN_STATUS_ES = { planned: 'Planificado', in_progress: 'En curso', completed: 'Completado', cancelled: 'Cancelado' };
@@ -96,7 +99,7 @@ function RunDetail({ run, onChanged, onOpenSync }) {
     try {
       const response = await api.getScoutingRun(run.id);
       if (detailRequestSequence.current !== sequence) return false;
-      const next = parseScoutingRunDetail(response, run.id);
+      const next = parseScoutingRunDetail(response, run.id, session?.tenant?.id);
       setDetails(next);
       setSelectedAssignee(next.assigned_to || '');
       return true;
@@ -345,27 +348,33 @@ function RunDetail({ run, onChanged, onOpenSync }) {
 }
 
 export function ScoutingPage({ focusRunId = null, onNavigate }) {
-  const { api, dataMode, session, entitlements } = useSession();
-  // Do not display a previous actor's coordinates while a new membership
-  // or tenant is loading. A changed scope also remounts the detail.
-  const scope = [dataMode, session?.authenticated ? 'auth' : 'anonymous',
-    session?.tenant?.id || '', session?.user?.id || '',
-    session?.membership?.roleCode || '', [...(entitlements || [])].sort().join(',')].join(':');
+  const { api, dataMode, session } = useSession();
+  // A tenant/actor/role change or a new authenticated API transport must
+  // hide all old lot names/coordinates BEFORE effect cleanup can run.
+  const scope = scoutingPrivateViewScope(session, dataMode);
+  const listScopeRef = useRef(scope);
+  listScopeRef.current = scope;
+  const listApiRef = useRef(api);
+  listApiRef.current = api;
   const [runs, setRuns] = useState([]);
   const [loadedScope, setLoadedScope] = useState(null);
+  const [loadedApi, setLoadedApi] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('Todos');
   const [expanded, setExpanded] = useState({});
   const [showModal, setShowModal] = useState(false);
   const listRequestSequence = useRef(0);
-  const canPlan = dataMode === 'live' && session?.authenticated === true &&
+  const canPlan = dataMode === 'live' && Boolean(scope) &&
     ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
 
   const load = useCallback(async () => {
     const sequence = ++listRequestSequence.current;
+    const current = () => listRequestSequence.current === sequence &&
+      listScopeRef.current === scope && listApiRef.current === api;
     setLoading(true);
     setLoadedScope(scope);
+    setLoadedApi(api);
     setError('');
     setRuns([]);
     if (dataMode === 'mock') {
@@ -373,17 +382,22 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
       setLoading(false);
       return;
     }
+    if (!scope) {
+      setError('No se pudo verificar el acceso a recorridas para esta sesión.');
+      setLoading(false);
+      return;
+    }
     try {
       const response = await api.scoutingRuns();
-      if (listRequestSequence.current !== sequence) return;
-      setRuns(parseScoutingRuns(response));
+      if (!current()) return;
+      setRuns(parseScoutingRuns(response, session.tenant.id));
     } catch (err) {
-      if (listRequestSequence.current === sequence) {
+      if (current()) {
         setRuns([]);
         setError(err?.message || 'No se pudo consultar el servidor de monitoreos.');
       }
     } finally {
-      if (listRequestSequence.current === sequence) setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [api, dataMode, scope]);
 
@@ -396,9 +410,11 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
     setFilter('Todos');
     setExpanded(current => ({ ...current, [focusRunId]: true }));
   }, [focusRunId]);
-  const visibleRuns = loadedScope === scope ? runs : [];
-  const visibleLoading = loading || loadedScope !== scope;
-  const visibleError = loadedScope === scope ? error : '';
+  const visibleRuns = visibleScoutingRuns(runs, loadedScope, loadedApi, scope, api);
+  const visibleLoading = Boolean(scope && (loading || loadedScope !== scope || loadedApi !== api));
+  const visibleError = dataMode === 'live' && !scope
+    ? 'No se pudo verificar el acceso a recorridas para esta sesión.'
+    : loadedScope === scope && loadedApi === api ? error : '';
   const visible = filter === 'Todos' ? visibleRuns : visibleRuns.filter((r) => r.status === filter);
 
   return (
@@ -453,12 +469,12 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
                 {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load}
-                  onOpenSync={() => onNavigate?.('sync', { id: details.id })} />}
+                  onOpenSync={() => onNavigate?.('sync', { id: run.id })} />}
               </div>
             ))}
         </div>
       </div>
-      {showModal && <ScoutingRunFormModal isOpen onClose={() => setShowModal(false)}
+      {showModal && canPlan && <ScoutingRunFormModal isOpen onClose={() => setShowModal(false)}
         onCreated={() => { setShowModal(false); void load(); }} />}
     </div>
   );
