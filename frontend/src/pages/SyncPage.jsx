@@ -8,6 +8,9 @@ import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 import { OfflineReconciliationPanel } from '../components/OfflineReconciliationPanel.jsx';
 import { filterSyncRunDrafts, filterSyncRunReceipts, resolveSyncRunFocus } from '../services/syncRunFocus.js';
+import {
+  syncReceiptPresentationScope, visibleSyncReceiptRows, checkedSyncReceiptRows
+} from '../services/syncReceiptPresentationScope.js';
 
 const STATUS_ES = {
   received: 'Recibido, no aplicado',
@@ -36,14 +39,16 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   const canListAll = ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
   const focus = resolveSyncRunFocus(focusRunId);
   const activeScope = dataMode === 'live' ? sessionScope(session) : null;
-  const serverScope = [dataMode, activeScope || 'anonymous',
-    session?.membership?.roleCode || ''].join(':');
+  const serverScope = syncReceiptPresentationScope(session, dataMode);
   const scopeRef = useRef(activeScope);
   scopeRef.current = activeScope;
   const serverScopeRef = useRef(serverScope);
   serverScopeRef.current = serverScope;
+  const serverApiRef = useRef(api);
+  serverApiRef.current = api;
   const serverRequest = useRef(0);
   const [loadedServerScope, setLoadedServerScope] = useState(null);
+  const [loadedServerApi, setLoadedServerApi] = useState(null);
   const [batches, setBatches] = useState([]);
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +65,7 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   const loadData = useCallback(async () => {
     const requestId = ++serverRequest.current;
     setLoadedServerScope(serverScope);
+    setLoadedServerApi(api);
     setLoading(true);
     setError('');
     setBatches([]);
@@ -68,17 +74,23 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
       setLoading(false);
       return;
     }
+    if (!serverScope) {
+      setError('No se pudo verificar el acceso a recibos de sincronización.');
+      setLoading(false);
+      return;
+    }
+    const current = () => serverRequest.current === requestId &&
+      serverScopeRef.current === serverScope && serverApiRef.current === api;
     try {
       const response = canListAll ? await api.syncBatches() : await api.mySyncBatches();
-      if (serverRequest.current !== requestId || serverScopeRef.current !== serverScope) return;
-      if (!Array.isArray(response?.data)) throw new Error('El servidor devolvió una lista inválida de recibos.');
-      setBatches(response.data);
+      if (!current()) return;
+      setBatches(checkedSyncReceiptRows(response.data, session.tenant.id));
     } catch (err) {
-      if (serverRequest.current !== requestId || serverScopeRef.current !== serverScope) return;
+      if (!current()) return;
       setBatches([]);
       setError(err?.message || 'No se pudo consultar el servidor de sincronización.');
     } finally {
-      if (serverRequest.current === requestId && serverScopeRef.current === serverScope) setLoading(false);
+      if (current()) setLoading(false);
     }
   }, [api, canListAll, dataMode, serverScope]);
 
@@ -234,11 +246,13 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   // While switching tenants/users, never render the old actor's decrypted
   // draft metadata or server receipts, even before the effects refetch them.
   const scopedPending = activeScope ? pending.filter(row => row.scope === activeScope) : [];
-  const scopedBatches = loadedServerScope === serverScope ? batches : [];
+  const scopedBatches = visibleSyncReceiptRows(batches, loadedServerScope, loadedServerApi, serverScope, api);
   const visiblePending = filterSyncRunDrafts(scopedPending, activeScope, focus);
   const visibleBatches = filterSyncRunReceipts(scopedBatches, focus);
-  const serverLoading = loading || loadedServerScope !== serverScope;
-  const serverError = loadedServerScope === serverScope ? error : '';
+  const serverLoading = Boolean(serverScope && (loading || loadedServerScope !== serverScope || loadedServerApi !== api));
+  const serverError = dataMode === 'live' && !serverScope
+    ? 'No se pudo verificar el acceso a recibos de sincronización.'
+    : loadedServerScope === serverScope && loadedServerApi === api ? error : '';
   const { pending: pendingCount, review: conflictCount, photoOnly } = queueSummary(scopedPending);
 
   return (
