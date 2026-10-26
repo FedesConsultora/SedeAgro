@@ -64,3 +64,17 @@ export function createMemberInviteGate() {
     busy() { return busy; }
   };
 }
+
+export function confirmMemberActivation(response, submittedToken) {
+  const tokenMatch = typeof submittedToken === 'string' && TOKEN.exec(submittedToken);
+  const data = response?.data;
+  if (!tokenMatch || !UUID.test(tokenMatch[1]) ||
+      response?.next !== 'login' || !UUID.test(data?.id || '') ||
+      !UUID.test(data?.tenant?.id || '') ||
+      tokenMatch[1].toLowerCase() !== data.tenant.id.toLowerCase() ||
+      typeof data.tenant.name !== 'string' || !data.tenant.name.trim() ||
+      !MEMBER_INVITE_ROLES.includes(data.roleCode)) {
+    throw new Error('El servidor no confirmó la activación para esta empresa.');
+  }
+  return { tenantName: data.tenant.name, role: data.roleCode };
+}
