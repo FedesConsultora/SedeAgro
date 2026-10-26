@@ -55,12 +55,15 @@ test('live member lifecycle enforces tenant, role, capacity and session revocati
       WHERE r.rolname=current_user
     `)).rows[0];
     assert.ok(isSafeRuntimeDbRole(role));
-    const policy = (await owner.query(`
-      SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class
-      WHERE oid=ANY(ARRAY['public.memberships'::regclass,'public.auth_sessions'::regclass])
-    `)).rows;
-    assert.equal(policy.length,2);
-    assert.ok(policy.every(x=>x.relrowsecurity && x.relforcerowsecurity),JSON.stringify(policy));
+    // AuthSession has FORCE RLS. Memberships deliberately lack RLS because
+    // login enumerates a user's tenant choices before choosing a tenant.
+    // This endpoint MUST bind membership UUID + tenant in its own WHERE clause;
+    // do not assert imaginary DB policy or expand a migration here.
+    const sessionPolicy = (await owner.query(`
+      SELECT relrowsecurity,relforcerowsecurity FROM pg_class
+      WHERE oid='public.auth_sessions'::regclass
+    `)).rows[0];
+    assert.ok(sessionPolicy.relrowsecurity && sessionPolicy.relforcerowsecurity);
 
     const plan = (await owner.query("SELECT id FROM plans WHERE code='starter'")).rows[0];
     assert.ok(plan);
@@ -161,8 +164,14 @@ test('live member lifecycle enforces tenant, role, capacity and session revocati
     await runtime.query('BEGIN');
     try {
       await runtime.query("SELECT set_config('app.current_tenant',$1,true)",[tenantB]);
+      // Do not mistake the membership model's global login requirements for
+      // FORCE RLS. The authenticated API above proves tenant-specific 404s.
       assert.deepEqual((await runtime.query(
-        'SELECT id FROM memberships WHERE id=$1',[scout.membershipId])).rows,[]);
+        'SELECT id FROM memberships WHERE tenant_id=$1 AND id=$2',
+        [tenantB,scout.membershipId])).rows,[]);
+      assert.deepEqual((await runtime.query(
+        'SELECT id FROM auth_sessions WHERE tenant_id=$1',
+        [tenantA])).rows,[], 'FORCE RLS blocks foreign tenant session reads');
     } finally { await runtime.query('ROLLBACK'); }
   } finally {
     if(ownerConnected) {
