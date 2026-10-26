@@ -68,13 +68,13 @@ test('platform admin global block revokes all tenant sessions and reactivation n
     assert.ok(sessionsPolicy.relrowsecurity&&sessionsPolicy.relforcerowsecurity);
     const plan=(await owner.query("SELECT id FROM plans WHERE code='starter'")).rows[0];
     assert.ok(plan);
-    for(const tag of ['A','B']){
+    for(const tag of ['A','B','C']){
       tenants.push(await insert(
         "INSERT INTO tenants(plan_id,name,slug,status) VALUES($1,$2,$3,'active') RETURNING id",
         [plan.id,'Global-user-lifecycle-'+tag,
           'global-user-lifecycle-'+tag.toLowerCase()+'-'+suffix]));
     }
-    const [tenantA,tenantB]=tenants;
+    const [tenantA,tenantB,tenantC]=tenants;
     async function createUser(label,isPlatform){
       const email='global-lifecycle-'+label+'-'+suffix+'@example.test';
       const id=await insert(
@@ -93,6 +93,7 @@ test('platform admin global block revokes all tenant sessions and reactivation n
     await addMembership(admin.id,tenantA,'tenant_admin');
     await addMembership(target.id,tenantA,'tenant_admin');
     await addMembership(target.id,tenantB,'tenant_admin');
+    await addMembership(target.id,tenantC,'tenant_admin');
     await addMembership(scout.id,tenantA,'scout');
     const adminToken=signSession({sub:admin.id,tenant_id:tenantA,role_code:'tenant_admin'});
     const scoutToken=signSession({sub:scout.id,tenant_id:tenantA,role_code:'scout'});
@@ -101,11 +102,18 @@ test('platform admin global block revokes all tenant sessions and reactivation n
     const login=(tenant)=>request('/auth/login',{method:'POST',body:{
       email:target.email,password,tenantId:tenant}});
     const authMe=(token,tenant)=>request('/auth/me',{token,tenant});
-    const a=await login(tenantA),b=await login(tenantB);
+    const a=await login(tenantA),b=await login(tenantB),c=await login(tenantC);
     assert.equal(a.status,200,JSON.stringify(a.body));
     assert.equal(b.status,200,JSON.stringify(b.body));
+    assert.equal(c.status,200,JSON.stringify(c.body));
     assert.equal((await authMe(a.body.token,tenantA)).status,200);
     assert.equal((await authMe(b.body.token,tenantB)).status,200);
+    assert.equal((await authMe(c.body.token,tenantC)).status,200);
+    // Remove one membership but intentionally retain its persisted AuthSession:
+    // old JWT must still be revoked when globally blocking the account.
+    await owner.query('DELETE FROM memberships WHERE tenant_id=$1 AND user_id=$2',
+      [tenantC,target.id]);
+    assert.equal((await authMe(c.body.token,tenantC)).status,401);
 
     const forbidden=await status(scoutToken,target.id,'blocked');
     assert.equal(forbidden.status,403);
@@ -114,22 +122,23 @@ test('platform admin global block revokes all tenant sessions and reactivation n
     assert.equal((await status(adminToken,target.id,'deleted')).status,422);
     const before=(await owner.query('SELECT count(*)::int AS n FROM auth_sessions WHERE user_id=$1',
       [target.id])).rows[0].n;
-    assert.equal(before,2);
+    assert.equal(before,3);
 
     const blocked=await status(adminToken,target.id,'blocked');
     assert.equal(blocked.status,200,JSON.stringify(blocked.body));
     assert.deepEqual(blocked.body.data,{
-      id:target.id,status:'blocked',changed:true,revokedSessions:2
+      id:target.id,status:'blocked',changed:true,revokedSessions:3
     });
     assert.match(blocked.cache,/no-store/);
     assert.equal((await authMe(a.body.token,tenantA)).status,401);
     assert.equal((await authMe(b.body.token,tenantB)).status,401);
+    assert.equal((await authMe(c.body.token,tenantC)).status,401);
     assert.equal((await login(tenantA)).status,401);
     assert.equal((await login(tenantB)).status,401);
     const sessions=(await owner.query(
       'SELECT tenant_id,revoked_at FROM auth_sessions WHERE user_id=$1 ORDER BY tenant_id',
       [target.id])).rows;
-    assert.equal(sessions.length,2);
+    assert.equal(sessions.length,3);
     assert.ok(sessions.every(x=>x.revoked_at));
     assert.deepEqual(new Set(sessions.map(x=>x.tenant_id)),new Set(tenants));
 
@@ -157,6 +166,11 @@ test('platform admin global block revokes all tenant sessions and reactivation n
       'previously revoked tenant-A token must not resurrect');
     assert.equal((await authMe(b.body.token,tenantB)).status,401,
       'previously revoked tenant-B token must not resurrect');
+    // Re-admission to a *former* tenant is particularly dangerous: the prior
+    // JWT must not regain access merely because its membership was recreated.
+    await addMembership(target.id,tenantC,'tenant_admin');
+    assert.equal((await authMe(c.body.token,tenantC)).status,401,
+      'orphan session must stay revoked after the tenant membership returns');
     const fresh=await login(tenantB);
     assert.equal(fresh.status,200,JSON.stringify(fresh.body));
     assert.equal((await authMe(fresh.body.token,tenantB)).status,200);
@@ -167,7 +181,7 @@ test('platform admin global block revokes all tenant sessions and reactivation n
     assert.equal(audit.length,2);
     assert.ok(audit.every(x=>x.action==='platform.user.global_status_changed'));
     assert.deepEqual(audit.map(x=>x.payload.next_status),['blocked','active']);
-    assert.deepEqual(audit.map(x=>x.payload.revoked_sessions),[2,0]);
+    assert.deepEqual(audit.map(x=>x.payload.revoked_sessions),[3,0]);
 
     await owner.query("UPDATE users SET status='deleted' WHERE id=$1",[target.id]);
     assert.equal((await status(adminToken,target.id,'active')).status,409,
