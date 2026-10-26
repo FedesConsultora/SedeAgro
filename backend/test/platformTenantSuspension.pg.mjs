@@ -170,6 +170,8 @@ test('platform tenant suspension invalidates all JTIs and blocks token revival',
     assert.equal(deleted.body.revokedSessions,1);
     const forbiddenRestore=await modify(tokenA,target,{status:'active'});
     assert.equal(forbiddenRestore.status,409);
+    const forbiddenPlan=await modify(tokenA,target,{plan_id:plan.id});
+    assert.equal(forbiddenPlan.status,409,'soft-deleted tenant plan is immutable');
     assert.equal((await owner.query('SELECT status FROM tenants WHERE id=$1',[target])).rows[0].status,'deleted');
   }finally{
     if(connectedOwner){
