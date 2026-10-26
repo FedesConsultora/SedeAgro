@@ -554,6 +554,78 @@ try {
   await campaignTab.close();
   await campaignContext.close();
 
+  // Cross-module recovery: scouting creates have their OWN DB and key space,
+  // so a pending campaign never conceals a field operation or vice versa.
+  const runCtx = await browser.newContext();
+  const runPage = await runCtx.newPage();
+  await runPage.goto('http://127.0.0.1:4173/');
+  const runScope = JSON.stringify(['tenant-c:user-c','membership-c','tenant_admin',['scouting']]);
+  const foreignRunScope = JSON.stringify(['tenant-d:user-d','membership-d','tenant_admin',['scouting']]);
+  const runBody = {
+    client_request_id: '9c000000-0000-4000-8000-000000000001',
+    campaign_field_id: '9c000000-0000-4000-8000-000000000002',
+    assigned_to: '9c000000-0000-4000-8000-000000000003',
+    scheduled_at: '2026-10-26T17:30:00.000Z', status: 'in_progress',
+    summary: 'PRIVATE-RUN-DETAILS-FOR-FIELD-TEAM'
+  };
+  const firstRun = await runPage.evaluate(async ({scope, body, otherScope}) => {
+    const runs = await import('/src/services/scoutingRunRecoveryStore.js');
+    const campaigns = await import('/src/services/campaignRecoveryStore.js');
+    await runs.saveScoutingRunRecovery(scope, body);
+    const read = await runs.readScoutingRunRecovery(scope);
+    const other = await runs.readScoutingRunRecovery(otherScope);
+    const campaign = await campaigns.readCampaignRecovery(scope);
+    const db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('sedeagro-scouting-run-recovery', 1);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const raw = await new Promise((resolve, reject) => {
+      const req = db.transaction('pending-creates','readonly')
+        .objectStore('pending-creates').get(scope);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return {
+      body: read.body, other, campaign,
+      sealed: raw.ciphertext instanceof ArrayBuffer,
+      leaked: JSON.stringify(raw).includes(body.summary)
+    };
+  }, {scope:runScope,body:runBody,otherScope:foreignRunScope});
+  assert.deepEqual(firstRun, {body:runBody,other:null,campaign:null,sealed:true,leaked:false});
+  await runPage.reload({waitUntil:'domcontentloaded'});
+  const reloadedRun = await runPage.evaluate(async scope => {
+    const {readScoutingRunRecovery} = await import('/src/services/scoutingRunRecoveryStore.js');
+    return (await readScoutingRunRecovery(scope)).body;
+  },runScope);
+  assert.deepEqual(reloadedRun,runBody);
+  const runSecondTab = await runCtx.newPage();
+  await runSecondTab.goto('http://127.0.0.1:4173/');
+  const wrongDiscard = await runSecondTab.evaluate(async scope => {
+    const {discardScoutingRunRecovery} = await import('/src/services/scoutingRunRecoveryStore.js');
+    return discardScoutingRunRecovery(scope, '9c000000-0000-4000-8000-000000000099');
+  }, runScope);
+  assert.equal(wrongDiscard,false);
+  const oldRunBody = await runSecondTab.evaluate(async scope => {
+    const {readScoutingRunRecovery} = await import('/src/services/scoutingRunRecoveryStore.js');
+    return (await readScoutingRunRecovery(scope)).body;
+  },runScope);
+  assert.deepEqual(oldRunBody,runBody);
+  await assert.rejects(runSecondTab.evaluate(async ({scope,body}) => {
+    const {saveScoutingRunRecovery} = await import('/src/services/scoutingRunRecoveryStore.js');
+    return saveScoutingRunRecovery(scope, {...body,
+      client_request_id: '9c000000-0000-4000-8000-000000000004'});
+  },{scope:runScope,body:runBody}),/pendiente/);
+  const deletedRun = await runSecondTab.evaluate(async ({scope,id}) => {
+    const {discardScoutingRunRecovery} = await import('/src/services/scoutingRunRecoveryStore.js');
+    return discardScoutingRunRecovery(scope,id);
+  },{scope:runScope,id:runBody.client_request_id});
+  assert.equal(deletedRun,true);
+  await runSecondTab.close();
+  await runCtx.close();
+  console.log('PASS: scouting run encrypted UUID survives reload; tabs and campaigns remain isolated');
+
   // Exercise production service-worker shell under a real offline reload.
   server.kill();
   server = run(process.execPath, [

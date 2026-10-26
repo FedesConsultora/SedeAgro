@@ -4,10 +4,20 @@ import { Modal } from './Modal.jsx';
 import {
   createScoutingRunSubmitGate, scoutingRunCreateScope, verifyCreatedScoutingRun
 } from '../services/scoutingRunCreateSafety.js';
+import {
+  readScoutingRunRecovery, saveScoutingRunRecovery, discardScoutingRunRecovery
+} from '../services/scoutingRunRecoveryStore.js';
 
 const emptyForm = () => ({
   campaign_field_id: '', assigned_to: '', scheduled_at: '', status: 'planned', summary: ''
 });
+
+function localDatetime(instant) {
+  if (!instant) return '';
+  const date = new Date(instant);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
 
 export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
   const { api, dataMode, session } = useSession();
@@ -32,21 +42,59 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
   const loading = Boolean(isOpen && authority && (!visible || visible.phase === 'loading'));
   const optionsError = visible?.phase === 'error' ? visible.error : '';
   const [reload, setReload] = useState(0);
-  const [form, setForm] = useState(emptyForm);
+  const [formSnapshot, setFormSnapshot] = useState(null);
+  const form = formSnapshot?.scope === authority && formSnapshot?.api === api
+    ? formSnapshot.value : emptyForm();
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [error, setError] = useState('');
+  const [recoveryState, setRecoveryState] = useState(null);
+  const checkedRecovery = recoveryState?.scope === authority && recoveryState?.api === api
+    ? recoveryState : null;
+  const recoveryLoading = Boolean(isOpen && authority &&
+    (!checkedRecovery || checkedRecovery.phase === 'loading'));
+  const recoveryBlocked = Boolean(isOpen && authority && checkedRecovery?.phase === 'error');
+  const blocked = saving || recoveryLoading || recoveryBlocked || submitStatus !== '' ||
+    submitGate.current.isBlocked(authority);
+  const editable = Boolean(authority) && !blocked;
 
   useEffect(() => {
-    // A new opening/actor/role/permission set starts with a new one-shot ticket.
+    let active = true;
+    // Openings and authenticated actor changes must not adopt stale HTTP ACKs.
     submitGate.current.reset();
     requestRef.current = null;
-    setForm(emptyForm());
+    setFormSnapshot({ scope: authority, api, value: emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
     setOptionsSnapshot(null);
-    return () => { submitGate.current.reset(); };
+    setRecoveryState({ scope: authority, api, phase: isOpen && authority ? 'loading' : 'idle' });
+    if (isOpen && authority) {
+      void readScoutingRunRecovery(authority).then(saved => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        if (saved) {
+          requestRef.current = { scope: authority, api, body: saved.body };
+          setFormSnapshot({ scope: authority, api, value: {
+            campaign_field_id: saved.body.campaign_field_id,
+            assigned_to: saved.body.assigned_to || '',
+            scheduled_at: localDatetime(saved.body.scheduled_at),
+            status: saved.body.status,
+            summary: saved.body.summary || ''
+          } });
+          setSubmitStatus('uncertain');
+          setError('Hay una recorrida pendiente de confirmar. Revisá Recorridas o reintentá exactamente el envío anterior.');
+        }
+        setRecoveryState({ scope: authority, api, phase: 'ready' });
+      }).catch(err => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        setRecoveryState({ scope: authority, api, phase: 'error' });
+        setError((err?.message || 'No se pudo recuperar la recorrida.') +
+          ' No se enviará otra recorrida hasta revisar el almacenamiento.');
+      });
+    }
+    return () => { active = false; submitGate.current.reset(); requestRef.current = null; };
   }, [isOpen, authority, api]);
 
   useEffect(() => {
@@ -81,8 +129,15 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
     return () => { active = false; };
   }, [isOpen, authority, api, reload]);
 
-  const set = (key) => (event) =>
-    setForm((current) => ({ ...current, [key]: event.target.value }));
+  const set = (key) => (event) => {
+    if (!editable) return;
+    const value = event.target.value;
+    setFormSnapshot(current => ({
+      scope: authority, api,
+      value: { ...(current?.scope === authority && current?.api === api
+        ? current.value : emptyForm()), [key]: value }
+    }));
+  };
 
   const safeClose = () => {
     // Escape, overlay and the X button use this same callback.
@@ -102,6 +157,11 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
       const response = await requestApi.createScoutingRun(body);
       if (!current()) return;
       verifyCreatedScoutingRun(response, body, session?.tenant?.id);
+      // A verified exact server receipt retires only its matching encrypted
+      // slot; a failed local COMMIT leaves the key available for safe replay.
+      const retired = await discardScoutingRunRecovery(authority, body.client_request_id);
+      if (!current()) return;
+      if (!retired) throw new Error('No se pudo retirar el envío local.');
       submitGate.current.finish(ticket, 'confirmed');
       setSubmitStatus('confirmed');
       confirmed = true;
@@ -117,9 +177,10 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
     if (confirmed && current()) onCreated?.();
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!isOpen || !authority || loading || visible?.phase !== 'ready' ||
+    if (!isOpen || !authority || recoveryLoading || recoveryBlocked ||
+        loading || visible?.phase !== 'ready' ||
         !campaignFields.some(field => field.id === form.campaign_field_id)) return;
     if (form.assigned_to && !assignees.some(person => person.id === form.assigned_to)) {
       setError('Seleccioná un responsable activo de esta empresa.');
@@ -150,20 +211,63 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
     const ticket = submitGate.current.acquire(authority);
     if (!ticket) return; // barrier before any POST and before React rerender
     requestRef.current = { scope: authority, api, body };
-    void sendCreate(ticket, body, api);
+    setSaving(true);
+    setError('');
+    try {
+      // No HTTP POST until the immutable body and client UUID are durably
+      // encrypted. Crash, tab close or tenant switch cannot lose the key.
+      await saveScoutingRunRecovery(authority, body);
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      void sendCreate(ticket, body, api);
+    } catch (err) {
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      submitGate.current.finish(ticket, 'preflight-rejected');
+      requestRef.current = null;
+      setRecoveryState({ scope: authority, api, phase: 'error' });
+      setError((err?.message || 'No se pudo cifrar el envío de recorrida.') +
+        ' No se envió ninguna recorrida. Cerrá y reabrí para revisar el envío local.');
+      setSaving(false);
+    }
   };
 
   const handleRetry = () => {
     const saved = requestRef.current;
-    if (submitStatus !== 'uncertain' || !saved ||
+    if (submitStatus !== 'uncertain' || recoveryLoading || recoveryBlocked || !saved ||
         saved.scope !== authority || saved.api !== api) return;
-    const ticket = submitGate.current.retry(authority);
+    const ticket = submitGate.current.isBlocked(authority)
+      ? submitGate.current.retry(authority)
+      : submitGate.current.acquire(authority);
     if (!ticket) return; // blocks double retry even before setSaving renders
     void sendCreate(ticket, saved.body, saved.api);
   };
 
-  const blocked = saving || submitStatus !== '' || submitGate.current.isBlocked(authority);
-  const editable = Boolean(authority) && !blocked;
+  const handleDiscard = async () => {
+    const saved = requestRef.current;
+    if (!saved || submitStatus !== 'uncertain' || saving ||
+        saved.scope !== authority || saved.api !== api ||
+        !window.confirm('Revisá primero Recorridas: el servidor podría haber creado este recorrido. ¿Descartar su recuperación y permitir una nueva recorrida?')) return;
+    setSaving(true);
+    try {
+      const discarded = await discardScoutingRunRecovery(authority, saved.body.client_request_id);
+      if (!openRef.current || scopeRef.current !== authority || apiRef.current !== api) return;
+      if (!discarded) throw new Error('Otra pestaña cambió el envío pendiente.');
+      submitGate.current.reset();
+      requestRef.current = null;
+      setFormSnapshot({ scope: authority, api, value: emptyForm() });
+      setSubmitStatus('');
+      setError('');
+    } catch (err) {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setError(err?.message || 'No se pudo descartar el envío.');
+      }
+    } finally {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setSaving(false);
+      }
+    }
+  };
   return (
     <Modal isOpen={isOpen} onClose={safeClose} title="Nueva recorrida de monitoreo"
       footer={<>
@@ -180,16 +284,24 @@ export function ScoutingRunFormModal({ isOpen, onClose, onCreated }) {
         {!authority && dataMode === 'live' &&
           <div className="auth-error" role="alert">Tu sesión no permite planificar recorridas.</div>}
         {loading && <p role="status">Cargando lotes y responsables autorizados…</p>}
+        {recoveryLoading && <p role="status">Comprobando recorridas cifradas pendientes…</p>}
+        {recoveryBlocked && <p role="alert">La recuperación segura no está disponible. No se enviarán recorridas nuevas.</p>}
         {optionsError && <div className="auth-error" role="alert">
           <span>{optionsError}</span>
           <button type="button" onClick={() => setReload(value => value + 1)}>Reintentar</button>
         </div>}
         {error && <div className="auth-error" role="alert"><span>{error}</span></div>}
         {submitStatus === 'uncertain' && authority && (
-          <button type="button" className="ghost-action" onClick={handleRetry}
-            disabled={saving || !requestRef.current || !submitGate.current.isBlocked(authority)}>
-            Reintentar el mismo envío (sin duplicar)
-          </button>
+          <>
+            <button type="button" className="ghost-action" onClick={handleRetry}
+              disabled={saving || recoveryLoading || recoveryBlocked || !requestRef.current}>
+              Reintentar el mismo envío (sin duplicar)
+            </button>
+            <button type="button" className="ghost-action" onClick={handleDiscard}
+              disabled={saving || recoveryLoading || recoveryBlocked || !requestRef.current}>
+              Descartar tras revisar Recorridas
+            </button>
+          </>
         )}
         {!loading && authority && !optionsError && campaignFields.length === 0 &&
           <p role="status">No hay lotes asociados a campañas disponibles para planificar recorridas.</p>}
