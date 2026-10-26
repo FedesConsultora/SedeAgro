@@ -23,6 +23,7 @@ import { requireCapability } from '../../infra/http/middlewares/requireCapabilit
 import { invitationPublicRouter, invitationScopedRouter } from './invitations.js';
 import { memberLifecycleRouter } from './memberLifecycle.js';
 import { canIssueLoginForGlobalAccount } from './loginAccountPolicy.js';
+import { selectLoginMembership } from './loginMembershipPolicy.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
@@ -59,11 +60,37 @@ function sessionPayload(user, membership) {
 }
 
 async function issueTenantSession(user, membership, transaction) {
-  const tenant = await Tenant.findByPk(membership.tenant_id, {
+  // Public membership discovery happened before this transaction (and may
+  // become stale while an administrator suspends or changes a member's role).
+  // Lock and revalidate the *exact* tenant+user+membership before issuing any
+  // JWT. Lifecycle changes take the same membership row lock.
+  const currentMembership = await Membership.findOne({
+    where: {
+      id: membership.id,
+      tenant_id: membership.tenant_id,
+      user_id: user.id,
+      status: 'active'
+    },
+    transaction,
+    lock: transaction.LOCK.UPDATE
+  });
+  if (!currentMembership) {
+    throw new HttpError(401, 'La membresía cambió. Volvé a iniciar sesión.',
+      undefined, 'LOGIN_MEMBERSHIP_CHANGED');
+  }
+
+  const tenant = await Tenant.findOne({
+    where: {
+      id: currentMembership.tenant_id,
+      status: { [Op.in]: ['onboarding', 'active'] }
+    },
     attributes: ['id', 'name', 'slug', 'status'],
     transaction,
     skipTenantScope: true
   });
+  if (!tenant) {
+    throw new HttpError(403, 'Empresa no disponible.', undefined, 'LOGIN_TENANT_DISABLED');
+  }
 
   const modules = await TenantModule.findAll({
     where: { tenant_id: tenant.id, is_enabled: true },
@@ -72,13 +99,13 @@ async function issueTenantSession(user, membership, transaction) {
     skipTenantScope: true
   });
 
-  await reserveSessionSlot({ userId: user.id, tenantId: membership.tenant_id, transaction });
+  await reserveSessionSlot({ userId: user.id, tenantId: currentMembership.tenant_id, transaction });
   const id = randomUUID();
-  const token = signSession({ ...sessionPayload(user, membership), jti: id });
+  const token = signSession({ ...sessionPayload(user, currentMembership), jti: id });
   const signed = verifySession(token);
   await AuthSession.create({
     id,
-    tenant_id: membership.tenant_id,
+    tenant_id: currentMembership.tenant_id,
     user_id: user.id,
     expires_at: new Date(signed.exp * 1000)
   }, { transaction });
@@ -87,7 +114,7 @@ async function issueTenantSession(user, membership, transaction) {
     token,
     user: { id: user.id, email: user.email, fullName: user.full_name, isPlatformAdmin: user.is_platform_admin },
     tenant,
-    membership: { id: membership.id, roleCode: membership.role_code, status: membership.status },
+    membership: { id: currentMembership.id, roleCode: currentMembership.role_code, status: currentMembership.status },
     entitlements: modules.map((module) => module.module_code)
   };
 }
@@ -136,6 +163,10 @@ authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, 
       status: 'active'
     }, { transaction, skipTenantScope: true });
 
+    // memberships will receive tenant FORCE RLS only after the separate
+    // multiempresa discovery design is security-reviewed. Set the GUC now
+    // so registration is already compatible with that eventual policy.
+    await setLocalTenant(transaction, tenant.id);
     const membership = await Membership.create({
       tenant_id: tenant.id,
       user_id: user.id,
@@ -150,10 +181,7 @@ authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, 
       skipTenantScope: true
     });
 
-    // TenantModule has FORCE RLS: even registration must activate the new tenant
-    // inside its existing transaction before writing entitlement rows.
-    await setLocalTenant(transaction, tenant.id);
-
+    // TenantModule already has FORCE RLS and uses this same tenant-local GUC.
     await TenantModule.bulkCreate(planModules.map((planModule) => ({
       tenant_id: tenant.id,
       module_code: planModule.module_code,
@@ -193,9 +221,14 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
   const activeMemberships = memberships.filter((membership) => ['onboarding', 'active'].includes(membership.Tenant.status));
   if (!activeMemberships.length) throw new HttpError(403, 'No tenés membresías activas.');
 
-  const selectedMembership = tenantId || tenantSlug
-    ? activeMemberships.find((membership) => membership.tenant_id === tenantId || membership.Tenant.slug === tenantSlug)
-    : activeMemberships.length === 1 ? activeMemberships[0] : null;
+  const selectedMembership = selectLoginMembership(activeMemberships, { tenantId, tenantSlug });
+
+  // Explicit selectors must both match ONE authorized company. Never reveal
+  // a different tenant's session merely because one identifier matched.
+  if ((tenantId || tenantSlug) && !selectedMembership) {
+    throw new HttpError(403, 'La empresa solicitada no está disponible.',
+      undefined, 'LOGIN_TENANT_NOT_AVAILABLE');
+  }
 
   if (!selectedMembership) {
     res.json({
