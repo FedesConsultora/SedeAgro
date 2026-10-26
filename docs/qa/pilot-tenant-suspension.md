@@ -10,7 +10,7 @@ Antes de este bloque, el administrador de plataforma podía cambiar `tenants.sta
 
 - El acceso sigue exigiendo una sesión activa y `is_platform_admin === true`. Admin de empresa y roles no privilegiados reciben 403.
 - La transición toma `SELECT FOR UPDATE` de la empresa de destino dentro de la transacción HTTP. Si suspende o marca `deleted`, primero actualiza `tenants.status`, luego cambia temporalmente `app.current_tenant` al destino y revoca **todas las sesiones persistidas del tenant** bajo FORCE RLS de `auth_sessions`; el ámbito original se restaura en `finally`.
-- No se permite suspender/eliminar desde el contexto de esa misma empresa, evitando que el único administrador disponible se autoexpulse. Una empresa `deleted` es terminal para esta ruta: no se reactiva con un simple cambio de estado.
+- No se permite suspender/eliminar desde el contexto de esa misma empresa, evitando que el único administrador disponible se autoexpulse. Una empresa `deleted` es terminal para esta ruta: no se reactiva con un simple cambio de estado ni se le cambia el plan.
 - Las operaciones de plan-only no revocan sesiones. Repetir suspensión ejecuta reconciliación de sesiones persistidas residuales sin recrear JWT; sin mutación ni nuevas sesiones, el resultado es idempotente.
 - En la misma transacción se agrega evento `platform.tenant.lifecycle_updated` con antes/después de estado y plan y cantidad de sesiones revocadas. No se registran tokens, cookies, emails ni datos de lotes. La respuesta es `private, no-store`.
 - La revocación se confirma antes de enviar HTTP ACK. Las nuevas sesiones después de la reactivación son legítimas, pero las anteriores continúan revocadas.
