@@ -10,7 +10,8 @@ const panel = read('components/OfflineReconciliationPanel.jsx');
 const model = read('services/syncRunFocus.js');
 
 test('run detail sends only an authorized run identity using guarded Shell navigation', () => {
-  assert.match(scouting, /onOpenSync=\{\(\) => onNavigate\?\.\('sync', \{ id: details\.id \}\)\}/);
+  assert.match(scouting, /onOpenSync=\{\(\) => onNavigate\?\.\('sync', \{ id: run\.id \}\)\}/);
+  assert.doesNotMatch(scouting, /onNavigate\?\.\('sync', \{ id: details\.id \}\)/);
   assert.match(app, /focused\?\.view === 'sync' \? focused\.id : null/);
   assert.match(app, /onClearFocus=\{\(\) => handleViewChange\('sync'\)\}/);
   assert.match(app, /if \(!canNavigateView\(id, access\)\) return;/);
