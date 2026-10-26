@@ -448,6 +448,12 @@ try {
   console.log('PASS: mobile fallback photo persisted encrypted and reopened on reload');
   await mobile.close();
 
+  // Earlier sections intentionally closed their browser context. Campaign
+  // recovery uses its own origin-isolated Chromium context for both tabs.
+  const campaignContext = await browser.newContext();
+  const campaignPage = await campaignContext.newPage();
+  await campaignPage.goto('http://127.0.0.1:4173/');
+
   // Pilot campaign recovery: real WebCrypto + IndexedDB, reload, two tabs
   // and byte inspection. A manual retry must preserve the original UUID.
   const campaignRecoveryInput = {
@@ -460,7 +466,7 @@ try {
       status: 'planned'
     }
   };
-  const savedCampaign = await page.evaluate(async ({scope, body}) => {
+  const savedCampaign = await campaignPage.evaluate(async ({scope, body}) => {
     const service = await import('/src/services/campaignRecoveryStore.js');
     await service.saveCampaignRecovery(scope, body);
     const row = await service.readCampaignRecovery(scope);
@@ -486,8 +492,8 @@ try {
     key: campaignRecoveryInput.body.client_request_id,
     name: campaignRecoveryInput.body.name, encrypted: true, leaked: false
   });
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  const afterCampaignReload = await page.evaluate(async ({scope,otherScope,body}) => {
+  await campaignPage.reload({ waitUntil: 'domcontentloaded' });
+  const afterCampaignReload = await campaignPage.evaluate(async ({scope,otherScope,body}) => {
     const service = await import('/src/services/campaignRecoveryStore.js');
     const restored = await service.readCampaignRecovery(scope);
     return { body: restored.body, foreign: await service.readCampaignRecovery(otherScope) };
@@ -496,7 +502,7 @@ try {
   assert.equal(afterCampaignReload.foreign, null);
   console.log('PASS: encrypted campaign replay body/UUID survives real reload, foreign scope sealed');
 
-  const campaignTab = await context.newPage();
+  const campaignTab = await campaignContext.newPage();
   await campaignTab.goto('http://127.0.0.1:4173/');
   const fromOtherTab = await campaignTab.evaluate(async scope => {
     const service = await import('/src/services/campaignRecoveryStore.js');
@@ -509,7 +515,7 @@ try {
   }, campaignRecoveryInput);
   assert.equal(staleDelete, false);
   await assert.rejects(
-    page.evaluate(async ({scope,body}) => {
+    campaignPage.evaluate(async ({scope,body}) => {
       const service = await import('/src/services/campaignRecoveryStore.js');
       return service.saveCampaignRecovery(scope, {...body,
         client_request_id: '9b000000-0000-4000-8000-000000000002'});
@@ -521,7 +527,7 @@ try {
   assert.equal(originalGone, true);
 
   const race = await Promise.allSettled([
-    page.evaluate(async ({scope,body}) => {
+    campaignPage.evaluate(async ({scope,body}) => {
       const service = await import('/src/services/campaignRecoveryStore.js');
       return service.saveCampaignRecovery(scope, {
         ...body, client_request_id: '9b000000-0000-4000-8000-000000000003',
@@ -538,7 +544,7 @@ try {
   ]);
   assert.deepEqual(race.map(x=>x.status).sort(), ['fulfilled','rejected'],
     'only one browser tab may reserve an uncertain campaign slot');
-  const campaignRaceBody = await page.evaluate(async scope => {
+  const campaignRaceBody = await campaignPage.evaluate(async scope => {
     const service = await import('/src/services/campaignRecoveryStore.js');
     return (await service.readCampaignRecovery(scope)).body;
   }, campaignRecoveryInput.scope);
@@ -546,6 +552,7 @@ try {
   console.log('PASS: concurrent tabs cannot overwrite pending creation or discard wrong UUID');
 
   await campaignTab.close();
+  await campaignContext.close();
 
   // Exercise production service-worker shell under a real offline reload.
   server.kill();
