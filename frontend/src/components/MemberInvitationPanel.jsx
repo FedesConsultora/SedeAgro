@@ -32,14 +32,20 @@ export function MemberInvitationPanel({ api, session, dataMode }) {
   const requestIsCurrent = (requestScope, requestApi) => Boolean(requestScope &&
     scopeRef.current === requestScope && apiRef.current === requestApi);
 
+  // Reset secret only on a principal/API change. Refreshing the list after
+  // creation must not erase the one-time secret before the admin can copy it.
+  useEffect(() => {
+    gate.current.release();
+    setBusy(false);
+    setSecret(null);
+    setForm({ email: '', roleCode: 'scout' });
+    setError('');
+  }, [scope, api]);
+
   useEffect(() => {
     let active = true;
     const requestScope = scope;
     const requestApi = api;
-    gate.current.release();
-    setBusy(false);
-    setSecret(null);
-    setError('');
     setSnapshot({ scope: requestScope, api: requestApi, rows: [], loading: Boolean(requestScope) });
     if (requestScope) {
       void (async () => {
