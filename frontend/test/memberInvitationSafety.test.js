@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   memberInviteAuthority, prepareMemberInvitation, confirmMemberInvitation,
-  checkedMemberInvitations, createMemberInviteGate
+  checkedMemberInvitations, createMemberInviteGate, confirmMemberActivation
 } from '../src/services/memberInvitationSafety.js';
 
 const tid = '9d941d8a-9a66-4c6d-8469-54c37596e3a9';
@@ -66,4 +66,23 @@ test('synchronous gate prevents double submits and UI fences private secrets', (
   assert.match(source, /apiRef\.current === requestApi/);
   assert.match(source, /confirmMemberInvitation\(response, prepared\)/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|location\.search/);
+});
+
+test('recipient success must be confirmed by the same tenant as pasted secret', () => {
+  const secret = tid + '.' + 'a'.repeat(64);
+  const receipt = { next: 'login', data: {
+    id: userId, roleCode: 'scout', tenant: { id: tid, name: 'Farm' }
+  } };
+  assert.deepEqual(confirmMemberActivation(receipt, secret),
+    { tenantName: 'Farm', role: 'scout' });
+  assert.throws(() => confirmMemberActivation({
+    ...receipt, data: { ...receipt.data, tenant: { id: userId, name: 'Other' } }
+  }, secret), /no confirmó/);
+  assert.throws(() => confirmMemberActivation({
+    ...receipt, data: { ...receipt.data, roleCode: 'tenant_admin' }
+  }, secret), /no confirmó/);
+  const src = readFileSync(new URL('../src/pages/InviteAcceptancePage.jsx', import.meta.url), 'utf8');
+  assert.match(src, /credentials: 'omit'/);
+  assert.match(src, /confirmMemberActivation\(result, form\.token\.trim\(\)\)/);
+  assert.doesNotMatch(src, /localStorage|sessionStorage|location\.search|URLSearchParams/);
 });
