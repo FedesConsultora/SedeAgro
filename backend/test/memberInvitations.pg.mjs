@@ -183,6 +183,71 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
       'SELECT count(*)::int n FROM memberships WHERE tenant_id=$1 AND user_id=$2',
       [b, existing.id])).rows[0].n, 1);
 
+    // Expired bearer tokens must fail without creating a new user. The
+    // expired pending email is then reusable for a completely new secret.
+    const expiredEmail = 'expired-' + suffix + '@example.test';
+    const expiring = await invite(adminA, a, expiredEmail);
+    assert.equal(expiring.status, 201, JSON.stringify(expiring.json));
+    await owner.query(
+      "UPDATE member_invitations SET expires_at=now()-interval '1 second' WHERE id=$1",
+      [expiring.json.data.id]);
+    const past = await api('/invite/accept', { method: 'POST', body: {
+      token: expiring.json.delivery.token, password: 'FreshStrongPassword903', fullName: 'Expired'
+    } });
+    assert.equal(past.status, 410);
+    const reissued = await invite(adminA, a, expiredEmail);
+    assert.equal(reissued.status, 201, JSON.stringify(reissued.json));
+    assert.notEqual(reissued.json.data.id, expiring.json.data.id);
+
+    // Concurrent acceptance must serialize on tenant/invitation row and not
+    // produce duplicate credentials, members or two successful responses.
+    const raceEmail = 'race-' + suffix + '@example.test';
+    const raceInvite = await invite(adminA, a, raceEmail);
+    assert.equal(raceInvite.status, 201, JSON.stringify(raceInvite.json));
+    const raceBody = { token: raceInvite.json.delivery.token,
+      password: 'ConcurrentTesting903', fullName: 'Concurrent Scout' };
+    const races = await Promise.all([
+      api('/invite/accept', { method: 'POST', body: raceBody }),
+      api('/invite/accept', { method: 'POST', body: raceBody })
+    ]);
+    assert.deepEqual(races.map(x => x.status).sort(), [201, 410], JSON.stringify(races));
+    const racedUsers = (await owner.query('SELECT id FROM users WHERE email=$1', [raceEmail])).rows;
+    assert.equal(racedUsers.length, 1);
+    users.push(racedUsers[0].id);
+    assert.equal((await owner.query(
+      'SELECT count(*)::int n FROM memberships WHERE tenant_id=$1 AND user_id=$2',
+      [a, racedUsers[0].id])).rows[0].n, 1);
+    const auditRows = (await owner.query(
+      'SELECT before,after FROM audit_events WHERE entity_id=$1',
+      [raceInvite.json.data.id])).rows;
+    assert.equal(auditRows.length, 2);
+    assert.equal(JSON.stringify(auditRows).includes(raceInvite.json.delivery.token), false);
+
+    // A tiny test-only plan proves outstanding invitations reserve seats.
+    // Do not change the globally seeded starter plan or production billing.
+    const tinyPlan = await inserted(
+      "INSERT INTO plans(code,name,max_users) VALUES($1,'Invitation capacity test',2) RETURNING id",
+      ['invite-capacity-' + suffix]);
+    const smallTenant = await inserted(
+      "INSERT INTO tenants(plan_id,name,slug,status) VALUES($1,$2,$3,'active') RETURNING id",
+      [tinyPlan, 'Invitation capacity test', 'invite-capacity-' + suffix]);
+    tenants.push(smallTenant);
+    const smallAdmin = await actor(smallTenant, 'admin capacity', 'tenant_admin');
+    const firstSlot = await invite(smallAdmin, smallTenant,
+      'first-capacity-' + suffix + '@example.test');
+    assert.equal(firstSlot.status, 201, JSON.stringify(firstSlot.json));
+    const noSlot = await invite(smallAdmin, smallTenant,
+      'second-capacity-' + suffix + '@example.test');
+    assert.equal(noSlot.status, 409, JSON.stringify(noSlot.json));
+    assert.equal(noSlot.json.error.code, 'MEMBER_SEATS_FULL');
+    // Revocation must free that reserved slot in the same transaction.
+    const revokeSlot = await api('/invitations/' + firstSlot.json.data.id, {
+      method: 'DELETE', token: smallAdmin.token, tenantId: smallTenant
+    });
+    assert.equal(revokeSlot.status, 204);
+    assert.equal((await invite(smallAdmin, smallTenant,
+      'second-capacity-' + suffix + '@example.test')).status, 201);
+
     // Per-tenant RLS reads use the runtime role, not the owner connection.
     await appClient.query('BEGIN');
     try {
@@ -202,6 +267,7 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
           'DELETE FROM tenants WHERE id=ANY($1::uuid[])', [tenants]);
         if (users.length) await owner.query(
           'DELETE FROM users WHERE id=ANY($1::uuid[])', [users]);
+        await owner.query('DELETE FROM plans WHERE code=$1', ['invite-capacity-' + suffix]);
       } finally { await owner.end(); }
     }
     if (appReady) await appClient.end();
