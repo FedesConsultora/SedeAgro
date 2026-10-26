@@ -5,7 +5,10 @@ import { readFileSync } from 'node:fs';
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 
 test('campaign recovery persists sealed bytes before the first network POST', () => {
-  const store = source('../src/services/campaignRecoveryStore.js');
+  const store = source('../src/services/encryptedCreateJournal.js');
+  const wrapper = source('../src/services/campaignRecoveryStore.js');
+  assert.match(wrapper, /databaseName: 'sedeagro-campaign-recovery'/);
+  assert.match(wrapper, /aadDomain: 'sedeagro:campaign-recovery:v1:'/);
   const modal = source('../src/components/CampaignFormModal.jsx');
   assert.match(store, /AES-GCM/);
   assert.match(store, /length: 256/);
