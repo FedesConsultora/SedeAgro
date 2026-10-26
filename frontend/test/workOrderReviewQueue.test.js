@@ -73,8 +73,8 @@ test('inbox surfaces failure, clears previous data and opens authorized details 
     'The inbox query remains read-only even when saved views use POST');
   assert.doesNotMatch(ui, /approve\(/);
   // Opening an inbox result must carry the exact current actor/API scope.
-  assert.match(page, /<WorkOrderReviewInbox key=\\{scope\\} revision=\\{revision\\} onOpenOrder=\\{selectOrder\\}/);
-  assert.match(page, /const selectOrder = \\(order\\) => setSelectedSnapshot\\(\\{ scope, api, revision, order \\}\\)/);
+  assert.match(page, /<WorkOrderReviewInbox key=\{scope\} revision=\{revision\} onOpenOrder=\{selectOrder\}/);
+  assert.match(page, /const selectOrder = \(order\) => setSelectedSnapshot\(\{ scope, api, revision, order \}\)/);
 });
 
 test('expired or transferred cursor produces a restart action, never repeated with same signed token', () => {
