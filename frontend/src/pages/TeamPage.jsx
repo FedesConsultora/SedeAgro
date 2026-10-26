@@ -4,6 +4,7 @@ import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
+import { MemberInvitationPanel } from '../components/MemberInvitationPanel.jsx';
 import { extractCollection } from '../services/useTenantCollection.js';
 import { teamPrivateListScope, checkedTeamPrivateRows } from '../services/teamPrivateListScope.js';
 
@@ -234,14 +235,15 @@ export function TeamPage() {
 
       {dataMode === 'mock' &&
         <p className="resource-demo-note" role="status">Equipo de demostración. Las invitaciones son simuladas.</p>}
-      {dataMode === 'live' &&
-        <p className="resource-demo-note" role="status">Invitar miembros todavía no está disponible: no se enviarán invitaciones ficticias.</p>}
+      {dataMode === 'live' && session?.membership?.roleCode !== 'tenant_admin' &&
+        <p className="resource-demo-note" role="status">Solo la administración de empresa puede invitar nuevos colaboradores.</p>}
       {errors.members && <ResourceLoadNotice title="miembros" error={errors.members}
         onRetry={() => setRevision(value => value + 1)} />}
       {errors.teams && <ResourceLoadNotice title="equipos" error={errors.teams}
         onRetry={() => setRevision(value => value + 1)} />}
       {dataMode === 'live' && !scope &&
         <div className="auth-error" role="alert">La sesión no permite consultar miembros de esta empresa.</div>}
+      <MemberInvitationPanel api={api} session={session} dataMode={dataMode} />}
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
       ) : (
