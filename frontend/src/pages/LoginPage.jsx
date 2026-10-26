@@ -4,7 +4,7 @@ import { API_URL } from '../services/api.js';
 import { useSession } from '../context/SessionContext.jsx';
 import { createLoginAttemptGate } from '../services/loginAttemptSafety.js';
 
-export function LoginPage({ onSwitchToRegister }) {
+export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
   const { login } = useSession();
   const [form, setForm] = useState({ email: '', password: '' });
   const [loading, setLoading] = useState(false);
@@ -176,8 +176,12 @@ export function LoginPage({ onSwitchToRegister }) {
 
             <div className="auth-divider"><span>o</span></div>
 
-            <button type="button" className="ghost-action" style={{ width: '100%', justifyContent: 'center' }} onClick={onSwitchToRegister}>
+            <button type="button" className="ghost-action" style={{ width: '100%', justifyContent: 'center' }} onClick={onSwitchToRegister} disabled={locked}>
               Crear cuenta nueva
+            </button>
+            <button type="button" className="ghost-action" style={{ width: '100%', justifyContent: 'center', marginTop: 10 }}
+              onClick={onSwitchToInvite} disabled={locked}>
+              Tengo una invitación
             </button>
           </>
         ) : (
