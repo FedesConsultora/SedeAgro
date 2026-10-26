@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Leaf } from 'lucide-react';
 import { API_URL } from '../services/api.js';
-import { createMemberInviteGate } from '../services/memberInvitationSafety.js';
+import { confirmMemberActivation, createMemberInviteGate } from '../services/memberInvitationSafety.js';
 
 // No token is read from URLs, cookies, localStorage or sessionStorage.
 // Recipients paste the one-time code given to them through a private channel.
@@ -38,14 +38,10 @@ export function InviteAcceptancePage({ onSwitchToLogin }) {
       if (!response.ok) {
         throw new Error(result?.error?.message || 'No se pudo aceptar la invitación.');
       }
-      if (result?.next !== 'login' || !result?.data?.id ||
-          !result?.data?.tenant?.id ||
-          !['scout', 'contractor', 'agronomic_coordinator', 'producer_viewer'].includes(result?.data?.roleCode)) {
-        throw new Error('La activación no fue confirmada. Contactá al administrador antes de reintentar.');
-      }
+      const confirmed = confirmMemberActivation(result, form.token.trim());
       if (alive.current) {
         setForm({ token: '', fullName: '', password: '' });
-        setSuccess({ tenantName: result.data.tenant.name, role: result.data.roleCode });
+        setSuccess(confirmed);
       }
     } catch (err) {
       if (alive.current) setError(err?.message || 'No se pudo contactar con el servidor.');
