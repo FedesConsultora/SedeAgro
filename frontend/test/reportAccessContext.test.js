@@ -8,7 +8,7 @@ const session = Object.freeze({
   authenticated: true,
   tenant: { id: 'tenant-1' },
   user: { id: 'user-1', isPlatformAdmin: false },
-  membership: { roleCode: 'agronomic_coordinator' },
+  membership: { id: 'membership-1', roleCode: 'agronomic_coordinator' },
   entitlements: ['reports', 'scouting', 'work_orders']
 });
 
@@ -21,7 +21,8 @@ test('field report access identity changes on tenant, actor, role, privileges or
   for (const altered of [
     { ...session, tenant: { id: 'tenant-2' } },
     { ...session, user: { ...session.user, id: 'user-2' } },
-    { ...session, membership: { roleCode: 'scout' } },
+    { ...session, membership: { id: 'membership-1', roleCode: 'scout' } },
+    { ...session, membership: { id: 'membership-2', roleCode: 'agronomic_coordinator' } },
     { ...session, entitlements: ['scouting'] },
     { ...session, user: { ...session.user, isPlatformAdmin: true } }
   ]) assert.notEqual(reportAccessContext(altered, 'live', 'field-1'), original);
@@ -33,6 +34,10 @@ test('demo and unauthenticated cold start never become a report access context',
   assert.equal(reportAccessContext({ ...session, authenticated: false }, 'live'), null);
   assert.equal(reportAccessContext({ ...session, user: {} }, 'live'), null);
   assert.equal(reportAccessContext({ ...session, tenant: {} }, 'live'), null);
+  assert.equal(reportAccessContext({ ...session, membership: null }, 'live'), null);
+  assert.equal(reportAccessContext({
+    ...session, membership: { roleCode: 'agronomic_coordinator' }
+  }, 'live'), null);
   assert.equal(reportAccessContext(null, 'live'), null);
 });
 
@@ -42,7 +47,10 @@ test('render-time masking hides the old summary BEFORE effects clear state', () 
   const snapshot = { scope, api, report: { privateOrders: ['A'] } };
   assert.equal(visibleFieldReport(snapshot, scope, api), snapshot.report);
   assert.equal(visibleFieldReport(snapshot, reportAccessContext({
-    ...session, membership: { roleCode: 'scout' }
+    ...session, membership: { id: 'membership-1', roleCode: 'scout' }
+  }, 'live', 'field-1'), api), null);
+  assert.equal(visibleFieldReport(snapshot, reportAccessContext({
+    ...session, membership: { id: 'membership-2', roleCode: 'agronomic_coordinator' }
   }, 'live', 'field-1'), api), null);
   assert.equal(visibleFieldReport(snapshot, scope, {}), null);
   assert.equal(visibleFieldReport(snapshot, null, api), null);
