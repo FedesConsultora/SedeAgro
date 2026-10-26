@@ -1,10 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { setLocalTenant } from '../../core/db.js';
-import { Tenant, User, Plan, TenantModule, Module, Membership } from '../../models/index.js';
+import { AuthSession, PlatformAuditLog, Tenant, User, Plan, TenantModule, Module } from '../../models/index.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { isPlatformAdministrator } from '../../infra/security/securityGuards.js';
 import { globalUserLifecycleRouter } from './globalUserLifecycle.js';
+import { planTenantStatusChange } from './tenantStatusPolicy.js';
 
 export const platformRouter = Router();
 
@@ -68,15 +69,69 @@ const tenantIdParams = z.object({ id: z.string().uuid() });
 const updateTenantSchema = z.object({
   status: z.enum(['active', 'onboarding', 'suspended', 'deleted']).optional(),
   plan_id: z.string().uuid().optional()
-});
+}).strict().refine(value => value.status !== undefined || value.plan_id !== undefined,
+  'Informá el estado o plan que querés modificar.');
 
 platformRouter.patch('/tenants/:id', validate(tenantIdParams, 'params'), asyncHandler(async (req, res) => {
   const parsed = updateTenantSchema.parse(req.body);
-  const tenant = await Tenant.findByPk(req.params.id, { transaction: req.dbTransaction, skipTenantScope: true });
+  const transaction = req.dbTransaction;
+  // Serialize tenant disable/enable/plan transitions with membership
+  // invitation/lifecycle operations, which also lock the tenant row.
+  const tenant = await Tenant.findByPk(req.params.id, {
+    attributes: ['id', 'plan_id', 'status', 'name', 'slug'],
+    transaction, lock: transaction.LOCK.UPDATE, skipTenantScope: true
+  });
   if (!tenant) throw new HttpError(404, 'Tenant no encontrado.');
 
-  await tenant.update(parsed, { transaction: req.dbTransaction, skipTenantScope: true });
-  res.json({ data: tenant });
+  const decision = planTenantStatusChange({
+    actorTenantId: req.tenantId, targetTenantId: tenant.id,
+    previousStatus: tenant.status, nextStatus: parsed.status,
+    planChangeRequested: parsed.plan_id !== undefined
+  });
+  if (!decision.allowed) {
+    throw new HttpError(409, 'No se permite esta transición de empresa.',
+      undefined, decision.code);
+  }
+  const before = { status: tenant.status, plan_id: tenant.plan_id };
+  const nextStatus = parsed.status ?? tenant.status;
+  const nextPlanId = parsed.plan_id ?? tenant.plan_id;
+  const changed = before.status !== nextStatus || before.plan_id !== nextPlanId;
+  if (changed) {
+    await tenant.update(parsed, { transaction, skipTenantScope: true });
+  }
+
+  // A suspended/deleted company may later be reactivated. Existing signed
+  // sessions MUST NOT resurrect; invalidate them transactionally BEFORE ACK.
+  // forTargetTenant only switches the current transaction GUC and restores it
+  // in finally, so existing auth_sessions FORCE RLS stays enforced.
+  let revokedSessions = 0;
+  if (decision.revokeSessions) {
+    revokedSessions = await forTargetTenant(req, tenant.id, async () => {
+      const [count] = await AuthSession.update({ revoked_at: new Date() }, {
+        where: { tenant_id: tenant.id, revoked_at: null }, transaction
+      });
+      return count;
+    });
+  }
+
+  if (changed || revokedSessions > 0) {
+    await PlatformAuditLog.create({
+      actor_id: req.auth.user.id,
+      tenant_id: tenant.id,
+      action: 'platform.tenant.lifecycle_updated',
+      payload: {
+        before, after: { status: tenant.status, plan_id: tenant.plan_id },
+        revoked_sessions: revokedSessions
+      }
+    }, {
+      transaction,
+      // The global ALS tenant hook defaults to the platform admin's HOME
+      // tenant. This event belongs to the TARGET tenant; do not overwrite it.
+      skipTenantScope: true
+    });
+  }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ data: tenant, changed, revokedSessions });
 }));
 
 // GET tenant modules settings (modules enabled)
