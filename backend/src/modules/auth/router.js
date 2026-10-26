@@ -20,9 +20,15 @@ import { HttpError, asyncHandler, validate } from '../../utils/http.js';
 import { rateLimit } from '../../infra/http/middlewares/rateLimit.js';
 import { reserveSessionSlot, MAX_ACTIVE_SESSIONS } from './sessionPolicy.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
+import { invitationPublicRouter, invitationScopedRouter } from './invitations.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
+
+// Public acceptance receives the one-time secret in the POST body only.
+// Administration stays behind scoped auth + tenant RLS.
+authPublicRouter.use('/invite', invitationPublicRouter);
+authScopedRouter.use('/invitations', invitationScopedRouter);
 
 const registerTenantSchema = z.object({
   organizationName: z.string().min(2).max(180),
