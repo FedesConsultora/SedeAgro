@@ -113,11 +113,64 @@ test('form validates receipt, gates submit and prevents close during pending POS
   const jsx=source('../src/components/WorkOrderFormModal.jsx');
   assert.match(jsx,/workOrderCreateScope\(session, dataMode\)/);
   assert.match(jsx,/submitGate\.current\.acquire\(authority\)/);
-  assert.match(jsx,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id\)/);
-  assert.match(jsx,/submitGate\.current\.finish\(ticket, transmitted/);
+  assert.match(jsx,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
+  assert.match(jsx,/submitGate\.current\.finish\(ticket, 'uncertain'\)/);
   assert.match(jsx,/submitGate\.current\.isPending\(authority\)/);
   assert.match(jsx,/scopeRef\.current === authority/);
   assert.match(jsx,/fieldsSnapshot\?\.scope === authority/);
   assert.match(jsx,/onClose=\{safeClose\}/);
   assert.doesNotMatch(jsx,/await api\.createWorkOrder\(body\);\s*onCreated\(\)/);
+});
+
+
+test('keyed create receipt checks replay flag, tenant and all immutable order data', () => {
+  const body = { ...request, client_request_id: orderId };
+  const response = { ...reply, replayed: false,
+    data: { ...reply.data, tenant_id: tenant, campaign_field_id: null,
+      due_at: null, instructions: request.instructions } };
+  assert.equal(verifyCreatedWorkOrder(response, body, actor, tenant), response.data);
+  assert.equal(verifyCreatedWorkOrder({ ...response, replayed: true }, body, actor, tenant), response.data);
+  for (const patch of [
+    { tenant_id: field }, { instructions: 'Another result' },
+    { campaign_field_id: field }, { due_at: '2026-11-01T00:00:00.000Z' },
+    { status: 'assigned' }
+  ]) assert.throws(() => verifyCreatedWorkOrder({
+    ...response, data: { ...response.data, ...patch }
+  }, body, actor, tenant), /no confirmó/i);
+  for (const flag of [null, undefined, 0, 'true']) {
+    assert.throws(() => verifyCreatedWorkOrder({ ...response, replayed: flag },
+      body, actor, tenant), /no confirmó/i);
+  }
+  assert.equal(verifyCreatedWorkOrder(reply, request, actor), reply.data);
+});
+
+test('manual retry of uncertain receipt is serialized and rejects stale original tickets', () => {
+  const gate = createWorkOrderSubmitGate();
+  const scope = workOrderCreateScope(session, 'live');
+  assert.equal(gate.retry(scope), null);
+  const original = gate.acquire(scope);
+  assert.equal(gate.retry(scope), null);
+  assert.equal(gate.finish(original, 'uncertain'), true);
+  assert.equal(gate.acquire(scope), null);
+  assert.equal(gate.retry('other-scope'), null);
+  const retry = gate.retry(scope);
+  assert.ok(retry);
+  assert.equal(gate.retry(scope), null);
+  assert.equal(gate.finish(original, 'confirmed'), false);
+  assert.equal(gate.finish(retry, 'confirmed'), true);
+  assert.equal(gate.retry(scope), null);
+  gate.reset();
+  assert.equal(gate.finish(retry, 'uncertain'), false);
+});
+
+test('keyed work order form never silently regenerates body on retry', () => {
+  const jsx = source('../src/components/WorkOrderFormModal.jsx');
+  assert.match(jsx, /crypto\.randomUUID\(\)/);
+  assert.match(jsx, /client_request_id:/);
+  assert.match(jsx, /Object\.freeze\(/);
+  assert.match(jsx, /requestRef\.current =/);
+  assert.match(jsx, /submitGate\.current\.retry\(authority\)/);
+  assert.match(jsx, /sendCreate\(ticket, saved\.body, saved\.api\)/);
+  assert.match(jsx, /verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
+  assert.doesNotMatch(jsx, /localStorage|sessionStorage/);
 });
