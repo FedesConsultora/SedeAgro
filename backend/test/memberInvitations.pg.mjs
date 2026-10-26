@@ -223,6 +223,31 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
     assert.equal(auditRows.length, 2);
     assert.equal(JSON.stringify(auditRows).includes(raceInvite.json.delivery.token), false);
 
+    // A tiny test-only plan proves outstanding invitations reserve seats.
+    // Do not change the globally seeded starter plan or production billing.
+    const tinyPlan = await inserted(
+      "INSERT INTO plans(code,name,max_users) VALUES($1,'Invitation capacity test',2) RETURNING id",
+      ['invite-capacity-' + suffix]);
+    const smallTenant = await inserted(
+      "INSERT INTO tenants(plan_id,name,slug,status) VALUES($1,$2,$3,'active') RETURNING id",
+      [tinyPlan, 'Invitation capacity test', 'invite-capacity-' + suffix]);
+    tenants.push(smallTenant);
+    const smallAdmin = await actor(smallTenant, 'admin capacity', 'tenant_admin');
+    const firstSlot = await invite(smallAdmin, smallTenant,
+      'first-capacity-' + suffix + '@example.test');
+    assert.equal(firstSlot.status, 201, JSON.stringify(firstSlot.json));
+    const noSlot = await invite(smallAdmin, smallTenant,
+      'second-capacity-' + suffix + '@example.test');
+    assert.equal(noSlot.status, 409, JSON.stringify(noSlot.json));
+    assert.equal(noSlot.json.error.code, 'MEMBER_SEATS_FULL');
+    // Revocation must free that reserved slot in the same transaction.
+    const revokeSlot = await api('/invitations/' + firstSlot.json.data.id, {
+      method: 'DELETE', token: smallAdmin.token, tenantId: smallTenant
+    });
+    assert.equal(revokeSlot.status, 204);
+    assert.equal((await invite(smallAdmin, smallTenant,
+      'second-capacity-' + suffix + '@example.test')).status, 201);
+
     // Per-tenant RLS reads use the runtime role, not the owner connection.
     await appClient.query('BEGIN');
     try {
@@ -242,6 +267,7 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
           'DELETE FROM tenants WHERE id=ANY($1::uuid[])', [tenants]);
         if (users.length) await owner.query(
           'DELETE FROM users WHERE id=ANY($1::uuid[])', [users]);
+        await owner.query('DELETE FROM plans WHERE code=$1', ['invite-capacity-' + suffix]);
       } finally { await owner.end(); }
     }
     if (appReady) await appClient.end();
