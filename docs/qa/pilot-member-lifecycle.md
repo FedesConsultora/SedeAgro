@@ -12,7 +12,10 @@ with `{"status":"blocked"}` or `{"status":"active"}`.
 Legacy `/api` prefix shares the same handler.
 
 - Requires logged-in `tenant_admin` through `members.manage` and
-  server-side tenant RLS. No arbitrary user ID, role or tenant may be supplied
+  explicit tenant+membership scope in every DB lookup. The existing `memberships`
+  table is intentionally NOT FORCE RLS because public login enumerates tenant
+  choices; `auth_sessions` is FORCE RLS. Do not claim otherwise or broaden DB
+  RLS here without redesigning multiempresa login. No arbitrary user ID, role or tenant may be supplied
   as the target. The target is a tenant-scoped membership UUID.
 - Cannot target self, another administrator, platform role, another tenant,
   or pending/unknown membership. A blocked user remains in historical records.
@@ -38,7 +41,8 @@ Unit: `backend/test/memberLifecyclePolicy.test.js` and
 `frontend/test/memberLifecycleSafety.test.js`.
 
 Disposable migrated PostGIS: `backend/test/memberLifecycle.pg.mjs`, run
-under a non-owner role with FORCE RLS through normal test:db CI. Real HTTP:
+under a non-owner role with FORCE RLS for auth_sessions and explicit tenant
+predicates on memberships through normal test:db CI. Real HTTP:
 self, foreign, role-denied, invalid state, idempotent suspend/activate,
 existing active login invalidated, revoked session still denied on restore,
 fresh login succeeds, disabled global User denied, small-plan quota denied,
