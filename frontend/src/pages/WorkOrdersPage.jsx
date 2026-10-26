@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, ClipboardList, Plus, RefreshCw, Search } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { countWorkOrderFilters, filterWorkOrders } from '../services/workOrderFilters.js';
+import {
+  workOrderPrivateListScope, checkedWorkOrderPrivateRows,
+  visibleWorkOrderPrivateSnapshot, visibleWorkOrderPrivateSelection
+} from '../services/workOrderPrivateListScope.js';
 import { WorkOrderFormModal } from '../components/WorkOrderFormModal.jsx';
 import { WorkOrderDetailDrawer } from '../components/WorkOrderDetailDrawer.jsx';
 import { WorkOrderReviewInbox } from '../components/WorkOrderReviewInbox.jsx';
@@ -26,59 +30,73 @@ const FILTERS = [
 
 export function WorkOrdersPage({ focusOrderId = null }) {
   const { api, dataMode, session } = useSession();
-  const canCreate = dataMode === 'live' &&
+  const scope = workOrderPrivateListScope(session, dataMode);
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const canCreate = dataMode === 'live' && Boolean(scope) &&
     ['tenant_admin', 'agronomic_coordinator'].includes(session?.membership?.roleCode);
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [snapshot, setSnapshot] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [focusError, setFocusError] = useState('');
+  const [selectedSnapshot, setSelectedSnapshot] = useState(null);
+  const [focusState, setFocusState] = useState(null);
   const [revision, setRevision] = useState(0);
+  const revisionRef = useRef(revision);
+  revisionRef.current = revision;
+
+  // A changed actor/tenant/role/API hides the previous private data during
+  // the FIRST render, before useEffect can clear or refetch anything.
+  const scoped = visibleWorkOrderPrivateSnapshot(snapshot, scope, api, revision);
+  const orders = scoped?.rows || [];
+  const loading = Boolean(scope && (!scoped || scoped.phase === 'loading'));
+  const error = dataMode === 'live' && !scope
+    ? 'No se pudo validar el acceso a órdenes para esta sesión.'
+    : scoped?.error || '';
+  const selectedOrder = visibleWorkOrderPrivateSelection(selectedSnapshot, scope, api, revision);
+  const focusError = focusState?.scope === scope && focusState?.api === api &&
+    focusState?.revision === revision ? focusState.error : '';
+  const selectOrder = (order) => setSelectedSnapshot({ scope, api, revision, order });
 
   const reload = useCallback(() => setRevision(value => value + 1), []);
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError('');
-    setOrders([]);
-    setSelectedOrder(null);
+    const current = () => !cancelled && scopeRef.current === scope && apiRef.current === api &&
+      revisionRef.current === revision;
+    setSnapshot({ scope, api, revision, rows: [], phase: 'loading', error: '' });
+    setSelectedSnapshot(null);
+    if (!scope) return () => { cancelled = true; };
     if (dataMode === 'mock') {
-      setOrders(mockData.workOrders);
-      setLoading(false);
+      setSnapshot({ scope, api, revision, rows: mockData.workOrders, phase: 'ready', error: '' });
       return () => { cancelled = true; };
     }
     api.workOrders().then(response => {
-      if (cancelled) return;
-      if (!Array.isArray(response?.data)) {
-        throw new Error('El servidor respondió con un formato de órdenes inesperado.');
-      }
-      setOrders(response.data);
+      const rows = checkedWorkOrderPrivateRows(response.data, session.tenant.id);
+      if (current()) setSnapshot({ scope, api, revision, rows, phase: 'ready', error: '' });
     }).catch(err => {
-      if (!cancelled) {
-        setOrders([]);
-        setError(err?.message || 'No se pudo consultar el servidor de órdenes.');
-      }
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
+      if (current()) setSnapshot({
+        scope, api, revision, rows: [], phase: 'error',
+        error: err?.message || 'No se pudo consultar el servidor de órdenes.'
+      });
     });
     return () => { cancelled = true; };
-  }, [api, dataMode, revision]);
+  }, [scope, api, dataMode, revision]);
 
   useEffect(() => {
-    setFocusError('');
-    if (!focusOrderId || loading || error) return;
+    setFocusState({ scope, api, revision, error: '' });
+    if (!focusOrderId || !scope || !scoped || scoped.phase !== 'ready' || error) return;
     const matching = orders.find(item => item.id === focusOrderId);
     if (matching) {
-      setSelectedOrder(matching);
+      selectOrder(matching);
       setFilter('all');
       setSearch('');
     } else {
-      setFocusError('La orden solicitada no está disponible en esta cuenta o empresa.');
+      setFocusState({ scope, api, revision,
+        error: 'La orden solicitada no está disponible en esta cuenta o empresa.' });
     }
-  }, [focusOrderId, orders, loading, error]);
+  }, [focusOrderId, scoped, scope, api, revision, error]);
 
   const visible = useMemo(() => filterWorkOrders(orders, { filter, search }), [orders, filter, search]);
   const counts = useMemo(() => countWorkOrderFilters(orders), [orders]);
@@ -116,7 +134,7 @@ export function WorkOrdersPage({ focusOrderId = null }) {
         </section>
       )}
       {focusError && !error && <p className="orders-workspace__error" role="status">{focusError}</p>}
-      <WorkOrderReviewInbox revision={revision} onOpenOrder={setSelectedOrder} />
+      {scope && <WorkOrderReviewInbox key={scope} revision={revision} onOpenOrder={selectOrder} />}
 
       {!error && (
         <>
@@ -168,7 +186,7 @@ export function WorkOrdersPage({ focusOrderId = null }) {
               ) : visible.map(order => (
                 <button key={order.id} type="button"
                   className="data-table__row orders-workspace__row orders-workspace__order"
-                  onClick={() => setSelectedOrder(order)} aria-label={'Abrir orden: ' + order.title}>
+                  onClick={() => selectOrder(order)} aria-label={'Abrir orden: ' + order.title}>
                   <strong>{order.title}</strong>
                   <span>{order.Field?.name || 'Lote no especificado'}</span>
                   <span><span className={'status-badge status-badge--' +
@@ -186,12 +204,12 @@ export function WorkOrdersPage({ focusOrderId = null }) {
           </div>
         </>
       )}
-      {showModal && <WorkOrderFormModal isOpen
+      {showModal && scope && <WorkOrderFormModal isOpen
         onClose={() => setShowModal(false)}
         onCreated={() => { setShowModal(false); reload(); }} />}
-      {selectedOrder && <WorkOrderDetailDrawer key={selectedOrder.id} isOpen
-        order={selectedOrder} onClose={() => setSelectedOrder(null)}
-        onUpdated={() => { setSelectedOrder(null); reload(); }} />}
+      {selectedOrder && <WorkOrderDetailDrawer key={`${scope}:${selectedOrder.id}`} isOpen
+        order={selectedOrder} onClose={() => setSelectedSnapshot(null)}
+        onUpdated={() => { setSelectedSnapshot(null); reload(); }} />}
     </div>
   );
 }
