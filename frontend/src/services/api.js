@@ -127,6 +127,9 @@ export function createApiClient(session, feedback, authEpoch = 0) {
       method: 'DELETE', silent: true
     }),
     members: () => request('/auth/members'),
+    changeMemberStatus: (id, status) => request(`/auth/members/${encodeURIComponent(id)}/status`, {
+      method: 'PATCH', body: { status }, silent: true
+    }),
     memberInvitations: () => request('/auth/invitations', { silent: true }),
     createMemberInvitation: (body) => request('/auth/invitations', { method: 'POST', body, silent: true }),
     revokeMemberInvitation: (id) => request(`/auth/invitations/${encodeURIComponent(id)}`, {
