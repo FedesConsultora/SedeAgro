@@ -11,7 +11,7 @@ const api = read('services/api.js');
 
 test('run detail mounts provenance only after successful live authorized detail', () => {
   assert.match(page, /dataMode === 'live' && !loading && !error && details && \(\s*<RunEvidenceProvenance runId=\{details\.id\}/);
-  assert.match(page, /parseScoutingRunDetail\(response, run\.id\)/);
+  assert.match(page, /parseScoutingRunDetail\(response, run\.id, session\?\.tenant\?\.id\)/);
   assert.match(page, /onOpenSync=\{onOpenSync\}/);
   assert.match(panel, /canNavigateView\('scouting', access\)/);
   assert.match(panel, /sessionScope\(session\)/);
