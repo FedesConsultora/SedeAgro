@@ -4,6 +4,9 @@ import { Modal } from './Modal.jsx';
 import {
   campaignCreateScope, createCampaignSubmitGate, prepareCampaignCreate, verifyCreatedCampaign
 } from '../services/campaignCreateSafety.js';
+import {
+  readCampaignRecovery, saveCampaignRecovery, discardCampaignRecovery
+} from '../services/campaignRecoveryStore.js';
 
 function emptyForm() {
   const year = new Date().getFullYear();
@@ -37,15 +40,47 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [error, setError] = useState('');
+  const [recoveryState, setRecoveryState] = useState(null);
+  const checkedRecovery = recoveryState?.scope === authority && recoveryState?.api === api
+    ? recoveryState : null;
+  const recoveryLoading = Boolean(isOpen && authority &&
+    (!checkedRecovery || checkedRecovery.phase === 'loading'));
+  const recoveryBlocked = Boolean(isOpen && authority &&
+    checkedRecovery?.phase === 'error');
 
   useEffect(() => {
+    let active = true;
     submitGate.current.reset();
     requestRef.current = null;
     setFormSnapshot({ scope: authority, api, value: emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
-    return () => { submitGate.current.reset(); requestRef.current = null; };
+    setRecoveryState({ scope: authority, api, phase: isOpen && authority ? 'loading' : 'idle' });
+    if (isOpen && authority) {
+      void readCampaignRecovery(authority).then(saved => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        if (saved) {
+          requestRef.current = { scope: authority, api, body: saved.body };
+          setFormSnapshot({ scope: authority, api, value: {
+            name: saved.body.name, season_year: String(saved.body.season_year),
+            starts_at: saved.body.starts_at, ends_at: saved.body.ends_at || '',
+            status: saved.body.status
+          } });
+          setSubmitStatus('uncertain');
+          setError('Hay una creación pendiente de confirmar. Revisá Campañas o reintentá el envío original. No se creó ninguna solicitud nueva.');
+        }
+        setRecoveryState({ scope: authority, api, phase: 'ready' });
+      }).catch(err => {
+        if (!active || !openRef.current ||
+            scopeRef.current !== authority || apiRef.current !== api) return;
+        setRecoveryState({ scope: authority, api, phase: 'error' });
+        setError((err?.message || 'No se pudo recuperar la campaña.') +
+          ' No se enviará ninguna campaña nueva hasta reparar el almacenamiento.');
+      });
+    }
+    return () => { active = false; submitGate.current.reset(); requestRef.current = null; };
   }, [isOpen, authority, api]);
 
   const safeClose = () => {
@@ -54,7 +89,8 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
     onClose?.();
   };
 
-  const blocked = saving || submitStatus !== '' || submitGate.current.isBlocked(authority);
+  const blocked = saving || recoveryLoading || recoveryBlocked || submitStatus !== '' ||
+    submitGate.current.isBlocked(authority);
   const editable = Boolean(authority) && !blocked;
   const set = (key) => (event) => {
     if (!editable) return;
@@ -79,6 +115,11 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
       const response = await requestApi.createCampaign(body);
       if (!current()) return;
       verifyCreatedCampaign(response, body, session?.tenant?.id);
+      // The server ACK is exact; retire the durable uncertain journal BEFORE
+      // claiming success. If IndexedDB fails, retain the SAME key for retry.
+      const retired = await discardCampaignRecovery(authority, body.client_request_id);
+      if (!current()) return;
+      if (!retired) throw new Error('No se pudo retirar el envío pendiente.');
       submitGate.current.finish(ticket, 'confirmed');
       setSubmitStatus('confirmed');
       confirmed = true;
@@ -95,9 +136,9 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
     if (confirmed && current()) onCreated?.();
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    if (!isOpen || !authority) return;
+    if (!isOpen || !authority || recoveryLoading || recoveryBlocked) return;
     let prepared;
     try {
       prepared = prepareCampaignCreate(form);
@@ -113,16 +154,65 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
     if (!ticket) return; // one-shot fence before any async request
     const body = Object.freeze({ ...prepared, client_request_id: crypto.randomUUID() });
     requestRef.current = { scope: authority, api, body };
-    void sendCreate(ticket, body, api);
+    setSaving(true);
+    setError('');
+    // Fail closed: never POST a new campaign until the exact immutable body
+    // and key are durably encrypted in IndexedDB. A crashed tab can resume it.
+    try {
+      await saveCampaignRecovery(authority, body);
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      void sendCreate(ticket, body, api);
+    } catch (err) {
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      submitGate.current.finish(ticket, 'preflight-rejected');
+      requestRef.current = null;
+      setError((err?.message || 'No se pudo guardar el envío cifrado.') +
+        ' No se envió ninguna campaña. Volvé a abrir el formulario para revisar el estado local.');
+      setRecoveryState({ scope: authority, api, phase: 'error' });
+      setSaving(false);
+    }
   };
 
   const handleRetry = () => {
     const saved = requestRef.current;
-    if (!saved || submitStatus !== 'uncertain' ||
+    if (!saved || submitStatus !== 'uncertain' || recoveryLoading || recoveryBlocked ||
         saved.scope !== authority || saved.api !== api) return;
-    const ticket = submitGate.current.retry(authority);
+    // On a cold browser reload the original ticket no longer exists; acquire
+    // once for the restored journal. Within one modal opening retry() keeps
+    // the exact synchronous double-click fence.
+    const ticket = submitGate.current.isBlocked(authority)
+      ? submitGate.current.retry(authority)
+      : submitGate.current.acquire(authority);
     if (!ticket) return; // double retry blocked synchronously
     void sendCreate(ticket, saved.body, saved.api);
+  };
+
+  const handleDiscard = async () => {
+    const saved = requestRef.current;
+    if (!saved || submitStatus !== 'uncertain' || saving ||
+        saved.scope !== authority || saved.api !== api ||
+        !window.confirm('Revisá primero la lista de Campañas: este envío podría haber sido guardado por el servidor. ¿Descartar la recuperación y permitir una campaña nueva?')) return;
+    setSaving(true);
+    try {
+      const discarded = await discardCampaignRecovery(authority, saved.body.client_request_id);
+      if (!openRef.current || scopeRef.current !== authority || apiRef.current !== api) return;
+      if (!discarded) throw new Error('El envío pendiente cambió en otra pestaña.');
+      submitGate.current.reset();
+      requestRef.current = null;
+      setFormSnapshot({ scope: authority, api, value: emptyForm() });
+      setSubmitStatus('');
+      setError('');
+    } catch (err) {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setError(err?.message || 'No se pudo descartar el envío cifrado.');
+      }
+    } finally {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setSaving(false);
+      }
+    }
   };
 
   return (
@@ -141,12 +231,20 @@ export function CampaignFormModal({ isOpen, onClose, onCreated }) {
           <p role="alert" className="auth-error">Tu sesión no permite crear campañas.</p>}
         {dataMode !== 'live' &&
           <p role="status">Vista demo. Conectá el backend para guardar una campaña real.</p>}
+        {recoveryLoading && <p role="status">Comprobando envíos pendientes cifrados…</p>}
+        {recoveryBlocked && <p role="alert">La recuperación segura de campañas no está disponible. No se enviarán solicitudes nuevas.</p>}
         {error && <div className="auth-error" role="alert" style={{ marginBottom: 0 }}><span>{error}</span></div>}
         {submitStatus === 'uncertain' && authority && (
-          <button type="button" className="ghost-action" onClick={handleRetry}
-            disabled={saving}>
-            Reintentar el mismo envío
-          </button>
+          <>
+            <button type="button" className="ghost-action" onClick={handleRetry}
+              disabled={saving || recoveryLoading || recoveryBlocked}>
+              Reintentar el mismo envío
+            </button>
+            <button type="button" className="ghost-action" onClick={handleDiscard}
+              disabled={saving || recoveryLoading || recoveryBlocked}>
+              Descartar tras revisar Campañas
+            </button>
+          </>
         )}
 
         <label className="form-field">
