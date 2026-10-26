@@ -12,7 +12,8 @@ test('campaign recovery persists sealed bytes before the first network POST', ()
   assert.match(store, /false, \['encrypt', 'decrypt'\]/);
   assert.match(store, /additionalData: additionalData\(scope, body.client_request_id\)/);
   assert.match(store, /tx\.objectStore\(PENDING\)\.add\(/);
-  assert.match(store, /tx\.objectStore\(PENDING\)\.get\(scope\)/);
+  assert.match(store, /getOne\(PENDING, scope\)/);
+  assert.match(store, /tx\.objectStore\(table\)\.get\(scope\)/);
   assert.match(store, /request\.result\?\.id !== requestId/);
   assert.doesNotMatch(store, /localStorage|sessionStorage|Authorization|Bearer/);
   assert.match(modal, /await saveCampaignRecovery\(authority, body\);/);
