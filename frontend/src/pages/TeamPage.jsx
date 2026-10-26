@@ -243,7 +243,7 @@ export function TeamPage() {
         onRetry={() => setRevision(value => value + 1)} />}
       {dataMode === 'live' && !scope &&
         <div className="auth-error" role="alert">La sesión no permite consultar miembros de esta empresa.</div>}
-      <MemberInvitationPanel api={api} session={session} dataMode={dataMode} />}
+      <MemberInvitationPanel api={api} session={session} dataMode={dataMode} />
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
       ) : (
