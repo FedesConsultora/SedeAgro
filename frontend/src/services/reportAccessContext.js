@@ -5,12 +5,16 @@ import { sessionScope } from './offlineSyncModel.js';
 // after live role/entitlement changes during a pending browser request.
 export function reportAccessContext(session, dataMode, fieldId = null) {
   const principal = dataMode === 'live' ? sessionScope(session) : null;
-  if (!principal) return null;
+  // Membership replacements can change report/export authorization even
+  // with the same account, tenant and role. Never reuse the prior report view.
+  const membershipId = session?.membership?.id;
+  if (!principal || !membershipId) return null;
   const entitlements = Array.isArray(session?.entitlements)
     ? [...new Set(session.entitlements.filter(value => typeof value === 'string'))].sort()
     : [];
   return JSON.stringify([
     principal,
+    membershipId,
     session?.membership?.roleCode || '',
     session?.user?.isPlatformAdmin === true,
     entitlements,
