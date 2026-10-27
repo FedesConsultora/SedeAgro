@@ -4,13 +4,15 @@ import { readFileSync } from 'node:fs';
 const read=path=>readFileSync(new URL(path,import.meta.url),'utf8');
 
 test('transaction-scoped shared/exclusive advisory locks share one tenant namespace',()=>{
-  const source=read('../src/core/tenantSuspensionFence.js');
+  const source=read('../src/core/db.js');
+  const facade=read('../src/core/tenantSuspensionFence.js');
+  assert.match(facade,/export \{ lockTenantLifecycle \} from '\.\/db\.js'/);
   assert.match(source, /pg_advisory_xact_lock_shared\(hashtext\(:namespace\), hashtext\(:tenantId\)\)/);
   assert.match(source, /pg_advisory_xact_lock\(hashtext\(:namespace\), hashtext\(:tenantId\)\)/);
   assert.match(source,/assertTenantTransaction\(transaction, tenantId\)/);
   assert.match(source,/tenantId: tenantId\.toLowerCase\(\)/,
     'UUID case variants must acquire the same platform/request lock');
-  assert.match(source,/LOCK_NAMESPACE = 'sedeagro-pilot-tenant-status-v1'/);
+  assert.match(source,/TENANT_LIFECYCLE_NAMESPACE = 'sedeagro-pilot-tenant-status-v1'/);
   assert.doesNotMatch(source,/pg_advisory_lock\(/,
     'no session-scoped locks may leak into reused pool connections');
 });
