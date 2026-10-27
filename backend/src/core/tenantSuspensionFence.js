@@ -3,6 +3,8 @@
 // All scoped requests take a SHARED lock; a platform suspension takes EXCLUSIVE
 // for its target before changing status/revoking JTIs. Hash collisions only
 // serialize unrelated tenants more than needed; never authorize another tenant.
+// Canonicalize UUIDs: a mixed-case route parameter must use the same lock
+// key as the lowercase UUID returned by PostgreSQL.
 import { sequelize } from './db.js';
 import { assertTenantTransaction } from './tenantDbSafety.js';
 
@@ -22,6 +24,6 @@ export async function lockTenantLifecycle(transaction, tenantId, mode) {
   assertTenantTransaction(transaction, tenantId);
   await sequelize.query(lockQuery(mode), {
     transaction,
-    replacements: { namespace: LOCK_NAMESPACE, tenantId }
+    replacements: { namespace: LOCK_NAMESPACE, tenantId: tenantId.toLowerCase() }
   });
 }
