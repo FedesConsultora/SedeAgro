@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import pg from 'pg';
 
 if(!process.env.TEST_DATABASE_ADMIN_URL||!process.env.TEST_DATABASE_APP_URL) {
@@ -33,6 +34,29 @@ test('tenant ID/slug/host mismatch fails closed even with valid bearer cookie or
   const tenants=[],users=[];
   let readyOwner=false,readyApp=false;
   const create=async(sql,params)=>(await owner.query(sql,params)).rows[0].id;
+  // Node's fetch transport may ignore a caller-supplied Host and restore
+  // URL authority. Use raw HTTP to prove the server receives the exact Host.
+  async function callWithHost(host,headers) {
+    return new Promise((resolve,reject)=>{
+      const req=httpRequest({
+        hostname:'127.0.0.1',port:server.address().port,
+        path:'/api/v1/auth/me',method:'GET',
+        headers:{...headers,Host:host}
+      },res=>{
+        const chunks=[];
+        res.on('data',chunk=>chunks.push(chunk));
+        res.on('error',reject);
+        res.on('end',()=>{
+          try {
+            const raw=Buffer.concat(chunks).toString('utf8');
+            resolve({status:res.statusCode,body:raw?JSON.parse(raw):null});
+          } catch(error){reject(error);}
+        });
+      });
+      req.on('error',reject);
+      req.end();
+    });
+  }
   async function call(path,{method='GET',headers={},body}={}){
     const response=await fetch(base+path,{
       method,headers:{
@@ -109,9 +133,9 @@ test('tenant ID/slug/host mismatch fails closed even with valid bearer cookie or
 
     // Even a valid tenant token must not override a contradicting Host and
     // explicit tenant slug. Rejection precedes setActorId/ALS tenancy.
-    const hostConflict=await call('/auth/me',{headers:{
-      ...own,host:slugs[0]+'.example.test','x-tenant-slug':slugs[1]
-    }});
+    const hostConflict=await callWithHost(slugs[0]+'.example.test',{
+      ...own,'x-tenant-slug':slugs[1]
+    });
     assert.equal(hostConflict.status,400,JSON.stringify(hostConflict.body));
     assert.equal(hostConflict.body.error.code,'TENANT_HINT_CONFLICT');
 
