@@ -106,3 +106,27 @@ export async function withTenantTransaction(callback, tenantId = getTenantId()) 
     return callback(transaction);
   });
 }
+
+/**
+ * Transaction-only advisory fence for tenant lifecycle changes.
+ * Centralized here because raw SQL outside trusted DB helpers is forbidden
+ * by the repository's audit:raw-sql gate.
+ *
+ * Two-int advisory keys use a stable namespace and the canonical UUID.
+ * Hash collisions can add contention, never grant cross-tenant access.
+ */
+const TENANT_LIFECYCLE_NAMESPACE = 'sedeagro-pilot-tenant-status-v1';
+
+export async function lockTenantLifecycle(transaction, tenantId, mode) {
+  assertTenantTransaction(transaction, tenantId);
+  const sql = mode === 'shared'
+    ? 'SELECT pg_advisory_xact_lock_shared(hashtext(:namespace), hashtext(:tenantId))'
+    : mode === 'exclusive'
+      ? 'SELECT pg_advisory_xact_lock(hashtext(:namespace), hashtext(:tenantId))'
+      : null;
+  if (!sql) throw new Error('Tenant lifecycle fence mode invalid.');
+  await sequelize.query(sql, {
+    transaction,
+    replacements: { namespace: TENANT_LIFECYCLE_NAMESPACE, tenantId: tenantId.toLowerCase() }
+  });
+}
