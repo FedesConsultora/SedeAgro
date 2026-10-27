@@ -5,7 +5,7 @@ const CACHE = 'sedeagro-web-shell-v3';
 const PREFIX = 'sedeagro-web-shell-';
 
 function shellAssets(html) {
-  return [...new Set([...html.matchAll(/(?:src|href)=["'](\\/assets\\/[^"']+)["']/g)]
+  return [...new Set([...html.matchAll(/(?:src|href)=["'](\/assets\/[^"']+)["']/g)]
     .map((match) => match[1]))];
 }
 
