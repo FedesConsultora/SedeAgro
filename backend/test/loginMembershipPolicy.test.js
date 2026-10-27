@@ -35,7 +35,7 @@ test('login never issues stale membership role or uses tenant OR matching', () =
   const sign=issue.indexOf('const token = signSession');
   assert.ok(before>=0 && before<locked && locked<reserve && reserve<sign);
   for(const expected of [
-    "id: membership.id","tenant_id: membership.tenant_id","user_id: user.id",
+    "id: membership.id","tenant_id: tenant.id","user_id: user.id",
     "status: 'active'","tenantId: currentMembership.tenant_id",
     'sessionPayload(user, currentMembership)',
     'roleCode: currentMembership.role_code'
