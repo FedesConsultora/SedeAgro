@@ -29,7 +29,9 @@ test('scoped request rechecks tenant status inside its guarded transaction befor
   assert.match(m,/where: \{ id: req\.tenantId, status:/);
   assert.match(m,/transaction, skipTenantScope: true/);
   assert.ok(app.indexOf('app.use(tenantResolver)') < app.indexOf('app.use(tenantTransaction)'));
-  assert.ok(app.indexOf('app.use(tenantTransaction)') < app.indexOf('mountScopedRoutes(app'));
+  assert.ok(app.indexOf('app.use(tenantTransaction)') <
+    app.indexOf('mountScopedRoutes(app,', app.indexOf('app.use(tenantTransaction)')),
+    'must compare middleware call to route mounting call, not function declaration');
 });
 test('platform tenant status holds exclusive lock before UPDATE and revoke, preserving self guard',()=>{
   const platform=read('../src/modules/platform/router.js');
