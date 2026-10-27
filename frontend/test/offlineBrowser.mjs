@@ -739,12 +739,12 @@ try {
   console.log('ONLINE_RENDER_LENGTH:', (await prodPage.locator('body').innerText()).length);
   await prodPage.evaluate(async () => navigator.serviceWorker.ready);
   await prodPage.waitForFunction(async () => {
-    const cache = await caches.open('sedeagro-web-shell-v2');
+    const cache = await caches.open('sedeagro-web-shell-v3');
     return Boolean(await cache.match('/'));
   });
   await prodPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   console.log('CACHED_URLS:', await prodPage.evaluate(async () => {
-    const cache = await caches.open('sedeagro-web-shell-v2');
+    const cache = await caches.open('sedeagro-web-shell-v3');
     return (await cache.keys()).map((request) => request.url);
   }));
   await prod.setOffline(true);
