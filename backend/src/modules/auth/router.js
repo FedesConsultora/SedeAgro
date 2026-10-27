@@ -60,14 +60,31 @@ function sessionPayload(user, membership) {
 }
 
 async function issueTenantSession(user, membership, transaction) {
-  // Public membership discovery happened before this transaction (and may
-  // become stale while an administrator suspends or changes a member's role).
-  // Lock and revalidate the *exact* tenant+user+membership before issuing any
-  // JWT. Lifecycle changes take the same membership row lock.
+  // Tenant suspension and plan/status changes take this SAME row lock in the
+  // platform endpoint. Acquire tenant FIRST, then membership, then user:
+  // if login commits first, suspension waits and revokes its new session;
+  // if suspension commits first, login sees the new status and rejects.
+  // Locking only membership here left a post-revocation JWT resurrection race.
+  const tenant = await Tenant.findOne({
+    where: {
+      id: membership.tenant_id,
+      status: { [Op.in]: ['onboarding', 'active'] }
+    },
+    attributes: ['id', 'name', 'slug', 'status'],
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+    skipTenantScope: true
+  });
+  if (!tenant) {
+    throw new HttpError(403, 'Empresa no disponible.', undefined, 'LOGIN_TENANT_DISABLED');
+  }
+
+  // Discovery on the public login route occurred BEFORE this tenant-scoped
+  // transaction. Revalidate exact membership and role under its own lock.
   const currentMembership = await Membership.findOne({
     where: {
       id: membership.id,
-      tenant_id: membership.tenant_id,
+      tenant_id: tenant.id,
       user_id: user.id,
       status: 'active'
     },
@@ -77,19 +94,6 @@ async function issueTenantSession(user, membership, transaction) {
   if (!currentMembership) {
     throw new HttpError(401, 'La membresía cambió. Volvé a iniciar sesión.',
       undefined, 'LOGIN_MEMBERSHIP_CHANGED');
-  }
-
-  const tenant = await Tenant.findOne({
-    where: {
-      id: currentMembership.tenant_id,
-      status: { [Op.in]: ['onboarding', 'active'] }
-    },
-    attributes: ['id', 'name', 'slug', 'status'],
-    transaction,
-    skipTenantScope: true
-  });
-  if (!tenant) {
-    throw new HttpError(403, 'Empresa no disponible.', undefined, 'LOGIN_TENANT_DISABLED');
   }
 
   const modules = await TenantModule.findAll({
