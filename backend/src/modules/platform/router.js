@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { setLocalTenant } from '../../core/db.js';
+import { lockTenantLifecycle } from '../../core/tenantSuspensionFence.js';
 import { AuthSession, PlatformAuditLog, Tenant, User, Plan, TenantModule, Module } from '../../models/index.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { isPlatformAdministrator } from '../../infra/security/securityGuards.js';
@@ -75,6 +76,15 @@ const updateTenantSchema = z.object({
 platformRouter.patch('/tenants/:id', validate(tenantIdParams, 'params'), asyncHandler(async (req, res) => {
   const parsed = updateTenantSchema.parse(req.body);
   const transaction = req.dbTransaction;
+  // The authenticated platform request already owns a SHARED lock on its
+  // home tenant. For a DIFFERENT target tenant, take EXCLUSIVE before its row
+  // UPDATE and session revocations. This pairs with the transaction fence
+  // held by every scoped business request, on every backend replica.
+  // Self-suspension/deletion is separately rejected by status policy; a
+  // same-tenant plan change keeps its existing shared lock and row lock.
+  if (req.params.id !== req.tenantId && parsed.status !== undefined) {
+    await lockTenantLifecycle(transaction, req.params.id, 'exclusive');
+  }
   // Serialize tenant disable/enable/plan transitions with membership
   // invitation/lifecycle operations, which also lock the tenant row.
   const tenant = await Tenant.findByPk(req.params.id, {
