@@ -2,6 +2,7 @@ import { Tenant } from '../../../models/index.js';
 import { env } from '../../../config/env.js';
 import { runWithTenantContext } from '../../../core/tenantContext.js';
 import { HttpError } from '../../../utils/http.js';
+import { tenantHintProblem } from './tenantHintPolicy.js';
 
 const globalPaths = [
   '/health',
@@ -42,6 +43,13 @@ export async function tenantResolver(req, _res, next) {
     const headerTenantSlug = req.headers['x-tenant-slug'];
     const hostSlug = slugFromHost(req.headers.host);
     const fallbackTenantId = !env.isProd ? env.fallbackTenantId : '';
+    const conflict = tenantHintProblem({
+      hostSlug, headerSlug: headerTenantSlug, headerId: headerTenantId
+    });
+    if (conflict) {
+      throw new HttpError(400, 'Los identificadores de empresa no coinciden.',
+        undefined, conflict);
+    }
 
     const where = hostSlug || headerTenantSlug
       ? { slug: hostSlug || headerTenantSlug }
@@ -58,6 +66,14 @@ export async function tenantResolver(req, _res, next) {
     });
 
     if (!tenant) throw new HttpError(404, 'Tenant no encontrado.');
+    const resolvedConflict = tenantHintProblem({
+      hostSlug, headerSlug: headerTenantSlug, headerId: headerTenantId,
+      resolvedTenantId: tenant.id
+    });
+    if (resolvedConflict) {
+      throw new HttpError(400, 'Los identificadores de empresa no coinciden.',
+        undefined, resolvedConflict);
+    }
     if (!['onboarding', 'active'].includes(tenant.status)) {
       throw new HttpError(403, 'Tenant suspendido o eliminado.');
     }
