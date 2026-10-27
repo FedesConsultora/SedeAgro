@@ -29,11 +29,13 @@ test('login never issues stale membership role or uses tenant OR matching', () =
     router.indexOf('function finishLogin'));
   const selection=router.slice(router.indexOf("authPublicRouter.post('/login'"),
     router.indexOf("authScopedRouter.post('/logout'"));
+  const companyLock=issue.indexOf('lock: transaction.LOCK.UPDATE');
   const before=issue.indexOf('const currentMembership = await Membership.findOne');
-  const locked=issue.indexOf('lock: transaction.LOCK.UPDATE');
+  const locked=issue.indexOf('lock: transaction.LOCK.UPDATE', before);
   const reserve=issue.indexOf('await reserveSessionSlot');
   const sign=issue.indexOf('const token = signSession');
-  assert.ok(before>=0 && before<locked && locked<reserve && reserve<sign);
+  assert.ok(companyLock>=0 && companyLock<before &&
+    before<locked && locked<reserve && reserve<sign);
   for(const expected of [
     "id: membership.id","tenant_id: tenant.id","user_id: user.id",
     "status: 'active'","tenantId: currentMembership.tenant_id",
