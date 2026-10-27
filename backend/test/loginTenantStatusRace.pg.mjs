@@ -146,7 +146,6 @@ test('suspension after public login discovery cannot mint a resurrectable tenant
       [target])).rows;
     assert.equal(events.length,2,'suspension and restoration both leave target-scope audit evidence');
   } finally {
-    Membership.findAll = Membership.findAll; // no mocked method survives try/finally above
     if(ownerReady) {
       try {
         if(ids.tenants.length) await owner.query(
