@@ -8,6 +8,8 @@ test('transaction-scoped shared/exclusive advisory locks share one tenant namesp
   assert.match(source, /pg_advisory_xact_lock_shared\(hashtext\(:namespace\), hashtext\(:tenantId\)\)/);
   assert.match(source, /pg_advisory_xact_lock\(hashtext\(:namespace\), hashtext\(:tenantId\)\)/);
   assert.match(source,/assertTenantTransaction\(transaction, tenantId\)/);
+  assert.match(source,/tenantId: tenantId\.toLowerCase\(\)/,
+    'UUID case variants must acquire the same platform/request lock');
   assert.match(source,/LOCK_NAMESPACE = 'sedeagro-pilot-tenant-status-v1'/);
   assert.doesNotMatch(source,/pg_advisory_lock\(/,
     'no session-scoped locks may leak into reused pool connections');
