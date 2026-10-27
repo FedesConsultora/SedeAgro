@@ -240,65 +240,80 @@ reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'
     } });
   }));
 
-// ─── Field-level report ───────────────────────────────────────
+// ─── Field-level report: private, bounded operational summary ─────────────
+// The UI only consumes last run counts/critical severity and five recent orders.
+// Do not read or return a run's entire photo/notes/observation collection.
 reportsRouter.get('/field/:fieldId', requireCapability('reports.read'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
   const { fieldId } = req.params;
+  if (!z.string().uuid().safeParse(fieldId).success) {
+    throw new HttpError(422, 'Identificador de lote inválido.');
+  }
   const tx = req.dbTransaction;
 
-  // 1. Field + Farm
-  const field = await Field.findByPk(fieldId, {
+  const field = await Field.findOne({
+    where: { id: fieldId, tenant_id: req.tenantId },
     include: [{ model: Farm, attributes: ['id', 'name', 'locality', 'province'] }],
     transaction: tx
   });
-  if (!field) return res.status(404).json({ error: { message: 'Lote no encontrado.' } });
+  if (!field) throw new HttpError(404, 'Lote no encontrado.');
 
-  // 2. Active campaign-field (latest)
   const activeCampaignField = await CampaignField.findOne({
-    where: { field_id: fieldId },
+    where: { field_id: fieldId, tenant_id: req.tenantId },
     include: [
       { model: Campaign, attributes: ['id', 'name', 'season_year', 'status'] },
       { model: CropType, attributes: ['id', 'name', 'code'] }
     ],
-    order: [['created_at', 'DESC']],
+    order: [['created_at', 'DESC'], ['id', 'DESC']],
     transaction: tx
   });
 
-  // 3. Last scouting run with observations
   let lastScoutingRun = null;
   if (activeCampaignField) {
-    lastScoutingRun = await ScoutingRun.findOne({
-      where: { campaign_field_id: activeCampaignField.id },
-      include: [{
-        model: ScoutingObservation,
-        attributes: ['id', 'observation_type', 'severity', 'notes', 'observed_at']
-      }],
-      order: [['scheduled_at', 'DESC']],
+    const run = await ScoutingRun.findOne({
+      where: { campaign_field_id: activeCampaignField.id, tenant_id: req.tenantId },
+      attributes: ['id', 'status', 'scheduled_at', 'campaign_field_id'],
+      order: [['scheduled_at', 'DESC'], ['id', 'DESC']],
       transaction: tx
     });
+    if (run) {
+      const whereRun = { tenant_id: req.tenantId, scouting_run_id: run.id, field_id: fieldId };
+      const [count, criticalCount] = await Promise.all([
+        ScoutingObservation.count({ where: whereRun, transaction: tx }),
+        ScoutingObservation.count({ where: { ...whereRun, severity: 'critical' }, transaction: tx })
+      ]);
+      lastScoutingRun = {
+        ...run.get({ plain: true }),
+        observationSummary: { count, hasCritical: criticalCount > 0 }
+      };
+    }
   }
 
-  // 4. Work orders summary
-  const allWO = await WorkOrder.findAll({
-    where: { field_id: fieldId },
-    attributes: ['id', 'title', 'status', 'priority', 'type', 'due_at'],
-    order: [['created_at', 'DESC']],
-    transaction: tx
-  });
+  // All three SQL queries are tenant+field-scoped, RLS-governed. No unbounded
+  // findAll over work_orders: provide exact aggregates plus <=5 recent rows.
+  const whereField = { field_id: fieldId, tenant_id: req.tenantId };
   const openStatuses = ['draft', 'pending_approval', 'approved', 'assigned', 'in_progress'];
-  const openOrders = allWO.filter((wo) => openStatuses.includes(wo.status));
-  const closedOrders = allWO.filter((wo) => ['completed'].includes(wo.status));
+  const [open, closed, recent] = await Promise.all([
+    WorkOrder.count({ where: {
+      ...whereField, status: { [Op.in]: openStatuses }
+    }, transaction: tx }),
+    WorkOrder.count({ where: {
+      ...whereField, status: 'completed'
+    }, transaction: tx }),
+    WorkOrder.findAll({
+      where: whereField,
+      attributes: ['id', 'title', 'status', 'priority', 'type', 'due_at'],
+      order: [['created_at', 'DESC'], ['id', 'DESC']],
+      limit: 5, transaction: tx
+    })
+  ]);
 
   res.json({
     data: {
       field,
       activeCampaignField,
       lastScoutingRun,
-      workOrdersSummary: {
-        open: openOrders.length,
-        closed: closedOrders.length,
-        recent: allWO.slice(0, 5)
-      }
+      workOrdersSummary: { open, closed, recent }
     }
   });
 }));
-

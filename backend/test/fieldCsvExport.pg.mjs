@@ -229,6 +229,50 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     const oversized = await get(base);
     assert.equal(oversized.status, 413);
     assert.match(oversized.headers.get('cache-control') || '', /no-store/);
+
+    // The summary must stay bounded when the same field accumulates hundreds
+    // of orders and observations. Exports above have an independent 200-row cap.
+    // This is a real HTTP request using the non-owner tenant-scoped app role.
+    await owner.query(`
+      INSERT INTO scouting_observations
+        (tenant_id,scouting_run_id,field_id,observed_by,observation_type,severity,notes,observed_at)
+      VALUES ($1,$2,$3,$4,'general','critical','PRIVATE_CRITICAL_NOTE_SENTINEL','2026-10-15T12:10:00Z')
+    `, [tenantA, a.run, a.fieldId, coordinator]);
+    await owner.query(`
+      INSERT INTO work_orders(tenant_id,field_id,title,type,status,priority,created_at)
+      SELECT $1,$2,'bulk order ' || n,'inspection','approved','normal',now()
+      FROM generate_series(1,301) AS n
+    `, [tenantA, a.fieldId]);
+    await owner.query(`
+      INSERT INTO work_orders(tenant_id,field_id,title,type,status,priority,created_at)
+      SELECT $1,$2,'completed order ' || n,'inspection','completed','normal',now()
+      FROM generate_series(1,41) AS n
+    `, [tenantA, a.fieldId]);
+    const summaryUrl = `http://127.0.0.1:${server.address().port}/api/v1/reports/field/${a.fieldId}`;
+    const summaryResult = await get(summaryUrl);
+    assert.equal(summaryResult.status, 200, await summaryResult.clone().text());
+    assert.equal(summaryResult.headers.get('cache-control'), 'private, no-store');
+    const rawSummary = await summaryResult.text();
+    assert.ok(rawSummary.length < 15000, 'field summary must not scale with every order/observation');
+    assert.ok(!rawSummary.includes('PRIVATE_CRITICAL_NOTE_SENTINEL'));
+    assert.ok(!rawSummary.includes('=HYPERLINK'));
+    assert.ok(!rawSummary.includes('bounded'));
+    const summary = JSON.parse(rawSummary).data;
+    assert.equal(summary.field.id, a.fieldId);
+    assert.equal(summary.lastScoutingRun.observationSummary.count, 203);
+    assert.equal(summary.lastScoutingRun.observationSummary.hasCritical, true);
+    assert.equal(summary.lastScoutingRun.ScoutingObservations, undefined);
+    assert.equal(summary.workOrdersSummary.open, 302);
+    assert.equal(summary.workOrdersSummary.closed, 41);
+    assert.equal(summary.workOrdersSummary.recent.length, 5);
+    assert.ok(summary.workOrdersSummary.recent.every(order =>
+      typeof order.id === 'string' && typeof order.title === 'string'));
+    assert.equal((await get(summaryUrl, restricted)).status, 403);
+    assert.equal((await get(summaryUrl.replace(a.fieldId, b.fieldId))).status, 404);
+    const malformedField = await get(summaryUrl.replace(a.fieldId, 'invalid-field'));
+    assert.equal(malformedField.status, 422);
+    assert.equal(malformedField.headers.get('cache-control'), 'private, no-store');
+
   } finally {
     if (connected) {
       if (ids.tenants.length) await owner.query(

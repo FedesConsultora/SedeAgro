@@ -85,3 +85,11 @@ test('field summary never commits an old HTTP response or exports outside origin
   assert.match(card, /visibleFieldReport\(reportState, reportContext, api\)/);
   assert.match(card, /URL\.revokeObjectURL/);
 });
+
+test('field overview uses exact aggregate totals and severity without rendering raw observation notes', () => {
+  const card = source('../src/components/FieldReportCard.jsx');
+  assert.match(card, /lastScoutingRun\?\.observationSummary\?\.count/);
+  assert.match(card, /lastScoutingRun\?\.observationSummary\?\.hasCritical === true/);
+  assert.doesNotMatch(card, /lastScoutingRun\?\.ScoutingObservations/);
+  assert.match(card, /observationSummary: \{ count: 1, hasCritical: false \}/);
+});
