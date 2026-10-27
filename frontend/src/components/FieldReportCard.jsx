@@ -130,7 +130,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
             status: 'active'
           },
           lastScoutingRun: { scheduled_at: '2026-06-20', status: 'planned',
-            ScoutingObservations: [{ severity: 'medium', observation_type: 'weed' }] },
+            observationSummary: { count: 1, hasCritical: false } },
           workOrdersSummary: { open: 1, closed: 0, recent: [] }
         } });
         return;
@@ -153,7 +153,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
     }
   };
 
-  const hasCritical = report?.lastScoutingRun?.ScoutingObservations?.some((o) => o.severity === 'critical');
+  const hasCritical = report?.lastScoutingRun?.observationSummary?.hasCritical === true;
   const openOrders = report?.workOrdersSummary?.open || 0;
 
   return (
@@ -223,7 +223,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
             <div className={`report-kpi ${hasCritical ? 'report-kpi--rose' : 'report-kpi--green'}`}>
               <span className="report-kpi__label">Observaciones</span>
               <span className="report-kpi__value">
-                {report.lastScoutingRun?.ScoutingObservations?.length ?? '–'}
+                {report.lastScoutingRun?.observationSummary?.count ?? '–'}
               </span>
             </div>
           </div>
