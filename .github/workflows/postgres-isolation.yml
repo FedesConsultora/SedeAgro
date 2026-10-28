@@ -152,13 +152,83 @@ jobs:
           RESTORE_TEST_APP_PASSWORD: temporary-ci-runtime-password
           SEDEAGRO_DISPOSABLE_RESTORE: I_ACCEPT_ONLY_CI_TEST_DATABASES
         run: bash scripts/ci-disposable-restore.sh --run
+
+  # Chromium with authenticated sessions needs its own disposable PostGIS and
+  # runtime non-owner role. It runs alongside the static/RLS/restore gate so
+  # browser installation or 2x12 focus cycles cannot exhaust its 20min budget.
+  browser-postgis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5
+        env:
+          POSTGRES_DB: sedeagro_test
+          POSTGRES_USER: sedeagro_owner
+          POSTGRES_PASSWORD: temporary-ci-owner-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sedeagro_owner -d sedeagro_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert checkout is the exact event HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Confirm pinned PostGIS test service is actually linux/amd64
+        run: |
+          set -euo pipefail
+          container_id="${{ job.services.postgres.id }}"
+          image_id="$(docker inspect --format '{{.Image}}' "$container_id")"
+          actual="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image_id")"
+          test "$actual" = 'linux/amd64'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install workspace dependencies
+        run: npm ci
+      - name: Prove real untouched PostGIS bootstrap footprint before migrations
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          if [[ "$result" != '0|0' ]]; then
+            printf 'BLOCKED: fresh disposable PostGIS has non-extension object/schema counts: %s\n' "$result" >&2
+            exit 1
+          fi
+      - name: Migrate disposable PostGIS database
+        env:
+          DATABASE_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
+          NODE_ENV: test
+          SEED_MODE: ci
+        run: npm --workspace backend run db:prepare
+      - name: Prove real migrated PostGIS cannot use first-install bypass
+        run: |
+          result="$(docker exec -i "${{ job.services.postgres.id }}" psql -X -A -t -q \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            < scripts/sql/first-install-footprint.sql)"
+          [[ "$result" =~ ^[0-9]+\|[0-9]+$ ]] && test "$result" != '0|0'
+      - name: Provision least-privilege runtime role
+        run: |
+          docker exec -i "${{ job.services.postgres.id }}" psql \
+            -U sedeagro_owner -d sedeagro_test -v ON_ERROR_STOP=1 \
+            -v db_owner=sedeagro_owner -v app_user=sedeagro_app \
+            -v app_password=temporary-ci-runtime-password \
+            < scripts/provision-runtime-role.sql
+      - name: Install pinned Playwright and Chromium for PostGIS acceptance
+        run: |
+          npm install --no-save --package-lock=false playwright@1.58.2
+          npx playwright install chromium --with-deps
       - name: Run real Chromium cookie and session acceptance against PostgreSQL
         env:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: |
-          npm install --no-save --package-lock=false playwright@1.58.2
-          npx playwright install chromium --with-deps
           # Two fresh Chromium/browser contexts + backend processes against the
           # same disposable PostGIS. Each tests 12 open/close keyboard cycles
           # and the deliberate held-HTTP disabled-to-enabled transition.
@@ -177,6 +247,7 @@ jobs:
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
           SEDEAGRO_HTTP_LOAD_PROBE: I_ACCEPT_ONLY_GITHUB_DISPOSABLE_TEST_DATABASE
         run: node scripts/acceptance-browser-review-inbox.mjs
+
 
   browser-offline:
     runs-on: ubuntu-latest
