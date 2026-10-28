@@ -38,7 +38,8 @@ test('all Dockerfiles, three Compose targets and PostGIS Actions service are pin
   assert.equal(result.status,'BASE_IMAGE_SOURCES_PINNED_REVIEW_REQUIRED');
   assert.equal(result.source_files,9);
   assert.equal(result.unique_base_images,4);
-  assert.equal(Object.values(result.references).reduce((a,b)=>a+b,0),16);
+  assert.equal(Object.values(result.references).reduce((a,b)=>a+b,0),17);
+  assert.equal(result.references['.github/workflows/postgres-isolation.yml'],2);
   assert.equal(result.registry_provenance_signed,false);
   assert.equal(result.staging_deployed,false);
   assert.doesNotMatch(JSON.stringify(result),/POSTGRES_PASSWORD|JWT_SECRET/);
@@ -54,6 +55,22 @@ test('Syft scanner image inputs are not Docker services, but CI PostGIS service 
   assert.notEqual(removed,original);
   assert.throws(()=>validateBaseImageSources(lock,{...sources,
     '.github/workflows/postgres-isolation.yml':removed}),/BASE_IMAGE_PIN_BLOCKED/);
+});
+
+test('both parallel PostGIS Actions services must be pinned; one or three are blocked',()=>{
+  const lock=load(),source=fixture();
+  const file='.github/workflows/postgres-isolation.yml';
+  const original=source[file], pinnedRef=pinned('postgis');
+  const declarations=original.match(/^ {8}image:\s+postgis\/postgis:[^\s]+/gm)||[];
+  assert.equal(declarations.length,2);
+  assert.deepEqual(declarations.map(value=>value.trim()),Array(2).fill('image: '+pinnedRef));
+  const missing=original.replace('        image: '+pinnedRef+'\n','');
+  assert.notEqual(missing,original);
+  assert.throws(()=>validateBaseImageSources(lock,{...source,[file]:missing}),
+    /BASE_IMAGE_PIN_BLOCKED/, 'missing second PostGIS service is forbidden');
+  const extra=original+'\n        image: '+pinnedRef+'\n';
+  assert.throws(()=>validateBaseImageSources(lock,{...source,[file]:extra}),
+    /BASE_IMAGE_PIN_BLOCKED/, 'unexpected third PostGIS service is forbidden');
 });
 
 test('tag-only fallback, changed digest or unreviewed image is blocked in EVERY target',()=>{
