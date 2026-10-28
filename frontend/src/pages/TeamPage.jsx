@@ -5,6 +5,7 @@ import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
 import { ResourceLoadNotice } from '../components/ResourceLoadNotice.jsx';
 import { MemberInvitationPanel } from '../components/MemberInvitationPanel.jsx';
+import { TeamOperationsPanel } from '../components/TeamOperationsPanel.jsx';
 import { extractCollection } from '../services/useTenantCollection.js';
 import { teamPrivateListScope, checkedTeamPrivateRows } from '../services/teamPrivateListScope.js';
 import { canManageMember, prepareMemberStatus, confirmMemberStatus } from '../services/memberLifecycleSafety.js';
@@ -346,6 +347,12 @@ export function TeamPage() {
               </div>
             )}
           </section>}
+
+          {/* Operational teams: mutate only when both private collections loaded. */}
+          {!errors.members && !errors.teams && <TeamOperationsPanel
+            api={api} session={session} dataMode={dataMode}
+            teams={teams} members={members}
+            onUpdated={() => setRevision(value => value + 1)} />}
 
           {/* Teams section */}
           {!errors.teams && <section className="team-section">

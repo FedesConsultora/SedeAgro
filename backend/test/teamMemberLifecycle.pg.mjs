@@ -45,7 +45,7 @@ test('team roster accepts only active local members, hides revoked members, and 
       },
       ...(data === undefined ? {} : { body: JSON.stringify(data) })
     });
-    return { status: response.status, json: await response.json() };
+    return { status: response.status, json: await response.json(), cacheControl: response.headers.get('cache-control') };
   }
   try {
     await owner.connect();
@@ -150,6 +150,8 @@ test('team roster accepts only active local members, hides revoked members, and 
     async function visibleTeamMembers() {
       const response = await request('/teams', adminA.token, tenantA);
       assert.equal(response.status, 200, JSON.stringify(response.json));
+      assert.equal(response.cacheControl, 'private, no-store',
+        'tenant-private roster names and emails cannot be cached');
       assert.deepEqual(response.json.data.map(x => x.id), [teamId],
         'team listing must be tenant scoped');
       return response.json.data[0].TeamMembers;

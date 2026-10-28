@@ -23,6 +23,8 @@ const memberSchema = z.object({
 });
 
 teamsRouter.get('/', requireCapability('teams.read'), asyncHandler(async (req, res) => {
+  // Response includes private member names/emails. No shared/proxy/browser caching.
+  res.set('Cache-Control', 'private, no-store');
   const teams = await Team.findAll({
     include: [{
       model: TeamMember,
