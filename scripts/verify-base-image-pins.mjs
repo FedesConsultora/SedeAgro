@@ -25,7 +25,9 @@ const FILES = {
   'docker-compose.yml': { postgis: 1, redis: 1 },
   'docker-compose.dev.yml': { postgis: 1, redis: 1 },
   'docker-compose.staging.yml': { postgis: 1, redis: 1 },
-  '.github/workflows/postgres-isolation.yml': { postgis: 1 }
+  // Two independent disposable PostGIS jobs: RLS+restore and Chromium E2E.
+  // Both services must use the exact same reviewed SHA digest.
+  '.github/workflows/postgres-isolation.yml': { postgis: 2 }
 };
 const RECOVERY_SHELL_FILES = {
   'scripts/ci-disposable-restore.sh': 1,
