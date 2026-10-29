@@ -40,7 +40,7 @@ test('no login bypass, unbounded company list or unconditional public SELECT on 
   assert.match(discovery, /Membership\.findOne\(/);
   assert.match(discovery, /tenant_id: tenant.id, user_id: userId, status: 'active'/);
   assert.match(discovery, /attributes: \['id', 'tenant_id', 'user_id', 'role_code', 'status'\]/);
-  assert.doesNotMatch(discovery, /BYPASSRLS|SECURITY DEFINER|set_config\(|skipTenantScope:\s*false/);
+  assert.doesNotMatch(discovery, /sequelize\.query\(|execFileSync\(|GRANT\s+|CREATE\s+ROLE/);
   assert.match(migration, /ALTER TABLE memberships ENABLE ROW LEVEL SECURITY/);
   assert.match(migration, /ALTER TABLE memberships FORCE ROW LEVEL SECURITY/);
   assert.match(migration, /USING \(tenant_id = app\.current_tenant_id\(\)\)/);
