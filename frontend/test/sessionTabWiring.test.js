@@ -19,7 +19,8 @@ test('external identity changes quarantine React before server verification', ()
   assert.match(provider, /const hint = localStorage\.getItem\('sedeagro\.tenantHint'\)/);
   assert.match(provider, /fetch\(`\$\{API_URL\}\/auth\/me`/);
   assert.match(provider, /sequence === validationSequenceRef\.current && epoch === authEpochRef\.current/);
-  assert.match(provider, /createSessionTabSync\(\(\) => \{ void revalidate\(\{ quarantine: true \}\)/);
+  assert.match(provider, /createSessionTabSync\(\(\) => \{[\s\S]*?lockOfflineFieldVault\(\);[\s\S]*?void revalidate\(\{ quarantine: true \}\)/);
+  assert.match(provider, /void clearOfflineFieldVault\(\)\.catch/);
   assert.match(provider, /shouldRecheckOnForeground/);
   assert.match(app, /if \(isAuthenticated\) setAuthView\('login'\)/);
   assert.match(app, /if \(sessionCheckError\)/);
