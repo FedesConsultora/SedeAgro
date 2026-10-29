@@ -18,6 +18,10 @@ Amplía `scripts/acceptance-browser-cookie.mjs` sin crear infraestructura duplic
 6. Confirmar respuesta HTTP 204 del logout, pantalla de login visible, cookie HttpOnly ausente, tenantHint retirado y `GET /auth/me = 401`. El test requiere que el error de IndexedDB se haya ejecutado, que el sobre cifrado todavía exista y que se muestre el mensaje honesto de limpieza manual del sitio.
 7. Cerrar ambos contextos, liberar procesos/tenant de prueba como la suite original, sin registrar secreto, cookie, datos GPS/fotos o contenido del vault.
 
+## Defecto de visibilidad descubierto en la prueba
+
+La advertencia que emite `SessionContext.logout` cuando falla el borrado del vault estaba creada correctamente, pero `NotificationToast` sólo se montaba dentro del `Shell` **autenticado**. En cuanto el logout exitoso desmonto el `Shell`, el aviso quedaba invisible en la página de login. La PR añade `NotificationToast` y `GlobalLoader` en el branch de autenticación pública (login, registro, invitaciones), sin duplicar los componentes del `Shell`. `frontend/test/authExitNotification.test.js` comprueba el wiring; el escenario Chromium exige que el aviso sea **realmente visible** después del logout, además del HTTP 204, el 401 sin cookie y el sobre que no se pudo borrar.
+
 ## Criterios y límites
 
 - Debe aprobar **browser-postgis exact SHA**. Los controles estáticos `frontend/test` y Chromium offline existentes no se sustituyen.
