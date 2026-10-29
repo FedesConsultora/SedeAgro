@@ -15,7 +15,7 @@ Amplía `scripts/acceptance-browser-cookie.mjs` sin crear infraestructura duplic
 3. Ingresar con la misma cuenta en otro **BrowserContext** aislado B, y habilitar un segundo vault de esa sesión.
 4. Desde A revocar realmente el JTI de B, comprobar `GET /auth/me = 401` para B y disparar una lectura propia `GET /auth/sessions` que retorna 401; el listener exact-scope/epoch de B debe cerrar React, retirar el sobre `active` de su IndexedDB, retirar el tenantHint y demostrar que la cookie revocada ya no autoriza `GET /auth/me` (la cookie física podría persistir hasta vencer). El test espera la transacción completada, no un timeout arbitrario.
 5. En A, interceptar **únicamente** `IDBObjectStore.delete('active')` de `offline-vault` para provocar rechazo real del almacenamiento, sin interceptar/cambiar `POST /auth/logout`.
-6. Confirmar respuesta HTTP 200 del logout, pantalla de login visible, cookie HttpOnly ausente, tenantHint retirado y `GET /auth/me = 401`. El test requiere que el error de IndexedDB se haya ejecutado, que el sobre cifrado todavía exista y que se muestre el mensaje honesto de limpieza manual del sitio.
+6. Confirmar respuesta HTTP 204 del logout, pantalla de login visible, cookie HttpOnly ausente, tenantHint retirado y `GET /auth/me = 401`. El test requiere que el error de IndexedDB se haya ejecutado, que el sobre cifrado todavía exista y que se muestre el mensaje honesto de limpieza manual del sitio.
 7. Cerrar ambos contextos, liberar procesos/tenant de prueba como la suite original, sin registrar secreto, cookie, datos GPS/fotos o contenido del vault.
 
 ## Criterios y límites
