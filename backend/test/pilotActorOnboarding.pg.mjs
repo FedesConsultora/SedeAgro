@@ -576,6 +576,13 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
       401, 'revoked scout login cookie');
     check(await request('/scouting/runs/' + run.id, { actor: scout }),
       401, 'revoked scout has no assigned run API');
+    check(await request('/auth/members/' + contractor.membership + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'blocked' }
+    }), 200, 'block assigned contractor after review');
+    check(await request('/auth/me', { actor: contractor }),
+      401, 'revoked contractor cookie cannot restore session');
+    check(await request('/work-orders/' + order.id, { actor: contractor }),
+      401, 'revoked contractor cannot read former assignment');
 
     // Evidence of one persisted actor chain and no duplicate replays.
     const row = (await owner.query(
@@ -594,6 +601,47 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
     assert.equal(row[0].assigned_to, scout.user);
     assert.equal(row[0].scout_status, 'blocked');
 
+    // The same real farm/field/campaign links every actor's records. Receipt
+    // replay did NOT double-write an observation, order or either JPEG.
+    const actual = (await owner.query(
+      `SELECT
+        (SELECT count(*)::int FROM scouting_observations WHERE id=$1) AS observations,
+        (SELECT count(*)::int FROM work_orders WHERE id=$2) AS orders,
+        (SELECT count(*)::int FROM work_order_executions WHERE id=$3) AS executions,
+        (SELECT count(*)::int FROM evidence_assets WHERE id IN ($4,$5)) AS photos,
+        (SELECT review_status FROM work_order_executions WHERE id=$3) AS review_status,
+        (SELECT reviewed_by FROM work_order_executions WHERE id=$3) AS reviewer,
+        (SELECT status FROM work_orders WHERE id=$2) AS order_status`,
+      [observationId, order.id, execution.id,
+        privateObservation.id, executionEvidence.id]
+    )).rows[0];
+    assert.deepEqual([
+      actual.observations, actual.orders, actual.executions, actual.photos,
+      actual.review_status, actual.reviewer, actual.order_status
+    ], [1, 1, 1, 2, 'verified', coordinator.user, 'completed']);
+    const geometry = (await owner.query(
+      'SELECT ST_X(point) AS lon,ST_Y(point) AS lat FROM scouting_observations WHERE id=$1',
+      [observationId]
+    )).rows[0];
+    assert.equal(geometry.lon, gps.coordinates[0]);
+    assert.equal(geometry.lat, gps.coordinates[1]);
+    const orderChain = (await owner.query(
+      'SELECT o.tenant_id,o.field_id,o.campaign_field_id, ' +
+      'e.submitted_by,e.reviewed_by, ' +
+      'a.work_order_execution_id ' +
+      'FROM work_orders o JOIN work_order_executions e ON e.work_order_id=o.id ' +
+      'JOIN evidence_assets a ON a.work_order_execution_id=e.id ' +
+      'WHERE o.id=$1 AND e.id=$2 AND a.id=$3',
+      [order.id, execution.id, executionEvidence.id]
+    )).rows;
+    assert.equal(orderChain.length, 1);
+    assert.equal(orderChain[0].tenant_id, admin.tenant);
+    assert.equal(orderChain[0].field_id, field.id);
+    assert.equal(orderChain[0].campaign_field_id, campaignField.id);
+    assert.equal(orderChain[0].submitted_by, contractor.user);
+    assert.equal(orderChain[0].reviewed_by, coordinator.user);
+    assert.equal(orderChain[0].work_order_execution_id, execution.id);
+
     // Real non-owner PostGIS client cannot access another tenant even
     // when a leaked UUID has the correct shape.
     for (const [tenantId, expected] of [[admin.tenant, 1], [outsider.tenant, 0]]) {
@@ -601,10 +649,17 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
       try {
         await runtime.query("SELECT set_config('app.current_tenant',$1,true)", [tenantId]);
         const sql = await runtime.query(
-          'SELECT count(*)::int AS n FROM scouting_runs WHERE id=$1',
-          [run.id]
+          `SELECT
+            (SELECT count(*)::int FROM scouting_runs WHERE id=$1) AS runs,
+            (SELECT count(*)::int FROM scouting_observations WHERE id=$2) AS observations,
+            (SELECT count(*)::int FROM work_orders WHERE id=$3) AS orders,
+            (SELECT count(*)::int FROM work_order_executions WHERE id=$4) AS executions,
+            (SELECT count(*)::int FROM evidence_assets WHERE id IN ($5,$6)) AS photos`,
+          [run.id, observationId, order.id, execution.id,
+            privateObservation.id, executionEvidence.id]
         );
-        assert.equal(sql.rows[0].n, expected);
+        assert.deepEqual(Object.values(sql.rows[0]),
+          [expected, expected, expected, expected, expected * 2]);
       } finally { await runtime.query('ROLLBACK'); }
     }
 
