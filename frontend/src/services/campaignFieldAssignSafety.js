@@ -103,9 +103,17 @@ export function createCampaignFieldAssignGate() {
     isCurrent(ticket) { return Boolean(ticket && active?.ticket === ticket); },
     isPending(scope) { return Boolean(active && active.ticket.scope === scope && active.phase === 'pending'); },
     isBlocked(scope) { return Boolean(active && active.ticket.scope === scope); },
+    retry(scope) {
+      if (!scope || !active || active.ticket.scope !== scope ||
+          active.phase !== 'uncertain') return null;
+      const ticket = Object.freeze({ scope, id: ++serial });
+      active = { ticket, phase: 'pending' };
+      return ticket;
+    },
     finish(ticket, phase) {
       if (!ticket || active?.ticket !== ticket) return false;
-      if (phase === 'confirmed' || phase === 'uncertain') active.phase = phase;
+      if (phase === 'confirmed' || phase === 'uncertain' ||
+          phase === 'preflight-rejected') active.phase = phase;
       else throw new Error('Estado de asignación inválido.');
       return true;
     },
