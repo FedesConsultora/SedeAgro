@@ -392,8 +392,13 @@ try {
     });
   }, null, { timeout: 10000 });
   assert.equal(await hasOfflineFieldEnvelope(page2), false);
-  assert.equal((await context2.cookies()).some(item => item.name === 'sedeagro_session'), false,
-    'server revocation must remove the independently logged-in session cookie');
+  assert.equal(await page2.evaluate(() => localStorage.getItem('sedeagro.tenantHint')), null);
+  const rejectedAfterRevocation = await page2.evaluate(async (id) =>
+    (await fetch('/api/v1/auth/me', {
+      credentials: 'include', headers: { 'x-tenant-id': id }
+    })).status, tenantId);
+  assert.equal(rejectedAfterRevocation, 401,
+    'a revoked HttpOnly cookie may remain in the browser but must not authorize backend access');
   console.log('PASS: real revoked 401 retires the offline vault and hides private React views');
 
   // Simulate a real IndexedDB deletion rejection ONLY for the vault store,
