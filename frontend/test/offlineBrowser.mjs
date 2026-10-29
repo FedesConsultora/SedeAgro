@@ -742,6 +742,74 @@ try {
     const cache = await caches.open('sedeagro-web-shell-v3');
     return Boolean(await cache.match('/'));
   });
+  // MOB-05: a real production PWA boot with NO NETWORK must never restore
+  // the server session just because a tenant hint or a local crypto key exists.
+  // The fake /auth/me is ONLY an authenticated test fixture while online.
+  const coldTenant = 'ad000000-0000-4000-8000-000000000001';
+  const coldUser = 'ad000000-0000-4000-8000-000000000002';
+  const coldMember = 'ad000000-0000-4000-8000-000000000003';
+  const coldRun = 'ad000000-0000-4000-8000-000000000004';
+  const coldKey = 'ad000000-0000-4000-8000-000000000005';
+  const coldSecret = 'offline field case passphrase twenty-six';
+  const coldProfile = {
+    tenant: { id: coldTenant, name: 'Pilot field fixture', slug: 'pilot-fixture' },
+    user: { id: coldUser, fullName: 'Offline Scout' },
+    membership: { id: coldMember, roleCode: 'scout', status: 'active' },
+    entitlements: ['scouting', 'gis', 'org']
+  };
+  await prodPage.route(/\/api(?:\/v1)?\/auth\/me$/, route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(coldProfile)
+  }));
+  await prodPage.evaluate(id => localStorage.setItem('sedeagro.tenantHint', id), coldTenant);
+  await prodPage.reload({ waitUntil: 'domcontentloaded' });
+  await prodPage.getByRole('button', { name: 'Sync', exact: true }).click();
+  await prodPage.getByRole('region', { name: 'Preparar acceso local sin conexión' })
+    .getByLabel(/Frase local/).fill(coldSecret);
+  await prodPage.getByRole('button', { name: /Habilitar acceso offline/ }).click();
+  await prodPage.getByText(/Acceso local preparado para 48 horas/).waitFor();
+
+  // Seed an AES-GCM observation through real browser IndexedDB. This is the
+  // same byte-level schema/crypto as offlineQueueStore, not a mock in memory.
+  await prodPage.evaluate(async ({tenant,user,run,key}) => {
+    const scope = tenant + ':' + user, id = scope + ':' + key;
+    const draft = {
+      id, scope, runId: run, idempotencyKey: key,
+      state: 'pending', attempts: 0, createdAt: new Date().toISOString(),
+      nextRetryAt: null, lastError: null, errorCode: null,
+      body: { client_id: 'sedeagro-web-offline-v1', idempotency_key: key,
+        operations: [{ entity_type: 'scouting_observation',
+          entity_client_id: 'ad000000-0000-4000-8000-000000000006',
+          operation: 'create', payload: {
+            scouting_run_id: run, observation_type: 'general',
+            severity: 'medium', notes: 'real-browser-cold-start-private',
+            observed_at: new Date().toISOString()
+          } }] }
+    };
+    const db = await new Promise((resolve,reject) => {
+      const request = indexedDB.open('sedeagro-offline-sync',2);
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    const encryptionKey = await crypto.subtle.generateKey(
+      { name: 'AES-GCM', length: 256 }, false, ['encrypt','decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const aad = new TextEncoder().encode('sedeagro:offline:v1:' + scope + ':' + id);
+    const ciphertext = await crypto.subtle.encrypt({
+      name:'AES-GCM',iv,additionalData:aad,tagLength:128
+    },encryptionKey,new TextEncoder().encode(JSON.stringify(draft)));
+    await new Promise((resolve,reject) => {
+      const tx=db.transaction(['draft-keys','pending-observations'],'readwrite');
+      tx.objectStore('draft-keys').put({scope,key:encryptionKey});
+      tx.objectStore('pending-observations').put({
+        id,scope,createdAt:draft.createdAt,
+        sealed:{version:1,iv:[...iv],ciphertext}
+      });
+      tx.oncomplete=resolve;
+      tx.onerror=()=>reject(tx.error);
+      tx.onabort=()=>reject(tx.error);
+    });
+    db.close();
+  }, {tenant:coldTenant,user:coldUser,run:coldRun,key:coldKey});
   await prodPage.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
   console.log('CACHED_URLS:', await prodPage.evaluate(async () => {
     const cache = await caches.open('sedeagro-web-shell-v3');
@@ -756,6 +824,76 @@ try {
     null, { timeout: 10000 });
   assert.ok((await prodPage.locator('body').innerText()).length > 10);
   console.log('PASS: Chromium reopens production SPA offline using static-only SW');
+  await prodPage.getByRole('button', {
+    name: /Desbloquear borradores de campo sin conexión/
+  }).waitFor();
+  assert.equal(await prodPage.getByRole('navigation', {name: 'Principal'}).count(), 0,
+    'offline cold start must not restore authenticated app navigation');
+  await prodPage.getByRole('button', {
+    name: /Desbloquear borradores de campo sin conexión/
+  }).click();
+  await prodPage.getByLabel('Frase de acceso local').fill(coldSecret);
+  await prodPage.getByRole('button', { name: 'Abrir borradores locales' }).click();
+  await prodPage.getByText('real-browser-cold-start-private').waitFor();
+  assert.equal(await prodPage.getByRole('navigation', {name: 'Principal'}).count(), 0);
+  await prodPage.getByLabel('Notas de campo').fill('new-observation-after-offline-full-reopen');
+  await prodPage.getByRole('button', {
+    name: 'Guardar sólo en este dispositivo'
+  }).click();
+  await prodPage.getByText('new-observation-after-offline-full-reopen').waitFor();
+  assert.equal(await prodPage.locator('li').filter({
+    hasText: 'real-browser-cold-start-private'
+  }).count(), 1);
+  console.log('PASS: offline cold-start unlock reviews old encrypted draft and saves a second one with no server session');
+  await prodPage.reload({waitUntil:'domcontentloaded'});
+  await prodPage.getByRole('button', {
+    name: /Desbloquear borradores de campo sin conexión/
+  }).click();
+  await prodPage.getByLabel('Frase de acceso local').fill('wrong offline passphrase secure');
+  await prodPage.getByRole('button', {name:'Abrir borradores locales'}).click();
+  await prodPage.getByRole('alert').getByText(/incorrecta|vencido/).waitFor();
+  assert.equal(await prodPage.getByText('real-browser-cold-start-private').count(), 0);
+  await prodPage.getByLabel('Frase de acceso local').fill(coldSecret);
+  await prodPage.getByRole('button', {name:'Abrir borradores locales'}).click();
+  await prodPage.waitForTimeout(900);
+  const secondUnlockState = await prodPage.evaluate(() => ({
+    heading: document.querySelector('h1')?.textContent,
+    errors: [...document.querySelectorAll('[role="alert"]')].map(e => e.textContent),
+    draftCount: document.querySelectorAll('li').length,
+    firstDraft: document.body.innerText.includes('real-browser-cold-start-private'),
+    newDraft: document.body.innerText.includes('new-observation-after-offline-full-reopen'),
+    locked: Boolean(document.querySelector('input[type="password"]')),
+    online: navigator.onLine
+  }));
+  console.log('MOB_05_SECOND_UNLOCK_STATE', JSON.stringify(secondUnlockState));
+  await prodPage.getByText('new-observation-after-offline-full-reopen').waitFor();
+  const coldStored = await prodPage.evaluate(async () => {
+    const scope = 'ad000000-0000-4000-8000-000000000001:' +
+      'ad000000-0000-4000-8000-000000000002';
+    const db = await new Promise((resolve,reject) => {
+      const request = indexedDB.open('sedeagro-offline-sync',2);
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    const rows = await new Promise((resolve,reject) => {
+      const request = db.transaction('pending-observations','readonly')
+        .objectStore('pending-observations').index('scope').getAll(
+          IDBKeyRange.only(scope));
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    db.close();
+    return {
+      rows:rows.length,
+      allSealed: rows.every(row=>row.sealed?.version===1),
+      plaintextLeaked:rows.some(row=>JSON.stringify(row).includes('new-observation-after-offline-full-reopen')),
+      legacyToken:localStorage.getItem('sedeagro.session')
+    };
+  });
+  assert.deepEqual(coldStored,{
+    rows:2,allSealed:true,plaintextLeaked:false,legacyToken:null
+  });
+  console.log('PASS: wrong offline secret refuses private drafts and a second complete offline reload preserves both AES-GCM records');
   await prod.close();
 } finally {
   if (browser) await browser.close();

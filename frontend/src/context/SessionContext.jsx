@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { API_URL, createApiClient } from '../services/api.js';
 import { offlineQueue } from '../services/offlineQueue.js';
+import { clearOfflineFieldVault, lockOfflineFieldVault } from '../services/offlineFieldVault.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { isCurrentSessionExpiry } from '../services/sessionExpiryScope.js';
 import { createSessionTabSync, shouldRecheckOnForeground } from '../services/sessionTabSync.js';
@@ -92,6 +93,13 @@ export function SessionProvider({ children }) {
       membership: data.membership,
       entitlements: data.entitlements || demoSession.entitlements
     };
+    // A newly authenticated cookie may belong to a different account. Never
+    // retain a prior actor's locally recoverable offline scope after login.
+    lockOfflineFieldVault();
+    void clearOfflineFieldVault().catch(() => {
+      // A locked vault cannot be opened without its independent passphrase.
+      // The operator can clear the browser's site storage if IDB is blocked.
+    });
     setSession(next);
     setDataModeState('live');
     localStorage.setItem('sedeagro.dataMode', 'live');
@@ -104,6 +112,11 @@ export function SessionProvider({ children }) {
   const logout = async () => {
     try {
       await api.logout();
+      // Revoking server auth must also retire the optional local access ticket;
+      // do NOT delete encrypted observation drafts themselves.
+      await clearOfflineFieldVault();
+      lockOfflineFieldVault();
+      void clearOfflineFieldVault().catch(() => {});
       setSession(null);
       setDataModeState('mock');
       localStorage.setItem('sedeagro.dataMode', 'mock');
@@ -174,6 +187,8 @@ export function SessionProvider({ children }) {
         if (!isCurrent()) return;
         retryOnOnline = false;
         if (result.unauthorized) {
+          lockOfflineFieldVault();
+          void clearOfflineFieldVault().catch(() => {});
           setSession(null);
           setDataModeState('mock');
           localStorage.setItem('sedeagro.dataMode', 'mock');
@@ -192,7 +207,11 @@ export function SessionProvider({ children }) {
     };
 
     retrySessionCheckRef.current = () => revalidate({ quarantine: true });
-    const sync = createSessionTabSync(() => { void revalidate({ quarantine: true }); });
+    const sync = createSessionTabSync(() => {
+      lockOfflineFieldVault();
+      void clearOfflineFieldVault().catch(() => {});
+      void revalidate({ quarantine: true });
+    });
     tabSyncRef.current = sync;
     void revalidate({ quarantine: Boolean(tenantHint) });
 
