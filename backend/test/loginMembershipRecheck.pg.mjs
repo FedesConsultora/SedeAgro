@@ -105,38 +105,40 @@ test('login enforces tenant selector agreement and prevents stale membership iss
     // Inject a deterministic state change AFTER the initial public membership
     // list has returned its Sequelize objects, but BEFORE the tenant-scoped
     // issuance transaction has re-read and locked the chosen row.
-    const orig=Membership.findAll;
+    const orig=Membership.findOne;
     let intervened=false;
-    Membership.findAll=async function(options) {
-      const rows=await orig.call(this,options);
-      if(!intervened && options?.where?.user_id===userId && options?.where?.status==='active'){
+    Membership.findOne=async function(options) {
+      const row=await orig.call(this,options);
+      if(!intervened && row && options?.where?.tenant_id===tenantA &&
+          options?.where?.user_id===userId && options?.where?.status==='active'){
         intervened=true;
         await owner.query("UPDATE memberships SET status='blocked' WHERE id=$1",[memA]);
       }
-      return rows;
+      return row;
     };
     let blocked;
     try{blocked=await login({tenantId:tenantA});}
-    finally{Membership.findAll=orig;}
+    finally{Membership.findOne=orig;}
     assert.equal(intervened,true,'fixture must cause a precise post-discovery race');
     assert.equal(blocked.status,401,JSON.stringify(blocked.body));
     assert.equal(blocked.body.token,undefined);
     assert.equal(await count(),2,'blocked membership must never issue a new persisted session');
 
     await owner.query("UPDATE memberships SET status='active',role_code='agronomic_coordinator' WHERE id=$1",[memA]);
-    const original2=Membership.findAll;
+    const original2=Membership.findOne;
     let roleChanged=false;
-    Membership.findAll=async function(options){
-      const rows=await original2.call(this,options);
-      if(!roleChanged && options?.where?.user_id===userId && options?.where?.status==='active'){
+    Membership.findOne=async function(options){
+      const row=await original2.call(this,options);
+      if(!roleChanged && row && options?.where?.tenant_id===tenantA &&
+          options?.where?.user_id===userId && options?.where?.status==='active'){
         roleChanged=true;
         await owner.query("UPDATE memberships SET role_code='scout' WHERE id=$1",[memA]);
       }
-      return rows;
+      return row;
     };
     let changedRole;
     try{changedRole=await login({tenantId:tenantA});}
-    finally{Membership.findAll=original2;}
+    finally{Membership.findOne=original2;}
     assert.equal(roleChanged,true);
     assert.equal(changedRole.status,200,JSON.stringify(changedRole.body));
     assert.equal(changedRole.body.membership.roleCode,'scout');
