@@ -73,6 +73,7 @@ jobs:
           node --test scripts/test/production-security-gate.test.mjs
           node --test scripts/test/focus-stress-config.test.mjs
           node --test scripts/test/postgis-browser-workflow.test.mjs
+          node --test scripts/test/pilot-ci-runner-compat.test.mjs
           node --test scripts/test/benchmark-review-queue.test.mjs
           node --test scripts/test/benchmark-review-queue-http.test.mjs
           node --check scripts/verify-frontend-headers.mjs
