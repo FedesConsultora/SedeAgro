@@ -9,7 +9,15 @@ function requireCredentials(input) {
   if (!email || !email.includes('@') || typeof password !== 'string' || !password) {
     throw new Error('Ingresá email y contraseña para continuar.');
   }
-  return Object.freeze({ email, password });
+  const rawTenantSlug = input?.tenantSlug;
+  const tenantSlug = typeof rawTenantSlug === 'string' ? rawTenantSlug.trim().toLowerCase() : '';
+  if (rawTenantSlug != null && typeof rawTenantSlug !== 'string') {
+    throw new Error('Ingresá un identificador de empresa válido.');
+  }
+  if (tenantSlug && !/^[a-z0-9-]{3,90}$/.test(tenantSlug)) {
+    throw new Error('El identificador de empresa debe tener entre 3 y 90 letras minúsculas, números o guiones.');
+  }
+  return Object.freeze({ email, password, ...(tenantSlug ? { tenantSlug } : {}) });
 }
 
 export function verifyTenantChoices(reply) {
@@ -38,7 +46,7 @@ export function verifyTenantChoices(reply) {
   }));
 }
 
-export function verifyLoginSession(reply, email, selected = null) {
+export function verifyLoginSession(reply, email, selected = null, requestedTenantSlug = null) {
   if (!reply || typeof reply !== 'object' || Array.isArray(reply) ||
       reply.requiresTenantSelection === true ||
       !UUID.test(reply.user?.id || '') ||
@@ -49,6 +57,7 @@ export function verifyLoginSession(reply, email, selected = null) {
       typeof reply.membership.roleCode !== 'string' || !reply.membership.roleCode.trim() ||
       !Array.isArray(reply.entitlements) ||
       !reply.entitlements.every(x => typeof x === 'string') ||
+      (requestedTenantSlug && reply.tenant.slug !== requestedTenantSlug) ||
       (selected && (reply.tenant.id !== selected.tenantId ||
         reply.tenant.slug !== selected.tenantSlug ||
         reply.membership.roleCode !== selected.roleCode))) {
@@ -101,7 +110,7 @@ export function createLoginAttemptGate() {
     complete(ticket, reply) {
       if (!ticket || active !== ticket || phase !== 'pending') return null;
       if (reply?.requiresTenantSelection === true) {
-        if (ticket.kind !== 'initial') {
+        if (ticket.kind !== 'initial' || credentials.tenantSlug) {
           throw new Error('La selección de empresa cambió. Volvé a ingresar.');
         }
         const choices = verifyTenantChoices(reply);
@@ -111,7 +120,8 @@ export function createLoginAttemptGate() {
         return { kind: 'choices', memberships: choices };
       }
       const session = verifyLoginSession(reply, credentials.email,
-        ticket.kind === 'selected' ? selection : null);
+        ticket.kind === 'selected' ? selection : null,
+        ticket.kind === 'initial' ? credentials.tenantSlug ?? null : null);
       phase = 'confirmed';
       active = null;
       return { kind: 'session', session };
