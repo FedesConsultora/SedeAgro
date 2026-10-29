@@ -885,18 +885,14 @@ try {
   assert.equal(await prodPage.getByText('real-browser-cold-start-private').count(), 0);
   await prodPage.getByLabel('Frase de acceso local').fill(coldSecret);
   await prodPage.getByRole('button', {name:'Abrir borradores locales'}).click();
-  await prodPage.waitForTimeout(900);
-  const secondUnlockState = await prodPage.evaluate(() => ({
-    heading: document.querySelector('h1')?.textContent,
-    errors: [...document.querySelectorAll('[role="alert"]')].map(e => e.textContent),
-    draftCount: document.querySelectorAll('li').length,
-    firstDraft: document.body.innerText.includes('real-browser-cold-start-private'),
-    newDraft: document.body.innerText.includes('new-observation-after-offline-full-reopen'),
-    locked: Boolean(document.querySelector('input[type="password"]')),
-    online: navigator.onLine
-  }));
-  console.log('MOB_05_SECOND_UNLOCK_STATE', JSON.stringify(secondUnlockState));
-  await prodPage.getByText('new-observation-after-offline-full-reopen').waitFor();
+  // Confirm that BOTH records are visible as decrypted list items, not
+  // merely the text retained in a form control during React state updates.
+  await prodPage.locator('li').filter({
+    hasText: 'real-browser-cold-start-private'
+  }).waitFor();
+  await prodPage.locator('li').filter({
+    hasText: 'new-observation-after-offline-full-reopen'
+  }).waitFor();
   const coldStored = await prodPage.evaluate(async () => {
     const scope = 'ad000000-0000-4000-8000-000000000001:' +
       'ad000000-0000-4000-8000-000000000002';
