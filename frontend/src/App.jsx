@@ -35,6 +35,7 @@ import { PlatformAdminPage } from './pages/PlatformAdminPage.jsx';
 import { LoginPage } from './pages/LoginPage.jsx';
 import { RegisterPage } from './pages/RegisterPage.jsx';
 import { InviteAcceptancePage } from './pages/InviteAcceptancePage.jsx';
+import { OfflineFieldWorkspace } from './components/OfflineFieldWorkspace.jsx';
 
 const views = [
   { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard, entitlement: null },
@@ -136,6 +137,20 @@ function Shell() {
 export function App() {
   const { isAuthenticated, restoring, sessionCheckError, retrySessionCheck } = useSession();
   const [authView, setAuthView] = useState('login');
+  const [showOfflineField, setShowOfflineField] = useState(false);
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
+  useEffect(() => {
+    const changed = () => {
+      setOnline(navigator.onLine !== false);
+      if (navigator.onLine !== false) setShowOfflineField(false);
+    };
+    window.addEventListener('online', changed);
+    window.addEventListener('offline', changed);
+    return () => {
+      window.removeEventListener('online', changed);
+      window.removeEventListener('offline', changed);
+    };
+  }, []);
   // After registration/sign-in, a later logout must open Login, not the
   // stale registration form that happened to be selected before signing in.
   useEffect(() => {
@@ -143,6 +158,10 @@ export function App() {
   }, [isAuthenticated]);
 
   if (restoring) return <div role="status" className="auth-shell">Restaurando sesión segura…</div>;
+
+  if (sessionCheckError && !online && showOfflineField) {
+    return <OfflineFieldWorkspace onClose={() => setShowOfflineField(false)} />;
+  }
 
   if (sessionCheckError) return (
     <div className="auth-shell" role="alert">
@@ -153,6 +172,12 @@ export function App() {
         <button type="button" className="primary-action" onClick={retrySessionCheck}>
           Reintentar verificación
         </button>
+        {!online && <button type="button" className="ghost-action"
+          onClick={() => setShowOfflineField(true)}>
+          Desbloquear borradores de campo sin conexión
+        </button>}
+        {!online && <p>El acceso local sólo se ofrece si lo preparaste
+          antes de salir al campo con una sesión verificada y una frase propia.</p>}
       </div>
     </div>
   );
