@@ -219,7 +219,7 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
 
   // Password and global account status were already verified. Each lookup
   // installs one tenant-local GUC and observes memberships FORCE RLS; no
-  // unrestricted cross-company Membership.findAll or privileged DB function.
+  // unrestricted cross-company membership scan or privileged DB function.
   const memberships = await discoverLoginMemberships(user.id, { tenantId, tenantSlug });
 
   const activeMemberships = memberships.filter((membership) => ['onboarding', 'active'].includes(membership.Tenant.status));
