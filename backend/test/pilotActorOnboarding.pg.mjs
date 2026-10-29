@@ -392,6 +392,246 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
       actor: producer
     }), 200, 'producer grants revoked').data;
     assert.equal(afterGrantRevoked.some(row => row.id === field.id), false);
+    // Connect the actual HTTP-created lot/campaign and GPS observation to
+    // an operational work order. The schema does NOT claim an observation FK:
+    // the authoritative common context is field_id + campaign_field_id.
+    const orderBody = {
+      client_request_id: randomUUID(), field_id: field.id,
+      campaign_field_id: campaignField.id,
+      type: 'inspection', priority: 'high',
+      title: 'Inspeccionar incidencia GPS ' + suffix,
+      instructions: 'Inspeccionar el lote que registra la observación de la recorrida'
+    };
+    check(await request('/work-orders', {
+      actor: scout, method: 'POST', body: orderBody
+    }), 403, 'scout cannot authorize work orders');
+    const order = check(await request('/work-orders', {
+      actor: admin, method: 'POST', body: orderBody
+    }), 201, 'admin creates order in observed field').data;
+    assert.equal(order.field_id, field.id);
+    assert.equal(order.campaign_field_id, campaignField.id);
+    const orderReplay = check(await request('/work-orders', {
+      actor: admin, method: 'POST', body: orderBody
+    }), 200, 'exact work order ACK replay');
+    assert.equal(orderReplay.data.id, order.id);
+    assert.equal(orderReplay.replayed, true);
+
+    check(await request('/work-orders/' + order.id, { actor: contractor }),
+      404, 'invited contractor cannot see unassigned order');
+    check(await request('/work-orders/' + order.id, { actor: outsider }),
+      404, 'foreign company cannot see order');
+
+    const assigned = check(await request('/work-orders/' + order.id + '/assignees', {
+      actor: admin, method: 'POST',
+      body: { user_id: contractor.user, responsibility: 'executor' }
+    }), 201, 'assign invited contractor').data;
+    assert.equal(assigned.user_id, contractor.user);
+    const assignedReplay = check(await request('/work-orders/' + order.id + '/assignees', {
+      actor: admin, method: 'POST',
+      body: { user_id: contractor.user, responsibility: 'executor' }
+    }), 200, 'assignment replay').data;
+    assert.equal(assignedReplay.id, assigned.id);
+    const assignedList = check(await request('/work-orders', {
+      actor: contractor
+    }), 200, 'contractor sees only own assignments').data;
+    assert.equal(assignedList.filter(item => item.id === order.id).length, 1);
+    check(await request('/work-orders/' + order.id, {
+      actor: contractor
+    }), 200, 'contractor can open assigned order');
+
+    // Contractor cannot start a draft and coordinator cannot mark an
+    // unreviewed order completed, even with an authenticated cookie.
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: contractor, method: 'PATCH', body: { status: 'in_progress' }
+    }), 403, 'contractor cannot start a draft order');
+    for (const status of ['pending_approval', 'approved', 'assigned']) {
+      check(await request('/work-orders/' + order.id + '/status', {
+        actor: admin, method: 'PATCH', body: { status }
+      }), 200, 'admin advances order to ' + status);
+    }
+    const approvedOrder = check(await request('/work-orders/' + order.id, {
+      actor: contractor
+    }), 200, 'contractor sees approved order').data;
+    const approvedAt = Date.parse(approvedOrder.approved_at);
+    assert.ok(Number.isFinite(approvedAt));
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: contractor, method: 'PATCH', body: { status: 'in_progress' }
+    }), 200, 'assigned contractor starts work');
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'completed' }
+    }), 409, 'cannot close order without verified work report');
+
+    const finished = approvedAt + 120;
+    if (Date.now() <= finished) {
+      await new Promise(resolve => setTimeout(resolve, finished - Date.now() + 20));
+    }
+    const executionBody = {
+      started_at: new Date(approvedAt + 10).toISOString(),
+      finished_at: new Date(finished).toISOString(),
+      worked_area_hectares: 1.25,
+      result_summary: 'Trabajo real de inspeccion del lote registrado por el scout'
+    };
+    const execution = check(await request('/work-orders/' + order.id + '/executions', {
+      actor: contractor, method: 'POST', body: executionBody
+    }), 201, 'contractor submits real execution report').data;
+    assert.equal(execution.submitted_by, contractor.user);
+    assert.equal(execution.review_status, 'submitted');
+    check(await request('/work-orders/' + order.id + '/executions', {
+      actor: contractor, method: 'POST', body: executionBody
+    }), 409, 'duplicate execution submission cannot create second pending report');
+
+    const reviewPath = '/work-orders/' + order.id + '/executions/' + execution.id + '/review';
+    const review = {
+      decision: 'verified', checklist: {
+        time_checked: true, area_checked: true, result_checked: true,
+        operation_checked: true, evidence_basis: 'reviewed_files'
+      }
+    };
+    check(await request(reviewPath, {
+      actor: contractor, method: 'POST', body: review
+    }), 403, 'contractor cannot review own execution');
+    check(await request(reviewPath, {
+      actor: coordinator, method: 'POST', body: review
+    }), 409, 'cannot claim reviewed_files without actual private attachment');
+
+    const executionFile = {
+      kind: 'photo', mime_type: 'image/jpeg',
+      original_name: 'inspeccion-ejecutada.jpg',
+      client_upload_id: randomUUID(),
+      content_base64: imageBytes.toString('base64')
+    };
+    const evidencePath = '/work-orders/' + order.id +
+      '/executions/' + execution.id + '/evidence';
+    check(await request(evidencePath, {
+      actor: scout, method: 'POST', body: executionFile
+    }), 403, 'scout cannot attach to contractor execution');
+    const executionEvidence = check(await request(evidencePath, {
+      actor: contractor, method: 'POST', body: executionFile
+    }), 201, 'contractor uploads private execution JPEG').data;
+    assert.ok(executionEvidence.id);
+    const sameUpload = check(await request(evidencePath, {
+      actor: contractor, method: 'POST', body: executionFile
+    }), 200, 'private execution photo exact ACK replay');
+    assert.equal(sameUpload.data.id, executionEvidence.id);
+    check(await request(evidencePath, {
+      actor: contractor, method: 'POST',
+      body: { ...executionFile, original_name: 'altered-name.jpg' }
+    }), 409, 'photo idempotency key cannot alias another file');
+
+    const privatePath = '/work-orders/' + order.id +
+      '/evidence/' + executionEvidence.id;
+    check(await request(privatePath + '/content', {
+      actor: outsider
+    }), 404, 'foreign company cannot fetch contractor private JPEG');
+    const content = check(await request(privatePath + '/content', {
+      actor: coordinator
+    }), 200, 'coordinator verifies private execution photo').data;
+    assert.equal(content.content_base64, executionFile.content_base64);
+    const integrity = check(await request(privatePath + '/integrity', {
+      actor: coordinator
+    }), 200, 'coordinator checks private evidence integrity').data;
+    assert.equal(integrity.status, 'verified');
+
+    const queue = check(await request('/work-orders/review-queue', {
+      actor: coordinator
+    }), 200, 'independent coordinator opens tenant review queue');
+    assert.ok(queue.data.some(item => item.id === order.id),
+      'unreviewed execution must be visible to coordinator');
+
+    const verified = check(await request(reviewPath, {
+      actor: coordinator, method: 'POST', body: review
+    }), 200, 'different active actor verifies work with private evidence').data;
+    assert.equal(verified.review_status, 'verified');
+    assert.equal(verified.reviewed_by, coordinator.user);
+    check(await request(reviewPath, {
+      actor: admin, method: 'POST', body: review
+    }), 409, 'execution cannot be reviewed twice');
+    const closed = check(await request('/work-orders/' + order.id + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'completed' }
+    }), 200, 'admin closes verified order').data;
+    assert.equal(closed.status, 'completed');
+
+    // The recipient's cookie must not turn into report read permission.
+    check(await request('/reports/field/' + field.id + '/export.csv', {
+      actor: contractor
+    }), 403, 'contractor cannot export private report');
+    check(await request('/reports/field/' + field.id + '/export.pdf', {
+      actor: outsider
+    }), 404, 'foreign company cannot export report');
+    for (const format of ['csv', 'pdf', 'xlsx']) {
+      const output = check(await request(
+        '/reports/field/' + field.id + '/export.' + format, {
+          actor: coordinator
+        }), 200, 'verified ' + format + ' field report').data;
+      assert.deepEqual(output.counts, { observations: 1, workOrders: 1 },
+        'same field must have exactly one observation and one verified order');
+      assert.match(output.filename, new RegExp('\\.' + format + '
+
+    // The same issued cookie is invalid after the admin blocks the scout;
+    // a cached JWT or draft ID must not reauthorize another API request.
+    check(await request('/auth/members/' + scout.membership + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'blocked' }
+    }), 200, 'block scout');
+    check(await request('/auth/me', { actor: scout }),
+      401, 'revoked scout login cookie');
+    check(await request('/scouting/runs/' + run.id, { actor: scout }),
+      401, 'revoked scout has no assigned run API');
+
+    // Evidence of one persisted actor chain and no duplicate replays.
+    const row = (await owner.query(
+      'SELECT f.tenant_id, c.id AS campaign_id, cf.id AS link_id,' +
+      ' r.assigned_to, m.status AS scout_status ' +
+      'FROM fields f JOIN campaign_fields cf ON cf.field_id=f.id ' +
+      'JOIN campaigns c ON c.id=cf.campaign_id ' +
+      'JOIN scouting_runs r ON r.campaign_field_id=cf.id ' +
+      'JOIN memberships m ON m.user_id=r.assigned_to AND m.tenant_id=f.tenant_id ' +
+      'WHERE f.id=$1 AND r.id=$2', [field.id, run.id]
+    )).rows;
+    assert.equal(row.length, 1);
+    assert.equal(row[0].tenant_id, admin.tenant);
+    assert.equal(row[0].campaign_id, campaign.id);
+    assert.equal(row[0].link_id, campaignField.id);
+    assert.equal(row[0].assigned_to, scout.user);
+    assert.equal(row[0].scout_status, 'blocked');
+
+    // Real non-owner PostGIS client cannot access another tenant even
+    // when a leaked UUID has the correct shape.
+    for (const [tenantId, expected] of [[admin.tenant, 1], [outsider.tenant, 0]]) {
+      await runtime.query('BEGIN');
+      try {
+        await runtime.query("SELECT set_config('app.current_tenant',$1,true)", [tenantId]);
+        const sql = await runtime.query(
+          'SELECT count(*)::int AS n FROM scouting_runs WHERE id=$1',
+          [run.id]
+        );
+        assert.equal(sql.rows[0].n, expected);
+      } finally { await runtime.query('ROLLBACK'); }
+    }
+
+  } finally {
+    if (runtimeReady) await runtime.end();
+    if (ownerReady) {
+      try {
+        if (tenants.length) await owner.query(
+          'DELETE FROM tenants WHERE id=ANY($1::uuid[])', [tenants]);
+        if (users.length) await owner.query(
+          'DELETE FROM users WHERE id=ANY($1::uuid[])', [users]);
+      } finally { await owner.end(); }
+    }
+  }
+});
+));
+      if (format === 'csv') {
+        assert.ok(output.csv.includes('HTTP integrated first field scouting concern'));
+        assert.ok(output.csv.includes('Inspeccionar incidencia GPS'));
+      } else {
+        const bytes = Buffer.from(output.content_base64, 'base64');
+        assert.equal(bytes.length, output.size_bytes);
+        assert.deepEqual([...bytes.subarray(0, 4)],
+          format === 'pdf' ? [37, 80, 68, 70] : [80, 75, 3, 4]);
+      }
+    }
+
 
     // The same issued cookie is invalid after the admin blocks the scout;
     // a cached JWT or draft ID must not reauthorize another API request.
