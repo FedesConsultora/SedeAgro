@@ -21,7 +21,7 @@ const { createApp } = await import('../src/app.js');
 const { sequelize } = await import('../src/core/db.js');
 const { isSafeRuntimeDbRole } = await import('../src/core/tenantDbSafety.js');
 
-test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, campaign and assigned run', async t => {
+test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contractor -> independent review -> reports', async t => {
   const owner = new pg.Client({ connectionString: ownerUrl });
   const runtime = new pg.Client({ connectionString: runtimeUrl });
   const server = createApp().listen(0, '127.0.0.1');
@@ -37,6 +37,8 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
   const password = 'TestPilotActorStrong2026!';
   const scoutPassword = 'ScoutFieldSecure2026!';
   const producerPassword = 'ProducerFieldSecure2026!';
+  const contractorPassword = 'ContractorFieldSecure2026!';
+  const coordinatorPassword = 'CoordinatorFieldSecure2026!';
   let ownerReady = false, runtimeReady = false;
 
   async function request(path, { method = 'GET', actor, body,
@@ -173,6 +175,15 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
     const scout = await inviteAndAccept(admin, 'scout', 'Real Field Scout', scoutPassword);
     const producer = await inviteAndAccept(admin, 'producer_viewer',
       'Real Producer', producerPassword);
+    const contractor = await inviteAndAccept(admin, 'contractor',
+      'Real Contractor', contractorPassword);
+    const coordinator = await inviteAndAccept(admin, 'agronomic_coordinator',
+      'Real Coordinator', coordinatorPassword);
+    assert.equal(new Set([admin.user, scout.user, producer.user,
+      contractor.user, coordinator.user]).size, 5,
+      'reviewer and executor must never be the same actor');
+    check(await request('/auth/me', { actor: contractor }), 200,
+      'fresh persisted contractor session');
 
     // A valid session still cannot mutate a cookie-authenticated endpoint
     // without a non-simple CSRF request header. There must be no side effect.
@@ -293,6 +304,68 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
     check(await request('/scouting/runs/' + run.id, {
       actor: outsider
     }), 404, 'foreign tenant cannot read run');
+    // The invited real scout, not an owner-SQL synthetic principal, now
+    // persists the first observation with authored WGS84 GPS via the SAME
+    // offline batch API used by the PWA. A lost HTTP ACK replays exactly once.
+    const gps = { type: 'Point', coordinates: [-57.9521, -34.9205] };
+    const observationBatch = {
+      client_id: 'sedeagro-web-offline-v1',
+      idempotency_key: randomUUID(),
+      operations: [{
+        entity_type: 'scouting_observation', entity_client_id: randomUUID(),
+        operation: 'create', payload: {
+          scouting_run_id: run.id, observation_type: 'pest',
+          severity: 'high', observed_at: new Date().toISOString(),
+          notes: 'HTTP integrated first field scouting concern ' + suffix,
+          point: gps
+        }
+      }]
+    };
+    const observationResult = check(await request('/sync/batches', {
+      actor: scout, method: 'POST', body: observationBatch
+    }), 201, 'invited scout submits offline GPS batch');
+    const observationId = observationResult.data.operations[0].result.observation_id;
+    assert.ok(observationId, 'offline batch must persist an observation id');
+    const observationReplay = check(await request('/sync/batches', {
+      actor: scout, method: 'POST', body: observationBatch
+    }), 200, 'lost ACK exact offline replay');
+    assert.equal(observationReplay.replayed, true);
+    assert.equal(observationReplay.data.operations[0].result.observation_id, observationId);
+    check(await request('/sync/batches', {
+      actor: contractor, method: 'POST', body: observationBatch
+    }), 403, 'contractor cannot replay scout offline batch');
+    check(await request('/scouting/runs/' + run.id, {
+      actor: contractor
+    }), 403, 'contractor cannot read scouting run');
+
+    // JPEG fixture is intentionally minimal and non-personal; its bytes are
+    // stored and returned by the actual private PostGIS evidence endpoint.
+    const imageBytes = Buffer.from('ffd8ffdb0000000000', 'hex');
+    const observationFile = {
+      kind: 'photo', mime_type: 'image/jpeg',
+      original_name: 'cultivo-evidencia.jpg',
+      content_base64: imageBytes.toString('base64'),
+      client_upload_id: randomUUID()
+    };
+    const privateObservation = check(await request(
+      '/scouting/observations/' + observationId + '/evidence', {
+        actor: scout, method: 'POST', body: observationFile
+      }), 201, 'scout uploads private JPEG').data;
+    assert.ok(privateObservation.id);
+    const uploadReplay = check(await request(
+      '/scouting/observations/' + observationId + '/evidence', {
+        actor: scout, method: 'POST', body: observationFile
+      }), 200, 'lost photo ACK replay').data;
+    assert.equal(uploadReplay.id, privateObservation.id);
+    check(await request('/scouting/evidence/' + privateObservation.id + '/content', {
+      actor: outsider
+    }), 404, 'foreign company cannot read private scouting file');
+    const photoRead = check(await request(
+      '/scouting/evidence/' + privateObservation.id + '/content', {
+        actor: scout
+      }), 200, 'scout reopens private photograph').data;
+    assert.equal(photoRead.content_base64, observationFile.content_base64);
+
 
     // Producer cannot view the field before an explicit grant and cannot
     // acquire campaign/scouting privileges just by having a cookie.
@@ -319,6 +392,191 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
       actor: producer
     }), 200, 'producer grants revoked').data;
     assert.equal(afterGrantRevoked.some(row => row.id === field.id), false);
+    // Connect the actual HTTP-created lot/campaign and GPS observation to
+    // an operational work order. The schema does NOT claim an observation FK:
+    // the authoritative common context is field_id + campaign_field_id.
+    const orderBody = {
+      client_request_id: randomUUID(), field_id: field.id,
+      campaign_field_id: campaignField.id,
+      type: 'inspection', priority: 'high',
+      title: 'Inspeccionar incidencia GPS ' + suffix,
+      instructions: 'Inspeccionar el lote que registra la observación de la recorrida'
+    };
+    check(await request('/work-orders', {
+      actor: scout, method: 'POST', body: orderBody
+    }), 403, 'scout cannot authorize work orders');
+    const order = check(await request('/work-orders', {
+      actor: admin, method: 'POST', body: orderBody
+    }), 201, 'admin creates order in observed field').data;
+    assert.equal(order.field_id, field.id);
+    assert.equal(order.campaign_field_id, campaignField.id);
+    const orderReplay = check(await request('/work-orders', {
+      actor: admin, method: 'POST', body: orderBody
+    }), 200, 'exact work order ACK replay');
+    assert.equal(orderReplay.data.id, order.id);
+    assert.equal(orderReplay.replayed, true);
+
+    check(await request('/work-orders/' + order.id, { actor: contractor }),
+      404, 'invited contractor cannot see unassigned order');
+    check(await request('/work-orders/' + order.id, { actor: outsider }),
+      404, 'foreign company cannot see order');
+
+    const assigned = check(await request('/work-orders/' + order.id + '/assignees', {
+      actor: admin, method: 'POST',
+      body: { user_id: contractor.user, responsibility: 'executor' }
+    }), 201, 'assign invited contractor').data;
+    assert.equal(assigned.user_id, contractor.user);
+    const assignedReplay = check(await request('/work-orders/' + order.id + '/assignees', {
+      actor: admin, method: 'POST',
+      body: { user_id: contractor.user, responsibility: 'executor' }
+    }), 200, 'assignment replay').data;
+    assert.equal(assignedReplay.id, assigned.id);
+    const assignedList = check(await request('/work-orders', {
+      actor: contractor
+    }), 200, 'contractor sees only own assignments').data;
+    assert.equal(assignedList.filter(item => item.id === order.id).length, 1);
+    check(await request('/work-orders/' + order.id, {
+      actor: contractor
+    }), 200, 'contractor can open assigned order');
+
+    // Contractor cannot start a draft and coordinator cannot mark an
+    // unreviewed order completed, even with an authenticated cookie.
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: contractor, method: 'PATCH', body: { status: 'in_progress' }
+    }), 403, 'contractor cannot start a draft order');
+    for (const status of ['pending_approval', 'approved', 'assigned']) {
+      check(await request('/work-orders/' + order.id + '/status', {
+        actor: admin, method: 'PATCH', body: { status }
+      }), 200, 'admin advances order to ' + status);
+    }
+    const approvedOrder = check(await request('/work-orders/' + order.id, {
+      actor: contractor
+    }), 200, 'contractor sees approved order').data;
+    const approvedAt = Date.parse(approvedOrder.approved_at);
+    assert.ok(Number.isFinite(approvedAt));
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: contractor, method: 'PATCH', body: { status: 'in_progress' }
+    }), 200, 'assigned contractor starts work');
+    check(await request('/work-orders/' + order.id + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'completed' }
+    }), 409, 'cannot close order without verified work report');
+
+    const finished = approvedAt + 120;
+    if (Date.now() <= finished) {
+      await new Promise(resolve => setTimeout(resolve, finished - Date.now() + 20));
+    }
+    const executionBody = {
+      started_at: new Date(approvedAt + 10).toISOString(),
+      finished_at: new Date(finished).toISOString(),
+      worked_area_hectares: 1.25,
+      result_summary: 'Trabajo real de inspeccion del lote registrado por el scout'
+    };
+    const execution = check(await request('/work-orders/' + order.id + '/executions', {
+      actor: contractor, method: 'POST', body: executionBody
+    }), 201, 'contractor submits real execution report').data;
+    assert.equal(execution.submitted_by, contractor.user);
+    assert.equal(execution.review_status, 'submitted');
+    check(await request('/work-orders/' + order.id + '/executions', {
+      actor: contractor, method: 'POST', body: executionBody
+    }), 409, 'duplicate execution submission cannot create second pending report');
+
+    const reviewPath = '/work-orders/' + order.id + '/executions/' + execution.id + '/review';
+    const review = {
+      decision: 'verified', checklist: {
+        time_checked: true, area_checked: true, result_checked: true,
+        operation_checked: true, evidence_basis: 'reviewed_files'
+      }
+    };
+    check(await request(reviewPath, {
+      actor: contractor, method: 'POST', body: review
+    }), 403, 'contractor cannot review own execution');
+    check(await request(reviewPath, {
+      actor: coordinator, method: 'POST', body: review
+    }), 409, 'cannot claim reviewed_files without actual private attachment');
+
+    const executionFile = {
+      kind: 'photo', mime_type: 'image/jpeg',
+      original_name: 'inspeccion-ejecutada.jpg',
+      client_upload_id: randomUUID(),
+      content_base64: imageBytes.toString('base64')
+    };
+    const evidencePath = '/work-orders/' + order.id +
+      '/executions/' + execution.id + '/evidence';
+    check(await request(evidencePath, {
+      actor: scout, method: 'POST', body: executionFile
+    }), 403, 'scout cannot attach to contractor execution');
+    const executionEvidence = check(await request(evidencePath, {
+      actor: contractor, method: 'POST', body: executionFile
+    }), 201, 'contractor uploads private execution JPEG').data;
+    assert.ok(executionEvidence.id);
+    const sameUpload = check(await request(evidencePath, {
+      actor: contractor, method: 'POST', body: executionFile
+    }), 200, 'private execution photo exact ACK replay');
+    assert.equal(sameUpload.data.id, executionEvidence.id);
+    check(await request(evidencePath, {
+      actor: contractor, method: 'POST',
+      body: { ...executionFile, original_name: 'altered-name.jpg' }
+    }), 409, 'photo idempotency key cannot alias another file');
+
+    const privatePath = '/work-orders/' + order.id +
+      '/evidence/' + executionEvidence.id;
+    check(await request(privatePath + '/content', {
+      actor: outsider
+    }), 404, 'foreign company cannot fetch contractor private JPEG');
+    const content = check(await request(privatePath + '/content', {
+      actor: coordinator
+    }), 200, 'coordinator verifies private execution photo').data;
+    assert.equal(content.content_base64, executionFile.content_base64);
+    const integrity = check(await request(privatePath + '/integrity', {
+      actor: coordinator
+    }), 200, 'coordinator checks private evidence integrity').data;
+    assert.equal(integrity.status, 'verified');
+
+    const queue = check(await request('/work-orders/review-queue', {
+      actor: coordinator
+    }), 200, 'independent coordinator opens tenant review queue');
+    assert.ok(queue.data.some(item => item.id === order.id),
+      'unreviewed execution must be visible to coordinator');
+
+    const verified = check(await request(reviewPath, {
+      actor: coordinator, method: 'POST', body: review
+    }), 200, 'different active actor verifies work with private evidence').data;
+    assert.equal(verified.review_status, 'verified');
+    assert.equal(verified.reviewed_by, coordinator.user);
+    check(await request(reviewPath, {
+      actor: admin, method: 'POST', body: review
+    }), 409, 'execution cannot be reviewed twice');
+    const closed = check(await request('/work-orders/' + order.id + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'completed' }
+    }), 200, 'admin closes verified order').data;
+    assert.equal(closed.status, 'completed');
+
+    // The recipient's cookie must not turn into report read permission.
+    check(await request('/reports/field/' + field.id + '/export.csv', {
+      actor: contractor
+    }), 403, 'contractor cannot export private report');
+    check(await request('/reports/field/' + field.id + '/export.pdf', {
+      actor: outsider
+    }), 404, 'foreign company cannot export report');
+    for (const format of ['csv', 'pdf', 'xlsx']) {
+      const output = check(await request(
+        '/reports/field/' + field.id + '/export.' + format, {
+          actor: coordinator
+        }), 200, 'verified ' + format + ' field report').data;
+      assert.deepEqual(output.counts, { observations: 1, workOrders: 1 },
+        'same field must have exactly one observation and one verified order');
+      assert.ok(output.filename.endsWith('.' + format),
+        'report must have the requested export extension');
+      if (format === 'csv') {
+        assert.ok(output.csv.includes('HTTP integrated first field scouting concern'));
+        assert.ok(output.csv.includes('Inspeccionar incidencia GPS'));
+      } else {
+        const bytes = Buffer.from(output.content_base64, 'base64');
+        assert.equal(bytes.length, output.size_bytes);
+        assert.deepEqual([...bytes.subarray(0, 4)],
+          format === 'pdf' ? [37, 80, 68, 70] : [80, 75, 3, 4]);
+      }
+    }
 
     // The same issued cookie is invalid after the admin blocks the scout;
     // a cached JWT or draft ID must not reauthorize another API request.
@@ -329,6 +587,13 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
       401, 'revoked scout login cookie');
     check(await request('/scouting/runs/' + run.id, { actor: scout }),
       401, 'revoked scout has no assigned run API');
+    check(await request('/auth/members/' + contractor.membership + '/status', {
+      actor: admin, method: 'PATCH', body: { status: 'blocked' }
+    }), 200, 'block assigned contractor after review');
+    check(await request('/auth/me', { actor: contractor }),
+      401, 'revoked contractor cookie cannot restore session');
+    check(await request('/work-orders/' + order.id, { actor: contractor }),
+      401, 'revoked contractor cannot read former assignment');
 
     // Evidence of one persisted actor chain and no duplicate replays.
     const row = (await owner.query(
@@ -347,6 +612,47 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
     assert.equal(row[0].assigned_to, scout.user);
     assert.equal(row[0].scout_status, 'blocked');
 
+    // The same real farm/field/campaign links every actor's records. Receipt
+    // replay did NOT double-write an observation, order or either JPEG.
+    const actual = (await owner.query(
+      `SELECT
+        (SELECT count(*)::int FROM scouting_observations WHERE id=$1) AS observations,
+        (SELECT count(*)::int FROM work_orders WHERE id=$2) AS orders,
+        (SELECT count(*)::int FROM work_order_executions WHERE id=$3) AS executions,
+        (SELECT count(*)::int FROM evidence_assets WHERE id IN ($4,$5)) AS photos,
+        (SELECT review_status FROM work_order_executions WHERE id=$3) AS review_status,
+        (SELECT reviewed_by FROM work_order_executions WHERE id=$3) AS reviewer,
+        (SELECT status FROM work_orders WHERE id=$2) AS order_status`,
+      [observationId, order.id, execution.id,
+        privateObservation.id, executionEvidence.id]
+    )).rows[0];
+    assert.deepEqual([
+      actual.observations, actual.orders, actual.executions, actual.photos,
+      actual.review_status, actual.reviewer, actual.order_status
+    ], [1, 1, 1, 2, 'verified', coordinator.user, 'completed']);
+    const geometry = (await owner.query(
+      'SELECT ST_X(point) AS lon,ST_Y(point) AS lat FROM scouting_observations WHERE id=$1',
+      [observationId]
+    )).rows[0];
+    assert.equal(geometry.lon, gps.coordinates[0]);
+    assert.equal(geometry.lat, gps.coordinates[1]);
+    const orderChain = (await owner.query(
+      'SELECT o.tenant_id,o.field_id,o.campaign_field_id, ' +
+      'e.submitted_by,e.reviewed_by, ' +
+      'a.work_order_execution_id ' +
+      'FROM work_orders o JOIN work_order_executions e ON e.work_order_id=o.id ' +
+      'JOIN evidence_assets a ON a.work_order_execution_id=e.id ' +
+      'WHERE o.id=$1 AND e.id=$2 AND a.id=$3',
+      [order.id, execution.id, executionEvidence.id]
+    )).rows;
+    assert.equal(orderChain.length, 1);
+    assert.equal(orderChain[0].tenant_id, admin.tenant);
+    assert.equal(orderChain[0].field_id, field.id);
+    assert.equal(orderChain[0].campaign_field_id, campaignField.id);
+    assert.equal(orderChain[0].submitted_by, contractor.user);
+    assert.equal(orderChain[0].reviewed_by, coordinator.user);
+    assert.equal(orderChain[0].work_order_execution_id, execution.id);
+
     // Real non-owner PostGIS client cannot access another tenant even
     // when a leaked UUID has the correct shape.
     for (const [tenantId, expected] of [[admin.tenant, 1], [outsider.tenant, 0]]) {
@@ -354,10 +660,17 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
       try {
         await runtime.query("SELECT set_config('app.current_tenant',$1,true)", [tenantId]);
         const sql = await runtime.query(
-          'SELECT count(*)::int AS n FROM scouting_runs WHERE id=$1',
-          [run.id]
+          `SELECT
+            (SELECT count(*)::int FROM scouting_runs WHERE id=$1) AS runs,
+            (SELECT count(*)::int FROM scouting_observations WHERE id=$2) AS observations,
+            (SELECT count(*)::int FROM work_orders WHERE id=$3) AS orders,
+            (SELECT count(*)::int FROM work_order_executions WHERE id=$4) AS executions,
+            (SELECT count(*)::int FROM evidence_assets WHERE id IN ($5,$6)) AS photos`,
+          [run.id, observationId, order.id, execution.id,
+            privateObservation.id, executionEvidence.id]
         );
-        assert.equal(sql.rows[0].n, expected);
+        assert.deepEqual(Object.values(sql.rows[0]),
+          [expected, expected, expected, expected, expected * 2]);
       } finally { await runtime.query('ROLLBACK'); }
     }
 
