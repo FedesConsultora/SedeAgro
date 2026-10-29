@@ -88,7 +88,8 @@ test('offline queue capability rejects arbitrary objects, mismatched scope, and 
   assert.match(ui, /document\.visibilityState === 'hidden'/);
   assert.match(ui, /onClose\(\)/);
   assert.match(app, /sessionCheckError && !online && showOfflineField/);
-  assert.match(sessionContext, /await clearOfflineFieldVault\(\)/);
+  assert.match(sessionContext, /const cleared = await retireOfflineFieldVault\(\)/);
+  assert.match(sessionContext, /void retireOfflineFieldVault\(\)/);
   assert.match(sessionContext, /lockOfflineFieldVault\(\)/);
 });
 
