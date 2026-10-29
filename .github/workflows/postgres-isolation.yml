@@ -315,7 +315,9 @@ jobs:
           retention-days: 14
 
   production-images:
-    runs-on: ubuntu-latest
+    # Keep the validated Docker engine/export semantics for strict layer diffID
+    # parity; ubuntu26.04 changed the runner and failed the OCI bundle verifier.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       IMAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
