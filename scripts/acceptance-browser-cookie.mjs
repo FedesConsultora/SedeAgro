@@ -431,8 +431,10 @@ try {
     'the encrypted envelope may survive failed deletion and requires device cleanup');
   assert.equal(await page1.evaluate(() => localStorage.getItem('sedeagro.tenantHint')), null);
   assert.equal((await context1.cookies()).some((item) => item.name === 'sedeagro_session'), false);
-  const anonymous = await page1.evaluate(async () =>
-    (await fetch('/api/v1/auth/me', { credentials: 'include' })).status);
+  const anonymous = await page1.evaluate(async (id) =>
+    (await fetch('/api/v1/auth/me', {
+      credentials: 'include', headers: { 'x-tenant-id': id }
+    })).status, tenantId);
   assert.equal(anonymous, 401, 'server session must remain revoked after local IDB failure');
   console.log('PASS: confirmed server logout hides private views and warns when vault IDB deletion fails');
   await context2.close();
