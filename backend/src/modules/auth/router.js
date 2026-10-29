@@ -24,6 +24,7 @@ import { invitationPublicRouter, invitationScopedRouter } from './invitations.js
 import { memberLifecycleRouter } from './memberLifecycle.js';
 import { canIssueLoginForGlobalAccount } from './loginAccountPolicy.js';
 import { selectLoginMembership } from './loginMembershipPolicy.js';
+import { discoverLoginMemberships } from './loginMembershipDiscovery.js';
 
 export const authPublicRouter = Router();
 export const authScopedRouter = Router();
@@ -216,11 +217,10 @@ authPublicRouter.post('/login', rateLimit({ windowMs: 10 * 60 * 1000, max: 20, k
     throw new HttpError(401, 'Email o contraseña incorrectos.');
   }
 
-  const memberships = await Membership.findAll({
-    where: { user_id: user.id, status: 'active' },
-    include: [{ model: Tenant, attributes: ['id', 'name', 'slug', 'status'] }],
-    skipTenantScope: true
-  });
+  // Password and global account status were already verified. Each lookup
+  // installs one tenant-local GUC and observes memberships FORCE RLS; no
+  // unrestricted cross-company Membership.findAll or privileged DB function.
+  const memberships = await discoverLoginMemberships(user.id, { tenantId, tenantSlug });
 
   const activeMemberships = memberships.filter((membership) => ['onboarding', 'active'].includes(membership.Tenant.status));
   if (!activeMemberships.length) throw new HttpError(403, 'No tenés membresías activas.');
