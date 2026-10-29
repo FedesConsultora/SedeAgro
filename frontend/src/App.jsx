@@ -183,11 +183,20 @@ export function App() {
   );
 
   if (!isAuthenticated) {
-    if (authView === 'invite') return <InviteAcceptancePage onSwitchToLogin={() => setAuthView('login')} />;
-    return authView === 'login'
-      ? <LoginPage onSwitchToRegister={() => setAuthView('register')}
-          onSwitchToInvite={() => setAuthView('invite')} />
-      : <RegisterPage onSwitchToLogin={() => setAuthView('login')} />;
+    // Keep feedback mounted AFTER authenticated Shell unmounts. In particular,
+    // a successful server logout with failed offline-vault IDB cleanup must
+    // visibly warn the operator to clear site data on a shared device.
+    const publicPage = authView === 'invite'
+      ? <InviteAcceptancePage onSwitchToLogin={() => setAuthView('login')} />
+      : authView === 'login'
+        ? <LoginPage onSwitchToRegister={() => setAuthView('register')}
+            onSwitchToInvite={() => setAuthView('invite')} />
+        : <RegisterPage onSwitchToLogin={() => setAuthView('login')} />;
+    return <>
+      <GlobalLoader />
+      <NotificationToast />
+      {publicPage}
+    </>;
   }
 
   return <Shell />;
