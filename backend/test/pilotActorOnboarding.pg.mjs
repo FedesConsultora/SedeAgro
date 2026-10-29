@@ -565,7 +565,18 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
         }), 200, 'verified ' + format + ' field report').data;
       assert.deepEqual(output.counts, { observations: 1, workOrders: 1 },
         'same field must have exactly one observation and one verified order');
-      assert.match(output.filename, new RegExp('\\.' + format + '
+      assert.ok(output.filename.endsWith('.' + format),
+        'report must have the requested export extension');
+      if (format === 'csv') {
+        assert.ok(output.csv.includes('HTTP integrated first field scouting concern'));
+        assert.ok(output.csv.includes('Inspeccionar incidencia GPS'));
+      } else {
+        const bytes = Buffer.from(output.content_base64, 'base64');
+        assert.equal(bytes.length, output.size_bytes);
+        assert.deepEqual([...bytes.subarray(0, 4)],
+          format === 'pdf' ? [37, 80, 68, 70] : [80, 75, 3, 4]);
+      }
+    }
 
     // The same issued cookie is invalid after the admin blocks the scout;
     // a cached JWT or draft ID must not reauthorize another API request.
