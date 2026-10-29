@@ -764,7 +764,7 @@ try {
   await prodPage.reload({ waitUntil: 'domcontentloaded' });
   await prodPage.getByRole('button', { name: 'Sync', exact: true }).click();
   await prodPage.getByRole('region', { name: 'Preparar acceso local sin conexión' })
-    .getByRole('textbox', { name: /Frase local/ }).fill(coldSecret);
+    .getByLabel(/Frase local/).fill(coldSecret);
   await prodPage.getByRole('button', { name: /Habilitar acceso offline/ }).click();
   await prodPage.getByText(/Acceso local preparado para 48 horas/).waitFor();
 
