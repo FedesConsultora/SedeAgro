@@ -420,7 +420,7 @@ try {
   await page1.getByRole('navigation', { name: 'Principal' })
     .getByRole('button', { name: 'Cerrar sesión' }).click();
   const logoutResponse = await logoutAck;
-  assert.equal(logoutResponse.status(), 200, await logoutResponse.text());
+  assert.equal(logoutResponse.status(), 204, await logoutResponse.text());
   await page1.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
   assert.equal(await page1.evaluate(() => window.__vaultDeleteBlocked), true,
     'the IndexedDB failure branch must really have executed');
