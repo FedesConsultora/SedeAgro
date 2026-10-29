@@ -6,7 +6,9 @@ import { createLoginAttemptGate } from '../services/loginAttemptSafety.js';
 
 export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
   const { login } = useSession();
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form, setForm] = useState({ email: '', password: '', tenantSlug: '' });
+  const [showTenantSlug, setShowTenantSlug] = useState(false);
+  const [capacityHint, setCapacityHint] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -46,6 +48,7 @@ export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
         const error = new Error(typeof data?.error?.message === 'string'
           ? data.error.message : 'No se pudo iniciar sesión.');
         error.status = res.status;
+        error.code = data?.error?.code;
         throw error;
       }
       if (!alive.current || !gate.current.isCurrent(ticket)) return;
@@ -57,12 +60,25 @@ export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
       gate.current.fail(ticket);
       // An expired/forbidden second challenge must not keep old membership
       // names or the original credential pair eligible for another request.
-      if (ticket.kind === 'selected' && [401, 403].includes(err?.status)) {
-        gate.current.reset();
-        setTenantChoices(null);
-        setForm({ email: form.email, password: '' });
+      if (err?.status === 503 && err?.code === 'LOGIN_DISCOVERY_CAPACITY_LIMIT' &&
+          ticket.kind === 'initial' && !ticket.body.tenantSlug) {
+        // A password-verified selectorless scan exceeded its bounded tenant
+        // catalog. Let the operator opt into an O(1) slug lookup instead of
+        // retrying the same expensive public tenant enumeration.
+        setShowTenantSlug(true);
+        setCapacityHint(true);
+        setForm(previous => ({ ...previous, password: '' }));
+        setError('Hay muchas organizaciones registradas. Ingresá el identificador de tu empresa y volvé a escribir tu contraseña.');
+      } else {
+        // An expired/forbidden second challenge must not keep old membership
+        // names or the original credential pair eligible for another request.
+        if (ticket.kind === 'selected' && [401, 403].includes(err?.status)) {
+          gate.current.reset();
+          setTenantChoices(null);
+          setForm(previous => ({ ...previous, password: '' }));
+        }
+        setError(err?.message || 'No se pudo conectar al servidor.');
       }
-      setError(err?.message || 'No se pudo conectar al servidor.');
     } finally {
       if (alive.current) setLoading(false);
     }
@@ -90,6 +106,7 @@ export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
     gate.current.reset();
     setTenantChoices(null);
     setForm(previous => ({ ...previous, password: '' }));
+    setCapacityHint(false);
     setError('');
   };
 
@@ -163,6 +180,50 @@ export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
                 </button>
               </label>
 
+              <div>
+                <button type="button" className="ghost-action"
+                  aria-expanded={showTenantSlug}
+                  aria-controls="login-company-slug"
+                  disabled={locked}
+                  onClick={() => {
+                    if (locked) return;
+                    setShowTenantSlug(previous => !previous);
+                    setCapacityHint(false);
+                    setError('');
+                    setForm(previous => ({ ...previous, tenantSlug: '' }));
+                  }}>
+                  {showTenantSlug ? 'Usar selección automática de empresa' : 'Ingresar con identificador de empresa'}
+                </button>
+                {showTenantSlug && (
+                  <label className="form-field" id="login-company-slug"
+                    style={{ marginTop: 10 }}>
+                    <span>Identificador de empresa (slug)</span>
+                    <input
+                      id="login-tenant-slug"
+                      type="text"
+                      value={form.tenantSlug}
+                      onChange={set('tenantSlug')}
+                      placeholder="ejemplo-agro"
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      spellCheck={false}
+                      pattern="[a-zA-Z0-9-]{3,90}"
+                      minLength={3}
+                      maxLength={90}
+                      required
+                      disabled={locked}
+                    />
+                    <small>Se encuentra en los datos de tu empresa.
+                      Sólo determina qué organización consultar; no reemplaza
+                      la verificación de usuario, contraseña ni permisos.</small>
+                    {capacityHint && <small role="status">
+                      El acceso automático superó el límite de organizaciones.
+                      El acceso directo consulta una sola empresa.
+                    </small>}
+                  </label>
+                )}
+              </div>
+
               <button
                 id="login-submit"
                 type="submit"
@@ -206,7 +267,7 @@ export function LoginPage({ onSwitchToRegister, onSwitchToInvite }) {
                 </button>
               ))}
             </div>
-            <button type="button" style={{ marginTop: 20, background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 13 }} onClick={() => setTenantChoices(null)}>
+            <button type="button" style={{ marginTop: 20, background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', fontSize: 13 }} onClick={handleBack}>
               ← Volver
             </button>
           </>

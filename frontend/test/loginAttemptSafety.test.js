@@ -77,6 +77,59 @@ test('double click before React update dispatches exactly one login request', as
   assert.equal(gate.begin(identity), null, 'confirmed session cannot dispatch again');
 });
 
+test('direct company slug binds session identity and avoids broad membership challenge', () => {
+  const gate = createLoginAttemptGate();
+  const ticket = gate.begin({
+    ...identity, tenantSlug: ' Campo-Norte '
+  });
+  assert.equal(ticket.kind, 'initial');
+  assert.equal(ticket.body.tenantSlug, 'campo-norte');
+  assert.equal(Object.isFrozen(ticket.body), true);
+  assert.deepEqual(Object.keys(ticket.body), ['email', 'password', 'tenantSlug']);
+  assert.throws(() => gate.complete(ticket, { requiresTenantSelection: true,
+    memberships: members }), /selección de empresa/i);
+  assert.equal(gate.fail(ticket), true);
+
+  for (const slug of ['ab', 'x'.repeat(91), 'https://site', 'agro/foo',
+    'dot.company', 'empresa?tenant=otra', '--  --']) {
+    assert.throws(() => gate.begin({ ...identity, tenantSlug: slug }),
+      /identificador de empresa/i);
+  }
+  assert.throws(() => gate.begin({ ...identity, tenantSlug: { slug: 'campo-norte' } }),
+    /identificador de empresa/i);
+  const directed = gate.begin({ ...identity, tenantSlug: 'campo-sur' });
+  assert.throws(() => gate.complete(directed, session), /identidad|empresa/i,
+    'matching credentials alone cannot authenticate a different tenant');
+  assert.equal(gate.fail(directed), true);
+  const retry = gate.begin({ ...identity, tenantSlug: 'campo-norte' });
+  assert.equal(gate.complete(retry, session)?.kind, 'session');
+  assert.equal(gate.phase(), 'confirmed');
+});
+
+test('first 503 bounded catalog rejection resets credentials and accepts explicit tenant retry', () => {
+  const gate = createLoginAttemptGate();
+  const first = gate.begin(identity);
+  assert.equal(first.body.tenantSlug, undefined);
+  assert.equal(gate.fail(first), true);
+  assert.equal(gate.complete(first, challenge), null,
+    'late discovery result cannot replace the reset login');
+  const direct = gate.begin({ ...identity, tenantSlug: 'campo-norte' });
+  assert.equal(direct.body.tenantSlug, 'campo-norte');
+  assert.equal(gate.complete(direct, session)?.kind, 'session');
+});
+
+test('Back from tenant choice must reset the one-shot gate and discard the pending password', () => {
+  const gate = createLoginAttemptGate();
+  const t = gate.begin(identity);
+  gate.complete(t, challenge);
+  gate.reset();
+  assert.equal(gate.choose('campo-norte'), null);
+  const replacement = gate.begin({ email: 'another@example.com', password: 'new-secret' });
+  assert.ok(replacement);
+  assert.equal(gate.complete(t, session), null);
+  assert.equal(gate.phase(), 'pending');
+});
+
 test('multiempresa flow pins original credentials and only permits offered tenant slug', () => {
   const gate = createLoginAttemptGate();
   const initial = gate.begin(identity);
@@ -145,5 +198,10 @@ test('login component wires one-shot gate and disables edits and switches while 
   assert.match(source, /disabled=\{locked\}/);
   assert.match(source, /login\(next\.session\)/);
   assert.match(source, /gate\.current\.reset\(\)/);
+  assert.match(source, /onClick=\{handleBack\}/);
+  assert.match(source, /LOGIN_DISCOVERY_CAPACITY_LIMIT/);
+  assert.match(source, /setShowTenantSlug\(true\)/);
+  assert.match(source, /setForm\(previous => \(\{ \.\.\.previous, password: '' \}\)\)/);
+  assert.match(source, /onChange=\{set\('tenantSlug'\)\}/);
   assert.doesNotMatch(source, /localStorage|sessionStorage/);
 });
