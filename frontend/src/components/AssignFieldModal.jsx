@@ -5,6 +5,10 @@ import {
   campaignFieldAssignScope, createCampaignFieldAssignGate,
   prepareCampaignFieldAssignment, verifyAssignedCampaignField
 } from '../services/campaignFieldAssignSafety.js';
+import {
+  readCampaignFieldAssignRecovery, saveCampaignFieldAssignRecovery,
+  discardCampaignFieldAssignRecovery
+} from '../services/campaignFieldAssignRecoveryStore.js';
 
 const emptyForm = () => ({
   field_id: '', crop_type_id: '', crop_variety_id: '',
@@ -22,6 +26,7 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
   openRef.current = isOpen;
   const submitGate = useRef(null);
   if (!submitGate.current) submitGate.current = createCampaignFieldAssignGate();
+  const requestRef = useRef(null);
 
   const [optionsSnapshot, setOptionsSnapshot] = useState(null);
   const options = optionsSnapshot?.scope === authority && optionsSnapshot?.api === api
@@ -37,15 +42,52 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [error, setError] = useState('');
+  const [recoveryState, setRecoveryState] = useState(null);
+  const recovery = recoveryState?.scope === authority && recoveryState?.api === api
+    ? recoveryState : null;
+  const recoveryLoading = Boolean(isOpen && authority &&
+    (!recovery || recovery.phase === 'loading'));
+  const recoveryBlocked = Boolean(isOpen && authority && recovery?.phase === 'error');
 
   useEffect(() => {
+    let active = true;
     submitGate.current.reset();
+    requestRef.current = null;
     setFormSnapshot({ scope: authority, api, value: emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
     setOptionsSnapshot(null);
-    return () => { submitGate.current.reset(); };
+    setRecoveryState({ scope: authority, api,
+      phase: isOpen && authority ? 'loading' : 'idle' });
+    if (isOpen && authority) {
+      void readCampaignFieldAssignRecovery(authority).then(saved => {
+        if (!active || !openRef.current || scopeRef.current !== authority ||
+            apiRef.current !== api) return;
+        if (saved) {
+          requestRef.current = { scope: authority, api, body: saved.body };
+          setFormSnapshot({ scope: authority, api, value: {
+            field_id: saved.body.field_id, crop_type_id: saved.body.crop_type_id,
+            crop_variety_id: saved.body.crop_variety_id || '',
+            planting_date: saved.body.planting_date || '',
+            harvest_target_date: saved.body.harvest_target_date || '',
+            expected_yield: saved.body.expected_yield == null
+              ? '' : String(saved.body.expected_yield),
+            status: saved.body.status
+          } });
+          setSubmitStatus('uncertain');
+          setError('Existe una asignación pendiente de confirmar. Revisá los lotes de la campaña o reintentá el mismo envío. No se creó una solicitud nueva.');
+        }
+        setRecoveryState({ scope: authority, api, phase: 'ready' });
+      }).catch(err => {
+        if (!active || !openRef.current || scopeRef.current !== authority ||
+            apiRef.current !== api) return;
+        setRecoveryState({ scope: authority, api, phase: 'error' });
+        setError((err?.message || 'No se pudo leer el envío cifrado.') +
+          ' Se bloquearán nuevas asignaciones hasta revisar la recuperación.');
+      });
+    }
+    return () => { active = false; submitGate.current.reset(); requestRef.current = null; };
   }, [isOpen, authority, api]);
 
   useEffect(() => {
@@ -94,7 +136,8 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
     if (submitGate.current.isPending(authority)) return;
     onClose?.();
   };
-  const blocked = saving || submitStatus !== '' || submitGate.current.isBlocked(authority);
+  const blocked = saving || recoveryLoading || recoveryBlocked ||
+    submitStatus !== '' || submitGate.current.isBlocked(authority);
   const editable = Boolean(authority) && options?.phase === 'ready' && !blocked;
   const set = (key) => (event) => {
     if (!editable) return;
@@ -109,21 +152,10 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
     });
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (!isOpen || !authority || options?.phase !== 'ready') return;
-    let body;
-    try {
-      body = prepareCampaignFieldAssignment(form, fields, cropTypes, session?.tenant?.id);
-    } catch (err) {
-      setError(err?.message || 'Revisá los datos de asignación.');
-      return;
-    }
-    const ticket = submitGate.current.acquire(authority);
-    if (!ticket) return;
-    const requestApi = api;
+  const sendAssign = async (ticket, body, requestApi) => {
     const current = () => openRef.current && scopeRef.current === authority &&
-      apiRef.current === requestApi && submitGate.current.isCurrent(ticket);
+      apiRef.current === requestApi && submitGate.current.isCurrent(ticket) &&
+      requestRef.current?.body === body;
     setSaving(true);
     setError('');
     let confirmed = false;
@@ -131,19 +163,103 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
       const response = await requestApi.assignCampaignField(campaignId, body);
       if (!current()) return;
       verifyAssignedCampaignField(response, body, session?.tenant?.id, campaignId);
+      // Only a confirmed exact ACK retires the immutable local request.
+      // A failed IDB deletion leaves the original key available for replay.
+      const removed = await discardCampaignFieldAssignRecovery(authority, body.client_request_id);
+      if (!current()) return;
+      if (!removed) throw new Error('No se pudo retirar el acuse local.');
       submitGate.current.finish(ticket, 'confirmed');
       setSubmitStatus('confirmed');
       confirmed = true;
     } catch (err) {
       if (!current()) return;
-      // Once dispatched, transport errors can still follow a committed row.
       submitGate.current.finish(ticket, 'uncertain');
       setSubmitStatus('uncertain');
-      setError('No pudimos confirmar si el lote quedó asignado. Cerrá este formulario, actualizá la campaña y revisá antes de intentar otra vez.');
+      setError('No pudimos confirmar la asignación. Podés reintentar exactamente el mismo envío sin duplicarlo, o cerrar y revisar los lotes de esta campaña.');
     } finally {
       if (current()) setSaving(false);
     }
     if (confirmed && current()) onCreated?.();
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    if (!isOpen || !authority || recoveryLoading || recoveryBlocked ||
+        options?.phase !== 'ready') return;
+    let prepared;
+    try {
+      prepared = prepareCampaignFieldAssignment(form, fields, cropTypes, session?.tenant?.id);
+    } catch (err) {
+      setError(err?.message || 'Revisá los datos de asignación.');
+      return;
+    }
+    if (!globalThis.crypto || typeof crypto.randomUUID !== 'function') {
+      setError('El navegador no puede crear una clave segura. Usá HTTPS o localhost.');
+      return;
+    }
+    const ticket = submitGate.current.acquire(authority);
+    if (!ticket) return;
+    const body = Object.freeze({ ...prepared, client_request_id: crypto.randomUUID() });
+    requestRef.current = { scope: authority, api, body };
+    setSaving(true);
+    setError('');
+    try {
+      // Fail closed: never POST unless a non-extractable AES-GCM encrypted
+      // journal with the original request ID has been committed to IndexedDB.
+      await saveCampaignFieldAssignRecovery(authority, body);
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      void sendAssign(ticket, body, api);
+    } catch (err) {
+      if (!openRef.current || scopeRef.current !== authority ||
+          apiRef.current !== api || !submitGate.current.isCurrent(ticket)) return;
+      submitGate.current.finish(ticket, 'preflight-rejected');
+      requestRef.current = null;
+      setRecoveryState({ scope: authority, api, phase: 'error' });
+      setError((err?.message || 'No se pudo guardar la asignación cifrada.') +
+        ' No se envió ninguna solicitud. Cerrá y reabrí para revisar su estado local.');
+      setSaving(false);
+    }
+  };
+
+  const handleRetry = () => {
+    const saved = requestRef.current;
+    if (!saved || submitStatus !== 'uncertain' || saving ||
+        recoveryLoading || recoveryBlocked || saved.scope !== authority ||
+        saved.api !== api) return;
+    const ticket = submitGate.current.isBlocked(authority)
+      ? submitGate.current.retry(authority)
+      : submitGate.current.acquire(authority);
+    if (!ticket) return;
+    void sendAssign(ticket, saved.body, saved.api);
+  };
+
+  const handleDiscard = async () => {
+    const saved = requestRef.current;
+    if (!saved || submitStatus !== 'uncertain' || saving ||
+        recoveryLoading || recoveryBlocked || saved.scope !== authority ||
+        saved.api !== api || !window.confirm(
+          'La asignación pudo haberse guardado. Revisá primero los lotes de la campaña. ¿Descartar la recuperación y permitir otra asignación?')) return;
+    setSaving(true);
+    try {
+      const removed = await discardCampaignFieldAssignRecovery(
+        authority, saved.body.client_request_id);
+      if (!openRef.current || scopeRef.current !== authority || apiRef.current !== api) return;
+      if (!removed) throw new Error('El envío pendiente cambió en otra pestaña.');
+      submitGate.current.reset();
+      requestRef.current = null;
+      setFormSnapshot({ scope: authority, api, value: emptyForm() });
+      setSubmitStatus('');
+      setError('');
+    } catch (err) {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setError(err?.message || 'No se pudo descartar el acuse local.');
+      }
+    } finally {
+      if (openRef.current && scopeRef.current === authority && apiRef.current === api) {
+        setSaving(false);
+      }
+    }
   };
 
   const crop = cropTypes.find(item => item.id === form.crop_type_id);
@@ -163,6 +279,16 @@ export function AssignFieldModal({ isOpen, onClose, onCreated, campaignId, campa
         {dataMode !== 'live' && <p role="status">Vista demo. No se asignan lotes reales.</p>}
         {!authority && dataMode === 'live' && <p role="alert">Esta sesión no permite asignar lotes.</p>}
         {loading && <p role="status">Cargando lotes y cultivos…</p>}
+        {recoveryLoading && <p role="status">Comprobando asignaciones pendientes cifradas…</p>}
+        {recoveryBlocked && <p role="alert">La recuperación segura de asignaciones no está disponible. No se enviarán solicitudes nuevas.</p>}
+        {submitStatus === 'uncertain' && authority && (
+          <>
+            <button type="button" className="ghost-action" onClick={handleRetry}
+              disabled={saving || recoveryLoading || recoveryBlocked}>Reintentar el mismo envío</button>
+            <button type="button" className="ghost-action" onClick={handleDiscard}
+              disabled={saving || recoveryLoading || recoveryBlocked}>Descartar tras revisar la campaña</button>
+          </>
+        )}
         {optionsError && <div className="auth-error" role="alert">
           <span>{optionsError}</span>
           <button type="button" onClick={() => setReload(value => value + 1)}>Reintentar carga</button>
