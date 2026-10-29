@@ -73,6 +73,7 @@ jobs:
           node --test scripts/test/production-security-gate.test.mjs
           node --test scripts/test/focus-stress-config.test.mjs
           node --test scripts/test/postgis-browser-workflow.test.mjs
+          node --test scripts/test/pilot-ci-runner-compat.test.mjs
           node --test scripts/test/benchmark-review-queue.test.mjs
           node --test scripts/test/benchmark-review-queue-http.test.mjs
           node --check scripts/verify-frontend-headers.mjs
@@ -158,7 +159,9 @@ jobs:
   # runtime non-owner role. It runs alongside the static/RLS/restore gate so
   # browser installation or 2x12 focus cycles cannot exhaust its 20min budget.
   browser-postgis:
-    runs-on: ubuntu-latest
+    # Pinned Playwright 1.58.2 does not support ubuntu26.04-x64 (GitHub
+    # ubuntu-latest changed underneath the immutable browser test runner).
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
       postgres:
@@ -251,7 +254,9 @@ jobs:
 
 
   browser-offline:
-    runs-on: ubuntu-latest
+    # Pinned Playwright 1.58.2 does not support ubuntu26.04-x64 (GitHub
+    # ubuntu-latest changed underneath the immutable browser test runner).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -311,7 +316,9 @@ jobs:
           retention-days: 14
 
   production-images:
-    runs-on: ubuntu-latest
+    # Keep the validated Docker engine/export semantics for strict layer diffID
+    # parity; ubuntu26.04 changed the runner and failed the OCI bundle verifier.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       IMAGE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

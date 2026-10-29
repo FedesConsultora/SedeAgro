@@ -7,6 +7,7 @@ import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { assignedFieldIds } from '../scouting/scoutFieldScope.js';
 import { reserveCampaignCreate, completeCampaignCreate } from './createIdempotency.js';
+import { reserveCampaignFieldAssign, completeCampaignFieldAssign } from './fieldAssignIdempotency.js';
 
 export const campaignsRouter = Router();
 
@@ -52,7 +53,9 @@ const campaignFieldSchema = z.object({
   status: z.enum(['planned', 'active', 'harvested', 'closed']).default('planned')
 });
 
-const campaignFieldCreateSchema = campaignFieldSchema.refine(
+const campaignFieldCreateSchema = campaignFieldSchema.extend({
+  client_request_id: z.string().uuid().optional()
+}).refine(
   value => dateOrderValid(value.planting_date, value.harvest_target_date),
   { path: ['harvest_target_date'],
     message: 'La cosecha objetivo no puede ser anterior a la siembra.' }
@@ -125,6 +128,11 @@ campaignsRouter.post('/', requireCapability('campaigns.write'), validate(campaig
 }));
 
 campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write'), validate(campaignFieldCreateSchema), asyncHandler(async (req, res) => {
+  // The parent campaign and field must belong to the authenticated tenant
+  // even for a replay. A client UUID never grants cross-company access.
+  if (!z.string().uuid().safeParse(req.params.campaignId).success) {
+    throw new HttpError(422, 'Identificador de campaña inválido.', undefined, 'CAMPAIGN_ID_INVALID');
+  }
   const [campaign, field] = await Promise.all([
     Campaign.findOne({
       where: { id: req.params.campaignId, tenant_id: req.tenantId },
@@ -139,12 +147,28 @@ campaignsRouter.post('/:campaignId/fields', requireCapability('campaigns.write')
   ]);
   if (!campaign) throw new HttpError(404, 'Campaña no encontrada.', undefined, 'CAMPAIGN_NOT_FOUND');
   if (!field) throw new HttpError(404, 'Lote no encontrado.', undefined, 'CAMPAIGN_FIELD_NOT_FOUND');
+  res.set('Cache-Control', 'private, no-store');
+  const reservation = await reserveCampaignFieldAssign(req, campaign.id, req.body);
+  if (reservation.kind === 'replay') {
+    return res.status(200).json({ data: reservation.campaignField, replayed: true });
+  }
   await assertCropVarietyForCampaign(req, req.body.crop_type_id, req.body.crop_variety_id);
-  const campaignField = await CampaignField.create({
-    ...req.body,
-    campaign_id: req.params.campaignId
-  }, { transaction: req.dbTransaction });
-  res.status(201).json({ data: campaignField });
+  const { client_request_id: _clientRequestId, ...fieldInput } = req.body;
+  // The existing tenant+campaign+field unique index rejects a second
+  // assignment with another key. findOrCreate returns a scoped 409 instead
+  // of leaking a UNIQUE constraint as an unhelpful HTTP 500.
+  const [campaignField, created] = await CampaignField.findOrCreate({
+    where: { tenant_id: req.tenantId, campaign_id: campaign.id, field_id: field.id },
+    defaults: fieldInput,
+    transaction: req.dbTransaction
+  });
+  if (!created) {
+    throw new HttpError(409, 'El lote ya está asignado a esta campaña. Revisá el listado.',
+      undefined, 'CAMPAIGN_FIELD_ALREADY_ASSIGNED');
+  }
+  await completeCampaignFieldAssign(req, reservation, campaignField.id);
+  res.status(201).json({ data: campaignField,
+    ...(reservation.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 // All campaign-fields (for scouting run selectors etc.)
