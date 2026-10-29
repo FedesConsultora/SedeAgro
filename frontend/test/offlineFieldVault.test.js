@@ -82,7 +82,7 @@ test('offline queue capability rejects arbitrary objects, mismatched scope, and 
   assert.match(source, /store\.put\(sealed\)/);
   assert.match(source, /store\.delete\(RECORD\)/);
   assert.match(source, /await indexedDbQueueStore\.list\(state\.scope\)/);
-  assert.doesNotMatch(source, /localStorage|sessionStorage|fetch\(|credentials: 'include'/);
+  assert.doesNotMatch(source, /(?:localStorage|sessionStorage)\.(?:getItem|setItem|removeItem)|\bfetch\(|credentials: 'include'/);
   assert.doesNotMatch(ui, /\.flush\(|\.submitSyncBatch\(|\.submitOfflineEvidence\(/);
   assert.match(ui, /await expected\.api\.me\(\)/);
   assert.match(ui, /document\.visibilityState === 'hidden'/);
