@@ -71,7 +71,7 @@ async function hasOfflineFieldEnvelope(page) {
 async function prepareOfflineFieldEnvelope(page) {
   await page.getByRole('button', { name: 'Sync', exact: true }).click();
   await page.getByRole('heading', { name: 'Preparar recuperación sin conexión' }).waitFor();
-  await page.getByRole('textbox', { name: 'Frase local (no es tu contraseña del servidor)' })
+  await page.getByLabel('Frase local (no es tu contraseña del servidor)')
     .fill('Browser field recovery phrase 2026!');
   await page.getByRole('button', { name: 'Habilitar acceso offline (48 h)' }).click();
   await page.getByText('Acceso local preparado para 48 horas.', { exact: false }).waitFor();
@@ -332,6 +332,13 @@ try {
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: farms and campaigns reject live mock fallback after API 503');
 
+  // Prepare a REAL opt-in local recovery envelope for the current active
+  // admin account, before proving server logout with a blocked IDB deletion.
+  await prepareOfflineFieldEnvelope(page1);
+  await page1.getByRole('button', { name: 'Sesiones' }).click();
+  await page1.getByText('Esta sesión').waitFor();
+  console.log('PASS: real /auth/me enrollment persists encrypted vault before logout');
+
   // Second independent browser context signs in to the same tenant.
   const context2 = await browser.newContext();
   const page2 = await context2.newPage();
@@ -340,6 +347,12 @@ try {
   await page2.locator('#login-password').fill(password);
   await page2.locator('#login-submit').click();
   await page2.getByRole('button', { name: 'Sesiones' }).waitFor();
+  // Second active browser prepares its OWN encrypted offline envelope; remote
+  // revocation must clean it when a real authenticated API call returns 401.
+  await prepareOfflineFieldEnvelope(page2);
+  await page2.getByRole('button', { name: 'Sesiones' }).click();
+  await page2.getByText('Esta sesión').waitFor();
+
   await page1.getByRole('button', { name: 'Actualizar' }).click();
   await page1.getByText('Otra sesión activa').waitFor();
 
@@ -356,11 +369,67 @@ try {
   assert.equal(revoked, 401);
   console.log('PASS: UI remote revocation immediately invalidates other browser cookie');
 
+  const expiredResponse = page2.waitForResponse((res) =>
+    res.url().endsWith('/auth/sessions') && res.status() === 401);
+  await page2.getByRole('button', { name: 'Actualizar' }).click();
+  await expiredResponse;
+  await page2.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  await page2.waitForFunction(async () => {
+    const request = indexedDB.open('sedeagro-field-offline-vault', 1);
+    return new Promise((resolve) => {
+      request.onupgradeneeded = () =>
+        request.result.createObjectStore('offline-vault', { keyPath: 'id' });
+      request.onerror = () => resolve(false);
+      request.onsuccess = () => {
+        const db = request.result;
+        const tx = db.transaction('offline-vault', 'readonly');
+        const row = tx.objectStore('offline-vault').get('active');
+        let erased = false;
+        row.onsuccess = () => { erased = row.result === undefined; };
+        tx.oncomplete = () => { db.close(); resolve(erased); };
+        tx.onerror = () => { db.close(); resolve(false); };
+      };
+    });
+  }, null, { timeout: 10000 });
+  assert.equal(await hasOfflineFieldEnvelope(page2), false);
+  assert.equal((await context2.cookies()).some(item => item.name === 'sedeagro_session'), false,
+    'server revocation must remove the independently logged-in session cookie');
+  console.log('PASS: real revoked 401 retires the offline vault and hides private React views');
+
+  // Simulate a real IndexedDB deletion rejection ONLY for the vault store,
+  // without intercepting /auth/logout or changing its server response.
+  await page1.evaluate(() => {
+    const originalDelete = IDBObjectStore.prototype.delete;
+    window.__vaultDeleteBlocked = false;
+    IDBObjectStore.prototype.delete = function (key) {
+      if (this.name === 'offline-vault' && key === 'active') {
+        window.__vaultDeleteBlocked = true;
+        throw new DOMException('Synthetic local deletion error', 'UnknownError');
+      }
+      return originalDelete.call(this, key);
+    };
+  });
+  const logoutAck = page1.waitForResponse(res =>
+    res.url().endsWith('/auth/logout') && res.request().method() === 'POST');
+
   await page1.getByRole('navigation', { name: 'Principal' })
     .getByRole('button', { name: 'Cerrar sesión' }).click();
+  const logoutResponse = await logoutAck;
+  assert.equal(logoutResponse.status(), 200, await logoutResponse.text());
   await page1.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
+  assert.equal(await page1.evaluate(() => window.__vaultDeleteBlocked), true,
+    'the IndexedDB failure branch must really have executed');
+  await page1.getByText('Se cerró la sesión del servidor, pero no se pudo borrar el acceso offline local.', {
+    exact: false
+  }).waitFor();
+  assert.equal(await hasOfflineFieldEnvelope(page1), true,
+    'the encrypted envelope may survive failed deletion and requires device cleanup');
+  assert.equal(await page1.evaluate(() => localStorage.getItem('sedeagro.tenantHint')), null);
   assert.equal((await context1.cookies()).some((item) => item.name === 'sedeagro_session'), false);
-  console.log('PASS: UI logout clears HttpOnly cookie and returns to login');
+  const anonymous = await page1.evaluate(async () =>
+    (await fetch('/api/v1/auth/me', { credentials: 'include' })).status);
+  assert.equal(anonymous, 401, 'server session must remain revoked after local IDB failure');
+  console.log('PASS: confirmed server logout hides private views and warns when vault IDB deletion fails');
   await context2.close();
   await context1.close();
 } finally {
