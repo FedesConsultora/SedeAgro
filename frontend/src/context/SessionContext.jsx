@@ -121,12 +121,14 @@ export function SessionProvider({ children }) {
 
     // Lock any in-memory offline capability first. If removing the encrypted
     // envelope fails, still close the session and warn about device cleanup.
-    const cleared = await retireOfflineFieldVault();
+    const retirement = retireOfflineFieldVault();
+    // Neither an IndexedDB failure nor a slow storage transaction may keep
+    // the revoked user's private React views open after server ACK.
     setSession(null);
     setDataModeState('mock');
     localStorage.setItem('sedeagro.dataMode', 'mock');
     tabSyncRef.current?.publish();
-    if (!cleared) {
+    if (!(await retirement)) {
       showError({ message: 'Se cerró la sesión del servidor, pero no se pudo borrar el acceso offline local. Eliminá los datos del sitio antes de compartir este dispositivo.',
         status: 0 });
     }
