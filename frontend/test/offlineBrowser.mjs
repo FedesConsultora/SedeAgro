@@ -840,7 +840,37 @@ try {
   await prodPage.getByRole('button', {
     name: 'Guardar sólo en este dispositivo'
   }).click();
-  await prodPage.getByText('new-observation-after-offline-full-reopen').waitFor();
+  // A textarea can display newly typed text BEFORE the async IndexedDB
+  // transaction commits. Never navigate/reload until the UI confirms that
+  // the encrypted write was durably acknowledged.
+  await prodPage.getByText(/Observación cifrada en el dispositivo\. No se envió al servidor/).waitFor();
+  await prodPage.locator('li').filter({
+    hasText: 'new-observation-after-offline-full-reopen'
+  }).waitFor();
+  const committedBeforeReload = await prodPage.evaluate(async () => {
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('sedeagro-offline-sync', 2);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const scope = 'ad000000-0000-4000-8000-000000000001:' +
+      'ad000000-0000-4000-8000-000000000002';
+    const rows = await new Promise((resolve, reject) => {
+      const request = db.transaction('pending-observations', 'readonly')
+        .objectStore('pending-observations').index('scope').getAll(
+          IDBKeyRange.only(scope));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    db.close();
+    return {
+      count: rows.length,
+      sealed: rows.every(row => row.sealed?.version === 1),
+      plaintext: rows.some(row => JSON.stringify(row).includes('new-observation-after-offline-full-reopen'))
+    };
+  });
+  assert.deepEqual(committedBeforeReload, { count: 2, sealed: true, plaintext: false },
+    'MOB-05 must not reload until BOTH AES-GCM records committed in IndexedDB');
   assert.equal(await prodPage.locator('li').filter({
     hasText: 'real-browser-cold-start-private'
   }).count(), 1);
