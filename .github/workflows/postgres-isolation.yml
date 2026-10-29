@@ -635,7 +635,9 @@ jobs:
     # Only integrated main artifacts are available; no staging or prod access.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [production-images, attest-oci-bundle]
-    runs-on: ubuntu-latest
+    # Import the exact signed producer TAR using the same validated Docker
+    # daemon family. ubuntu-latest moved to 26.04 and rejects image layers.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       IMAGE_SHA: ${{ github.sha }}

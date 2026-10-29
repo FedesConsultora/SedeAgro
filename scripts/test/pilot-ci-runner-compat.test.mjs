@@ -18,8 +18,8 @@ function job(name) {
   return workflow.slice(start + 1, match ? match.index : undefined);
 }
 
-test('three browser and OCI release gates pin a supported GitHub runner', () => {
-  for (const name of ['browser-postgis', 'browser-offline', 'production-images']) {
+test('all browser and OCI producer/consumer gates pin a compatible GitHub runner', () => {
+  for (const name of ['browser-postgis', 'browser-offline', 'production-images', 'offline-image-import']) {
     const source = job(name);
     assert.match(source, /^    runs-on: ubuntu-24\.04$/m, name);
     assert.doesNotMatch(source, /runs-on: ubuntu-latest/, name);
@@ -31,6 +31,7 @@ test('runner pinning cannot bypass the existing Chromium or OCI verification', (
   const chrome = job('browser-postgis');
   const offline = job('browser-offline');
   const images = job('production-images');
+  const importer = job('offline-image-import');
   assert.match(chrome, /npx playwright install chromium --with-deps/);
   assert.match(chrome, /for pass in 1 2; do/);
   assert.match(chrome, /SEDEAGRO_FOCUS_STRESS_CYCLES=12 node scripts\/acceptance-browser-cookie\.mjs/);
@@ -43,4 +44,11 @@ test('runner pinning cannot bypass the existing Chromium or OCI verification', (
   assert.match(images, /node scripts\/verify-frontend-image-parity\.mjs --sha "\$IMAGE_SHA"/);
   assert.match(images, /node scripts\/oci-release-bundle\.mjs verify --sha "\$IMAGE_SHA"/);
   assert.match(images, /node scripts\/verify-image-security\.mjs --mode verify/);
+  assert.match(importer, /needs: \[production-images, attest-oci-bundle\]/);
+  assert.match(importer, /node scripts\/oci-release-bundle\.mjs verify --sha "\$IMAGE_SHA"/);
+  assert.match(importer, /node scripts\/verify-oci-signed-provenance\.mjs --sha "\$IMAGE_SHA"/);
+  assert.match(importer, /node scripts\/verify-image-security\.mjs --mode verify-signed/);
+  assert.match(importer, /node scripts\/ci-oci-import-rehearsal\.mjs --mode fresh/);
+  assert.match(importer, /node scripts\/ci-oci-compose-parity\.mjs --sha "\$IMAGE_SHA"/);
+  assert.match(importer, /node scripts\/ci-oci-container-creation\.mjs --sha "\$IMAGE_SHA"/);
 });
