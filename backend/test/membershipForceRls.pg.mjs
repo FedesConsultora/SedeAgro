@@ -147,6 +147,61 @@ test('FORCE RLS prevents global membership reads/writes and supports two-company
     assert.equal(afterBlock.body.tenant.id, a);
     const cannotIssue = await login(both.email, { tenantId: b });
     assert.equal(cannotIssue.status, 403);
+    // The true runtime limit is a catalog threshold, not the number of
+    // memberships for one account. A pilot that reaches 251+ eligible
+    // companies must guide users toward the indexed one-tenant selector.
+    // Owner-only fixture seed; the HTTP handler still runs as nonowner with
+    // FORCE RLS and never gets an unrestricted memberships privilege.
+    const added = (await owner.query(`
+      INSERT INTO tenants(plan_id,name,slug,status)
+      SELECT $1::uuid, 'Capacity fixture ' || g,
+             'member-cap-' || $2::text || '-' || g, 'active'
+      FROM generate_series(1,251) AS g
+      RETURNING id
+    `, [plan.id, suffix])).rows;
+    assert.equal(added.length, 251);
+    tenants.push(...added.map(row => row.id));
+    const overCapacity = await login(both.email);
+    assert.equal(overCapacity.status, 503, JSON.stringify(overCapacity.body));
+    assert.equal(overCapacity.body.error.code, 'LOGIN_DISCOVERY_CAPACITY_LIMIT');
+    assert.equal(overCapacity.body.memberships, undefined,
+      'capacity rejection must not expose any partial company list');
+    assert.equal(overCapacity.body.token, undefined);
+
+    const directA = await login(both.email, {
+      tenantSlug: 'member-force-a-' + suffix
+    });
+    assert.equal(directA.status, 200, JSON.stringify(directA.body));
+    assert.equal(directA.body.tenant.id, a);
+    assert.equal(directA.body.tenant.slug, 'member-force-a-' + suffix);
+    assert.equal(directA.body.membership.roleCode, 'tenant_admin');
+
+    const directBlocked = await login(both.email, {
+      tenantSlug: 'member-force-b-' + suffix
+    });
+    assert.equal(directBlocked.status, 403,
+      'explicit slug must never resurrect a blocked membership');
+    assert.equal(directBlocked.body.token, undefined);
+    const foreignSelector = await login(onlyB.email, {
+      tenantSlug: 'member-force-a-' + suffix
+    });
+    assert.equal(foreignSelector.status, 403,
+      'a password-confirmed account cannot login to a company with no membership');
+    assert.equal(foreignSelector.body.token, undefined);
+    const exactB = await login(onlyB.email, {
+      tenantSlug: 'member-force-b-' + suffix
+    });
+    assert.equal(exactB.status, 200);
+    assert.equal(exactB.body.tenant.id, b);
+    assert.equal(exactB.body.membership.roleCode, 'scout');
+
+    const invalidPassword = await fetch(url + '/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: both.email, password: 'not-the-password' })
+    });
+    assert.equal(invalidPassword.status, 401,
+      'global account/password checks must precede catalog capacity failure');
+
   } finally {
     if (ownerReady) {
       try {
