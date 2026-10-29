@@ -304,6 +304,68 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
     check(await request('/scouting/runs/' + run.id, {
       actor: outsider
     }), 404, 'foreign tenant cannot read run');
+    // The invited real scout, not an owner-SQL synthetic principal, now
+    // persists the first observation with authored WGS84 GPS via the SAME
+    // offline batch API used by the PWA. A lost HTTP ACK replays exactly once.
+    const gps = { type: 'Point', coordinates: [-57.9521, -34.9205] };
+    const observationBatch = {
+      client_id: 'sedeagro-web-offline-v1',
+      idempotency_key: randomUUID(),
+      operations: [{
+        entity_type: 'scouting_observation', entity_client_id: randomUUID(),
+        operation: 'create', payload: {
+          scouting_run_id: run.id, observation_type: 'pest',
+          severity: 'high', observed_at: new Date().toISOString(),
+          notes: 'HTTP integrated first field scouting concern ' + suffix,
+          point: gps
+        }
+      }]
+    };
+    const observationResult = check(await request('/sync/batches', {
+      actor: scout, method: 'POST', body: observationBatch
+    }), 201, 'invited scout submits offline GPS batch');
+    const observationId = observationResult.data.operations[0].result.observation_id;
+    assert.ok(observationId, 'offline batch must persist an observation id');
+    const observationReplay = check(await request('/sync/batches', {
+      actor: scout, method: 'POST', body: observationBatch
+    }), 200, 'lost ACK exact offline replay');
+    assert.equal(observationReplay.replayed, true);
+    assert.equal(observationReplay.data.operations[0].result.observation_id, observationId);
+    check(await request('/sync/batches', {
+      actor: contractor, method: 'POST', body: observationBatch
+    }), 403, 'contractor cannot replay scout offline batch');
+    check(await request('/scouting/runs/' + run.id, {
+      actor: contractor
+    }), 403, 'contractor cannot read scouting run');
+
+    // JPEG fixture is intentionally minimal and non-personal; its bytes are
+    // stored and returned by the actual private PostGIS evidence endpoint.
+    const imageBytes = Buffer.from('ffd8ffdb0000000000', 'hex');
+    const observationFile = {
+      kind: 'photo', mime_type: 'image/jpeg',
+      original_name: 'cultivo-evidencia.jpg',
+      content_base64: imageBytes.toString('base64'),
+      client_upload_id: randomUUID()
+    };
+    const privateObservation = check(await request(
+      '/scouting/observations/' + observationId + '/evidence', {
+        actor: scout, method: 'POST', body: observationFile
+      }), 201, 'scout uploads private JPEG').data;
+    assert.ok(privateObservation.id);
+    const uploadReplay = check(await request(
+      '/scouting/observations/' + observationId + '/evidence', {
+        actor: scout, method: 'POST', body: observationFile
+      }), 200, 'lost photo ACK replay').data;
+    assert.equal(uploadReplay.id, privateObservation.id);
+    check(await request('/scouting/evidence/' + privateObservation.id + '/content', {
+      actor: outsider
+    }), 404, 'foreign company cannot read private scouting file');
+    const photoRead = check(await request(
+      '/scouting/evidence/' + privateObservation.id + '/content', {
+        actor: scout
+      }), 200, 'scout reopens private photograph').data;
+    assert.equal(photoRead.content_base64, observationFile.content_base64);
+
 
     // Producer cannot view the field before an explicit grant and cannot
     // acquire campaign/scouting privileges just by having a cookie.
