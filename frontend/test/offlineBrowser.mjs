@@ -757,7 +757,7 @@ try {
     membership: { id: coldMember, roleCode: 'scout', status: 'active' },
     entitlements: ['scouting', 'gis', 'org']
   };
-  await prodPage.route(/\\/api(?:\\/v1)?\\/auth\\/me$/, route => route.fulfill({
+  await prodPage.route(/\/api(?:\/v1)?\/auth\/me$/, route => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify(coldProfile)
   }));
   await prodPage.evaluate(id => localStorage.setItem('sedeagro.tenantHint', id), coldTenant);
