@@ -158,7 +158,9 @@ jobs:
   # runtime non-owner role. It runs alongside the static/RLS/restore gate so
   # browser installation or 2x12 focus cycles cannot exhaust its 20min budget.
   browser-postgis:
-    runs-on: ubuntu-latest
+    # Pinned Playwright 1.58.2 does not support ubuntu26.04-x64 (GitHub
+    # ubuntu-latest changed underneath the immutable browser test runner).
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
       postgres:
@@ -251,7 +253,9 @@ jobs:
 
 
   browser-offline:
-    runs-on: ubuntu-latest
+    # Pinned Playwright 1.58.2 does not support ubuntu26.04-x64 (GitHub
+    # ubuntu-latest changed underneath the immutable browser test runner).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
