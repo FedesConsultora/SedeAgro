@@ -7,6 +7,7 @@ import { guidanceForDraft, queueSummary } from '../services/offlineConflictGuida
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { browserStorageStatus, requestDurableStorage } from '../services/offlineStorageStatus.js';
 import { OfflineReconciliationPanel } from '../components/OfflineReconciliationPanel.jsx';
+import { OfflineFieldSetup } from '../components/OfflineFieldWorkspace.jsx';
 import { filterSyncRunDrafts, filterSyncRunReceipts, resolveSyncRunFocus } from '../services/syncRunFocus.js';
 import {
   syncReceiptPresentationScope, visibleSyncReceiptRows, checkedSyncReceiptRows
@@ -257,6 +258,8 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
 
   return (
     <div className="page-grid">
+      {dataMode === 'live' && session?.authenticated && navigator.onLine !== false &&
+        <OfflineFieldSetup api={api} session={session} />}
       <section className="page-heading">
         <div>
           <span className="eyebrow">Operaciones de campo</span>
