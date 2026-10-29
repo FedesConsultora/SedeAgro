@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { API_URL, createApiClient } from '../services/api.js';
 import { offlineQueue } from '../services/offlineQueue.js';
 import { clearOfflineFieldVault, lockOfflineFieldVault } from '../services/offlineFieldVault.js';
+import { retireOfflineFieldVault } from '../services/offlineVaultRetirement.js';
 import { QUEUE_EVENT, sessionScope } from '../services/offlineSyncModel.js';
 import { isCurrentSessionExpiry } from '../services/sessionExpiryScope.js';
 import { createSessionTabSync, shouldRecheckOnForeground } from '../services/sessionTabSync.js';
@@ -107,23 +108,29 @@ export function SessionProvider({ children }) {
   };
 
 
-  // Revoke server-side first. If the network fails we do not claim the
-  // session has ended; encrypted local offline drafts are never deleted.
+  // A server-confirmed logout is authoritative. IndexedDB may be blocked,
+  // but that must not leave a revoked cookie session visible in React.
   const logout = async () => {
     try {
       await api.logout();
-      // Revoking server auth must also retire the optional local access ticket;
-      // do NOT delete encrypted observation drafts themselves.
-      await clearOfflineFieldVault();
-      lockOfflineFieldVault();
-      void clearOfflineFieldVault().catch(() => {});
-      setSession(null);
-      setDataModeState('mock');
-      localStorage.setItem('sedeagro.dataMode', 'mock');
-      tabSyncRef.current?.publish();
     } catch (error) {
       showError({ message: 'No se pudo cerrar la sesión en el servidor. Reintentá cuando tengas conexión.',
         status: error?.status || 0 });
+      return;
+    }
+
+    // Lock any in-memory offline capability first. If removing the encrypted
+    // envelope fails, still close the session and warn about device cleanup.
+    const retirement = retireOfflineFieldVault();
+    // Neither an IndexedDB failure nor a slow storage transaction may keep
+    // the revoked user's private React views open after server ACK.
+    setSession(null);
+    setDataModeState('mock');
+    localStorage.setItem('sedeagro.dataMode', 'mock');
+    tabSyncRef.current?.publish();
+    if (!(await retirement)) {
+      showError({ message: 'Se cerró la sesión del servidor, pero no se pudo borrar el acceso offline local. Eliminá los datos del sitio antes de compartir este dispositivo.',
+        status: 0 });
     }
   };
 
@@ -249,6 +256,14 @@ export function SessionProvider({ children }) {
       // Never let a delayed 401 from an old user, tenant or cookie generation
       // sign out the currently active session.
       if (!isCurrentSessionExpiry(event?.detail, sessionRef.current, authEpochRef.current)) return;
+      // A stale 401 cannot revoke a newer login. A genuine current-session
+      // expiry must retire the local unlock envelope as well as the React view.
+      void retireOfflineFieldVault().then((cleared) => {
+        if (!cleared) showError({
+          message: 'La sesión expiró, pero no se pudo borrar el acceso offline local. Eliminá los datos del sitio antes de compartir este dispositivo.',
+          status: 0
+        });
+      });
       setSession(null);
       setDataModeState('mock');
       localStorage.setItem('sedeagro.dataMode', 'mock');
