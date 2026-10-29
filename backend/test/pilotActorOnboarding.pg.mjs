@@ -21,7 +21,7 @@ const { createApp } = await import('../src/app.js');
 const { sequelize } = await import('../src/core/db.js');
 const { isSafeRuntimeDbRole } = await import('../src/core/tenantDbSafety.js');
 
-test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, campaign and assigned run', async t => {
+test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contractor -> independent review -> reports', async t => {
   const owner = new pg.Client({ connectionString: ownerUrl });
   const runtime = new pg.Client({ connectionString: runtimeUrl });
   const server = createApp().listen(0, '127.0.0.1');
@@ -37,6 +37,8 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
   const password = 'TestPilotActorStrong2026!';
   const scoutPassword = 'ScoutFieldSecure2026!';
   const producerPassword = 'ProducerFieldSecure2026!';
+  const contractorPassword = 'ContractorFieldSecure2026!';
+  const coordinatorPassword = 'CoordinatorFieldSecure2026!';
   let ownerReady = false, runtimeReady = false;
 
   async function request(path, { method = 'GET', actor, body,
@@ -173,6 +175,15 @@ test('ENT-01/03 -> SC-01: real founder registration, invitations, roles, GIS, ca
     const scout = await inviteAndAccept(admin, 'scout', 'Real Field Scout', scoutPassword);
     const producer = await inviteAndAccept(admin, 'producer_viewer',
       'Real Producer', producerPassword);
+    const contractor = await inviteAndAccept(admin, 'contractor',
+      'Real Contractor', contractorPassword);
+    const coordinator = await inviteAndAccept(admin, 'agronomic_coordinator',
+      'Real Coordinator', coordinatorPassword);
+    assert.equal(new Set([admin.user, scout.user, producer.user,
+      contractor.user, coordinator.user]).size, 5,
+      'reviewer and executor must never be the same actor');
+    check(await request('/auth/me', { actor: contractor }), 200,
+      'fresh persisted contractor session');
 
     // A valid session still cannot mutate a cookie-authenticated endpoint
     // without a non-simple CSRF request header. There must be no side effect.
