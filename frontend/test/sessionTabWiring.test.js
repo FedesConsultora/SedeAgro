@@ -41,9 +41,9 @@ test('server-confirmed logout closes React and broadcasts despite a failed Index
   assert.match(logout, /await api\.logout\(\)/);
   assert.match(logout, /catch \(error\) \{[\s\S]*?return;/,
     'failed server logout must not falsely claim a completed logout');
-  assert.match(logout, /const cleared = await retireOfflineFieldVault\(\);[\s\S]*setSession\(null\);/);
+  assert.match(logout, /const retirement = retireOfflineFieldVault\(\);[\s\S]*setSession\(null\);/);
   assert.match(logout, /setSession\(null\);[\s\S]*tabSyncRef\.current\?\.publish\(\);/);
-  assert.match(logout, /if \(!cleared\) \{[\s\S]*showError/);
+  assert.match(logout, /if \(!\(await retirement\)\) \{[\s\S]*showError/);
   assert.doesNotMatch(logout, /await clearOfflineFieldVault\(\)/,
     'a storage failure must not be caught as an unsuccessful server logout');
 });
