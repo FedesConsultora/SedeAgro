@@ -100,14 +100,15 @@ test('suspension after public login discovery cannot mint a resurrectable tenant
     // the Sequelize SELECT has returned active membership + tenant, perform an
     // actual platform suspension as another HTTP transaction. No fixed sleeps,
     // timers or reliance on network scheduling.
-    const original=Membership.findAll;
+    const original=Membership.findOne;
     let intervened=false;
-    Membership.findAll=async function(options) {
-      const rows=await original.call(this,options);
-      if(!intervened && options?.where?.user_id===worker.id &&
+    Membership.findOne=async function(options) {
+      const row=await original.call(this,options);
+      if(!intervened && row && options?.where?.tenant_id===target &&
+          options?.where?.user_id===worker.id &&
           options?.where?.status==='active') {
         intervened=true;
-        assert.ok(rows.some(m=>m.tenant_id===target&&m.Tenant.status==='active'));
+        assert.equal(row.tenant_id,target);
         const suspended=await call('/platform/tenants/'+target,{
           method:'PATCH',token:adminToken,tenant:home,
           body:{status:'suspended'}
@@ -116,11 +117,11 @@ test('suspension after public login discovery cannot mint a resurrectable tenant
         assert.equal(suspended.body.revokedSessions,0,
           'fixture suspends before any worker session is issued');
       }
-      return rows;
+      return row;
     };
     let staleLogin;
     try { staleLogin=await login(worker,true); }
-    finally { Membership.findAll=original; }
+    finally { Membership.findOne=original; }
     assert.equal(intervened,true);
     assert.equal(staleLogin.status,403,JSON.stringify(staleLogin.body));
     assert.equal(staleLogin.body.token,undefined);

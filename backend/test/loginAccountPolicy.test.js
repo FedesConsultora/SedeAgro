@@ -17,7 +17,7 @@ test('public tenant selection requires global status after password and before m
   const login = src.slice(src.indexOf("authPublicRouter.post('/login'"),
     src.indexOf("authScopedRouter.post('/logout'"));
   const checked = login.indexOf('canIssueLoginForGlobalAccount(user)');
-  const listing = login.indexOf('const memberships = await Membership.findAll');
+  const listing = login.indexOf('const memberships = await discoverLoginMemberships(user.id');
   const issued = login.indexOf('issueTenantSession(user, selectedMembership, transaction)');
   assert.ok(checked > 0 && listing > checked && issued > listing,
     'global user status must be enforced before public tenant choices and JWT session');
