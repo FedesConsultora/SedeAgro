@@ -44,6 +44,41 @@ async function waitUntil(url) {
   }
   throw new Error('Timed out waiting for ' + url);
 }
+// Inspect only whether the optional encrypted identity envelope still exists.
+// Never expose ciphertext, decrypted actor IDs or local passphrases in logs.
+async function hasOfflineFieldEnvelope(page) {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open('sedeagro-field-offline-vault', 1);
+    request.onerror = () => reject(request.error);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('offline-vault', { keyPath: 'id' });
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction('offline-vault', 'readonly');
+      let sealed = false;
+      const row = tx.objectStore('offline-vault').get('active');
+      row.onsuccess = () => {
+        sealed = row.result?.ciphertext instanceof ArrayBuffer &&
+          row.result?.iv?.length === 12 && row.result?.salt?.length === 16;
+      };
+      tx.oncomplete = () => { db.close(); resolve(sealed); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  }));
+}
+
+async function prepareOfflineFieldEnvelope(page) {
+  await page.getByRole('button', { name: 'Sync', exact: true }).click();
+  await page.getByRole('heading', { name: 'Preparar recuperación sin conexión' }).waitFor();
+  await page.getByRole('textbox', { name: 'Frase local (no es tu contraseña del servidor)' })
+    .fill('Browser field recovery phrase 2026!');
+  await page.getByRole('button', { name: 'Habilitar acceso offline (48 h)' }).click();
+  await page.getByText('Acceso local preparado para 48 horas.', { exact: false }).waitFor();
+  assert.equal(await hasOfflineFieldEnvelope(page), true,
+    'an opt-in recovery envelope must be durably committed before revocation testing');
+}
+
 const random = randomUUID().replaceAll('-', '').slice(0, 12);
 const email = `browser-${random}@example.test`;
 const slug = `browser-session-${random}`;
