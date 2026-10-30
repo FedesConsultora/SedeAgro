@@ -78,7 +78,9 @@ test('UI blocks repeat POST while confirmation is uncertain and uses an authoriz
   assert.match(ui, /await verifyInterruptedReview\(pending\)/);
   assert.match(ui, /reconcileReviewReceipt\(response, \{/);
   assert.match(ui, /needsReviewReceiptLookup\(err\)/);
-  assert.match(ui, /\|\| pendingReview\) return/);
+  assert.match(ui, /\|\| pendingReview \|\| reviewInFlight\.current\) return/);
+  assert.match(ui, /reviewInFlight\.current = true/);
+  assert.match(ui, /reviewInFlight\.current = false/);
   assert.match(ui, /disabled=\{busy \|\| Boolean\(pendingReview\)\}/);
   assert.match(ui, /Comprobar revisión en servidor/);
   assert.match(ui, /No se volvió a enviar/i);
