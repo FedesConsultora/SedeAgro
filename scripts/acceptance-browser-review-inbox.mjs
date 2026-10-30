@@ -823,6 +823,95 @@ try {
   assert.equal(await executionDrawer.count(),0,'Execution drawer must release the sidebar');
   console.log('PASS: real execution POST 201 COMMIT + lost ACK -> authorized GET reconciles, exactly one report and audit without repeat POST');
 
+  // Real two-person acceptance: an authenticated reviewer clicks, the server
+  // COMMITS the decision and audit, but only the browser HTTP ACK is lost.
+  // A temporarily unavailable authorized GET leaves the user uncertain; an
+  // explicit SAME-UUID retry must return 200 replayed without a second event.
+  const reviewTitle = 'Browser review ACK lost ' + token;
+  const reviewOrder = (await admin.query(`
+    INSERT INTO work_orders
+      (tenant_id,field_id,requested_by,type,status,title,approved_at)
+    VALUES ($1,$2,$3,'inspection','in_progress',$4,now()-interval '2 hours')
+    RETURNING id
+  `,[ownerA.tenant.id,field,ownerA.user.id,reviewTitle])).rows[0].id;
+  const reviewReport = (await admin.query(`
+    INSERT INTO work_order_executions
+      (tenant_id,work_order_id,submitted_by,started_at,finished_at,
+       worked_area_hectares,result_summary)
+    VALUES($1,$2,$3,now()-interval '1 hour',now()-interval '30 minutes',
+      1.25,'Inspección reportada por un segundo administrador.')
+    RETURNING id
+  `,[ownerA.tenant.id,reviewOrder,extraAuthor])).rows[0].id;
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
+  const reviewDrawer = page.getByRole('dialog',{name:reviewTitle});
+  const checkSection = reviewDrawer.getByRole('group',{name:/Controles de revisión/});
+  await checkSection.waitFor();
+  const checkboxes = checkSection.locator('input[type="checkbox"]');
+  assert.equal(await checkboxes.count(),4);
+  for (let i=0; i<4; i++) await checkboxes.nth(i).check();
+  await checkSection.getByRole('combobox').selectOption('no_files');
+  let reviewPostCount = 0;
+  let originalReviewBody;
+  const reviewEndpoint = '**/api/v1/work-orders/' + reviewOrder + '/executions/' + reviewReport + '/review';
+  const detailEndpoint = '**/api/v1/work-orders/' + reviewOrder;
+  await page.route(reviewEndpoint,async route=>{
+    reviewPostCount++;
+    originalReviewBody = route.request().postDataJSON();
+    assert.match(originalReviewBody.client_request_id,/^[0-9a-f-]{36}$/);
+    assert.equal(originalReviewBody.decision,'verified');
+    const actual = await route.fetch();
+    assert.equal(actual.status(),200,await actual.text());
+    assert.equal((await actual.json()).replayed,false);
+    await route.abort('failed'); // Drop only the browser ACK after real COMMIT.
+  },{times:1});
+  // Force only the next authorized GET to fail, never fake a successful reply.
+  await page.route(detailEndpoint,route=>route.fulfill({
+    status:503,contentType:'application/json',
+    body:JSON.stringify({error:{message:'Sesión de verificación temporalmente no disponible'}})
+  }),{times:1});
+  page.once('dialog',dialog=>void dialog.accept());
+  await reviewDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
+  const retryReview=reviewDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
+  await retryReview.waitFor();
+  assert.equal(reviewPostCount,1,'There must be no automatic second review POST');
+  const retryReply=page.waitForResponse(response=>
+    response.url().endsWith('/work-orders/'+reviewOrder+'/executions/'+reviewReport+'/review') &&
+    response.request().method()==='POST' && response.status()===200);
+  await retryReview.click();
+  const replayResponse=await retryReply;
+  const replayBody=await replayResponse.json();
+  assert.equal(replayBody.replayed,true,'The real backend must acknowledge the first persisted review');
+  assert.equal(replayBody.data.id,reviewReport);
+  await reviewDrawer.getByText('Revisado por coordinación').waitFor();
+  const reviewRows=(await admin.query(`
+    SELECT review_status,reviewed_by,review_checklist
+    FROM work_order_executions WHERE tenant_id=$1 AND id=$2
+  `,[ownerA.tenant.id,reviewReport])).rows;
+  assert.equal(reviewRows.length,1);
+  assert.equal(reviewRows[0].review_status,'verified');
+  assert.equal(reviewRows[0].reviewed_by,ownerA.user.id);
+  assert.equal(reviewRows[0].review_checklist.evidence_basis,'no_files');
+  const reviewAudits=(await admin.query(`
+    SELECT count(*)::int AS count FROM audit_events
+    WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'
+  `,[ownerA.tenant.id,reviewOrder])).rows[0].count;
+  const reviewReceipts=(await admin.query(`
+    SELECT count(*)::int AS count FROM work_order_execution_review_requests
+    WHERE tenant_id=$1 AND work_order_id=$2 AND reviewed_by=$3 AND client_request_id=$4
+  `,[ownerA.tenant.id,reviewOrder,ownerA.user.id,
+    originalReviewBody.client_request_id])).rows[0].count;
+  assert.equal(reviewAudits,1,'Lost ACK + manual replay must create only one audit');
+  assert.equal(reviewReceipts,1,'Durable UUID receipt must be recorded once');
+  assert.equal(reviewPostCount,1,'Only first POST is intercepted; browser explicitly retried once');
+  await reviewDrawer.getByRole('button',{name:'Cerrar '+reviewTitle}).click();
+  await page.unroute(detailEndpoint);
+  await page.unroute(reviewEndpoint);
+  console.log('PASS: authentic two-person review POST COMMIT + lost ACK + temporary GET 503 + explicit same-UUID 200 replay, one audit and receipt');
+
   // Final independent API benchmark after all UI scenarios, so adding 5000
   // synthetic orders cannot change the earlier deterministic 50/61 assertions.
   // The browser's REAL HttpOnly cookie is forwarded by Playwright APIContext.
