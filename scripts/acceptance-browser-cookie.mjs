@@ -235,9 +235,7 @@ try {
   await recoveryCampaignDialog.waitFor({ state: 'detached' });
   assert.equal(replayCount, 1, 'restoration must issue one explicit same-key POST only');
   const confirmedCampaign = page1.getByRole('button', {
-    name: new RegExp('Campaña ' + campaignName.replace(/[.*+?^${}()|[\]\\]/g, '\\  console.log('PASS: browser restores cookie session and renders current device');
-
-  // P0 #222:') + ', mostrar lotes')
+    name: 'Campaña ' + campaignName + ', mostrar lotes'
   });
   await confirmedCampaign.waitFor();
   assert.equal(await confirmedCampaign.count(), 1, 'list contains one campaign, never a duplicate');
