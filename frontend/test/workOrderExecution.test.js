@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   executionReports, canDeclareExecution, canReviewExecutionReport,
-  toExecutionTimestamp, validatedExecutionResponse
+  toExecutionTimestamp, buildExecutionDraft, validatedExecutionResponse
 } from '../src/services/workOrderExecution.js';
 
 const report = (status, by = 'worker') => ({ id: 'report1', work_order_id: 'order1', submitted_by: by, review_status: status });
@@ -54,4 +54,59 @@ test('execution UI uses real POST endpoints and never infers success', () => {
   assert.match(ui, /canReviewExecutionReport/);
   assert.match(ui, /Declar.*informaci.*corresponde/);
   assert.match(drawer, /<WorkOrderExecutionPanel order=\{detail\} onChanged=\{refresh\}/);
+});
+
+test('execution preflight submits only normalized backend-compatible UTC payload', () => {
+  const now = new Date('2026-10-30T15:00:00Z');
+  const payload = buildExecutionDraft({
+    started: '2026-10-30T09:30:00-03:00',
+    finished: '2026-10-30T10:15:00-03:00',
+    approvedAt: '2026-10-30T12:00:00Z',
+    area: '12.50', outcome: '  Control de malezas realizado.  '
+  }, now);
+  assert.deepEqual(payload, {
+    started_at: '2026-10-30T12:30:00.000Z',
+    finished_at: '2026-10-30T13:15:00.000Z',
+    worked_area_hectares: 12.5,
+    result_summary: 'Control de malezas realizado.'
+  });
+  assert.equal(buildExecutionDraft({
+    started: '2026-10-30T12:00:00Z', finished: '2026-10-30T15:05:00Z',
+    approvedAt: '2026-10-30T12:00:00Z', area: '0.01', outcome: 'Trabajo finalizado.'
+  }, now).worked_area_hectares, 0.01, 'approval and 5-minute backend boundary are inclusive');
+});
+
+test('execution preflight refuses invalid windows, missing approval and impossible quantities', () => {
+  const now = new Date('2026-10-30T15:00:00Z');
+  const valid = {
+    started: '2026-10-30T12:30:00Z', finished: '2026-10-30T13:15:00Z',
+    approvedAt: '2026-10-30T12:00:00Z',
+    area: '10.25', outcome: 'Trabajo finalizado.'
+  };
+  const invalid = [
+    [{ approvedAt: null }, /aprobaci.*v.*lida/i],
+    [{ started: '2026-10-30T11:59:00Z' }, /anterior a la aprobaci/i],
+    [{ finished: '2026-10-30T12:29:00Z' }, /anterior al inicio/i],
+    [{ finished: '2026-10-30T15:05:01Z' }, /futuro/i],
+    [{ finished: 'invalid-date' }, /fecha y hora/i],
+    [{ area: '' }, /superficie/i],
+    [{ area: '0' }, /superficie/i],
+    [{ area: '10.255' }, /dos decimales/i],
+    [{ area: '1000000.01' }, /superficie/i],
+    [{ area: 'Infinity' }, /superficie/i],
+    [{ outcome: 'corto' }, /resultado/i],
+    [{ outcome: 'x'.repeat(2001) }, /resultado/i]
+  ];
+  for (const [patch, pattern] of invalid) {
+    assert.throws(() => buildExecutionDraft({ ...valid, ...patch }, now), pattern,
+      JSON.stringify(Object.keys(patch)));
+  }
+});
+
+test('execution UI preflight occurs before live POST without claiming local success', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderExecutionPanel.jsx', import.meta.url), 'utf8');
+  assert.match(ui, /buildExecutionDraft\(\{[\s\S]*approvedAt: order\.approved_at/);
+  assert.ok(ui.indexOf('const body = buildExecutionDraft(') <
+    ui.indexOf('const response = await api.request('));
+  assert.match(ui, /validatedExecutionResponse\(response, order\.id, 'submitted'\)/);
 });
