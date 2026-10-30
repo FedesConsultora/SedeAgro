@@ -136,6 +136,129 @@ try {
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: browser restores cookie session and renders current device');
 
+  // P1 #211 — The server COMMIT may succeed while the HTTP ACK never reaches
+  // the browser. Run the actual Campaigns UI against real Express/PostGIS,
+  // drop ONLY the transport acknowledgment AFTER route.fetch receives 201,
+  // reload the whole SPA and require a conscious replay of the same UUID.
+  const campaignName = 'Lost ACK campaign ' + random;
+  let committedCampaignId = null;
+  let firstCampaignRequestId = null;
+  let lostAckCount = 0;
+  await page1.getByRole('button', { name: 'Campañas', exact: true }).click();
+  await page1.getByRole('button', { name: 'Nueva campaña' }).click();
+  const pendingCampaignDialog = page1.getByRole('dialog', { name: 'Nueva campaña' });
+  await pendingCampaignDialog.getByText('Comprobando envíos pendientes cifrados…').waitFor({ state: 'hidden' });
+  await pendingCampaignDialog.locator('#campaign-name').fill(campaignName);
+  await pendingCampaignDialog.locator('#campaign-year').fill('2026');
+  await pendingCampaignDialog.locator('#campaign-starts').fill('2026-09-01');
+  await pendingCampaignDialog.locator('#campaign-ends').fill('2027-04-30');
+  await page1.route('**/api/v1/campaigns', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    lostAckCount++;
+    const posted = route.request().postDataJSON();
+    firstCampaignRequestId = posted.client_request_id;
+    assert.match(firstCampaignRequestId || '', /^[a-f0-9-]{36}$/i);
+    const realResponse = await route.fetch();
+    assert.equal(realResponse.status(), 201, await realResponse.text());
+    const realBody = await realResponse.json();
+    assert.equal(realBody.replayed, false);
+    assert.equal(realBody.data.tenant_id, tenantId);
+    committedCampaignId = realBody.data.id;
+    // The backend has really COMMITted; intentionally lose the ACK. No mock
+    // response and no retry are issued by the browser automation here.
+    await route.abort('failed');
+  });
+  await pendingCampaignDialog.getByRole('button', { name: 'Crear campaña' }).click();
+  await pendingCampaignDialog.getByText('No pudimos confirmar la campaña.', {
+    exact: false
+  }).waitFor();
+  assert.equal(lostAckCount, 1, 'double click / transport error must not auto-resubmit');
+  assert.ok(committedCampaignId && firstCampaignRequestId);
+  assert.equal(await pendingCampaignDialog.getByRole('button', { name: 'Crear campaña' }).isDisabled(), true);
+  const countBeforeRetry = (await admin.query(
+    'SELECT count(*)::int AS n FROM campaigns WHERE tenant_id=$1 AND name=$2',
+    [tenantId, campaignName])).rows[0].n;
+  assert.equal(countBeforeRetry, 1, 'the real server committed even though its browser ACK was lost');
+  const pendingBeforeReload = await page1.evaluate(() => new Promise((resolve, reject) => {
+    const req = indexedDB.open('sedeagro-campaign-recovery', 1);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('pending-creates', 'readonly');
+      const records = tx.objectStore('pending-creates').getAll();
+      records.onerror = () => reject(records.error);
+      records.onsuccess = () => {
+        const rows = records.result;
+        db.close();
+        resolve(rows.map(row => ({
+          id: row.id, sealed: row.ciphertext instanceof ArrayBuffer,
+          ivLength: row.iv?.length, hasPlainName: JSON.stringify(row).includes('Lost ACK campaign')
+        })));
+      };
+    };
+  }));
+  assert.equal(pendingBeforeReload.length, 1, 'one encrypted pending request must survive ACK loss');
+  assert.equal(pendingBeforeReload[0].id, firstCampaignRequestId);
+  assert.equal(pendingBeforeReload[0].sealed, true);
+  assert.equal(pendingBeforeReload[0].ivLength, 12);
+  assert.equal(pendingBeforeReload[0].hasPlainName, false);
+  await page1.unroute('**/api/v1/campaigns');
+
+  // Full tab reload proves the journal is durable, not merely a React ref.
+  await page1.reload();
+  await page1.getByRole('button', { name: 'Campañas', exact: true }).click();
+  await page1.getByRole('button', { name: 'Nueva campaña' }).click();
+  const recoveryCampaignDialog = page1.getByRole('dialog', { name: 'Nueva campaña' });
+  await recoveryCampaignDialog.getByText('Hay una creación pendiente de confirmar.', {
+    exact: false
+  }).waitFor();
+  assert.equal(await recoveryCampaignDialog.locator('#campaign-name').inputValue(), campaignName);
+  assert.equal(await recoveryCampaignDialog.locator('#campaign-name').isDisabled(), true);
+  assert.equal(await recoveryCampaignDialog.getByRole('button', { name: 'Crear campaña' }).isDisabled(), true);
+  let replayCount = 0;
+  await page1.route('**/api/v1/campaigns', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    replayCount++;
+    const posted = route.request().postDataJSON();
+    assert.equal(posted.client_request_id, firstCampaignRequestId);
+    assert.equal(posted.name, campaignName);
+    const actual = await route.fetch();
+    assert.equal(actual.status(), 200, await actual.text());
+    const receipt = await actual.json();
+    assert.equal(receipt.replayed, true);
+    assert.equal(receipt.data.id, committedCampaignId);
+    await route.fulfill({ response: actual });
+  });
+  await recoveryCampaignDialog.getByRole('button', {
+    name: 'Reintentar el mismo envío'
+  }).click();
+  await recoveryCampaignDialog.waitFor({ state: 'detached' });
+  assert.equal(replayCount, 1, 'restoration must issue one explicit same-key POST only');
+  const confirmedCampaign = page1.getByRole('button', {
+    name: new RegExp('Campaña ' + campaignName.replace(/[.*+?^${}()|[\]\\]/g, '\\  console.log('PASS: browser restores cookie session and renders current device');
+
+  // P0 #222:') + ', mostrar lotes')
+  });
+  await confirmedCampaign.waitFor();
+  assert.equal(await confirmedCampaign.count(), 1, 'list contains one campaign, never a duplicate');
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM campaigns WHERE tenant_id=$1 AND name=$2',
+    [tenantId, campaignName])).rows[0].n, 1);
+  const remainingJournal = await page1.evaluate(() => new Promise((resolve, reject) => {
+    const req = indexedDB.open('sedeagro-campaign-recovery', 1);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('pending-creates', 'readonly');
+      const count = tx.objectStore('pending-creates').count();
+      count.onsuccess = () => { db.close(); resolve(count.result); };
+      count.onerror = () => { db.close(); reject(count.error); };
+    };
+  }));
+  assert.equal(remainingJournal, 0, 'verified same-key ACK retires pending local ciphertext');
+  await page1.unroute('**/api/v1/campaigns');
+  console.log('PASS: lost campaign ACK after real PostGIS COMMIT, sealed journal survives reload, same-key 200 replay and exactly one campaign');
+
   // P0 #222: Complete the live people-onboarding UI rather than relying on
   // SQL-only fixtures or mock cards. The recipient is a separate cookie-free
   // browser context and must accept the one-time code and log in personally.
