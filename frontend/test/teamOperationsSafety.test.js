@@ -115,3 +115,19 @@ test('live TeamPage connects operation panel only after private lists and gates 
   assert.match(panel, /onUpdated\(\)/);
   assert.match(panel, /No quedó confirmada la operación/);
 });
+
+test('live operator can refresh scoped roster after invite acceptance without a second invite POST', () => {
+  const page = readFileSync(new URL('../src/pages/TeamPage.jsx', import.meta.url), 'utf8');
+  const panel = readFileSync(new URL('../src/components/MemberInvitationPanel.jsx', import.meta.url), 'utf8');
+  const browser = readFileSync(new URL('../../scripts/acceptance-browser-cookie.mjs', import.meta.url), 'utf8');
+  assert.match(page, /dataMode === 'live' && scope && <button[\s\S]*?Actualizar equipo/);
+  assert.match(page, /onClick=\{\(\) => setRevision\(value => value \+ 1\)\}/);
+  assert.match(page, /disabled=\{loading \|\| Boolean\(changing\)\}/);
+  assert.match(page, /<MemberInvitationPanel[\s\S]*refreshKey=\{revision\}/);
+  assert.match(panel, /\[scope, api, revision, refreshKey\]/);
+  assert.match(page, /checkedTeamPrivateRows\(rows, requestTenant, label\)/);
+  assert.match(browser, /const inviteContext = await browser\.newContext\(\)/);
+  assert.match(browser, /getByRole\('button', \{ name: 'Actualizar equipo' \}\)\.click\(\)/);
+  assert.match(browser, /getByRole\('button', \{ name: 'Agregar integrante' \}\)\.click\(\)/);
+  assert.doesNotMatch(panel, /localStorage|sessionStorage|location\.search/);
+});

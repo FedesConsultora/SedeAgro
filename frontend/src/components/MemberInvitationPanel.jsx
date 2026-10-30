@@ -10,7 +10,7 @@ const ROLE_NAMES = {
   agronomic_coordinator: 'Coordinador', producer_viewer: 'Productor'
 };
 
-export function MemberInvitationPanel({ api, session, dataMode }) {
+export function MemberInvitationPanel({ api, session, dataMode, refreshKey = 0 }) {
   const scope = memberInviteAuthority(session, dataMode);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -64,7 +64,7 @@ export function MemberInvitationPanel({ api, session, dataMode }) {
       })();
     }
     return () => { active = false; gate.current.release(); };
-  }, [scope, api, revision]);
+  }, [scope, api, revision, refreshKey]);
 
   const submit = async (event) => {
     event.preventDefault();

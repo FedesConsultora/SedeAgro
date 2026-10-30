@@ -135,6 +135,85 @@ try {
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: browser restores cookie session and renders current device');
+
+  // P0 #222: Complete the live people-onboarding UI rather than relying on
+  // SQL-only fixtures or mock cards. The recipient is a separate cookie-free
+  // browser context and must accept the one-time code and log in personally.
+  await page1.getByRole('button', { name: 'Equipos', exact: true }).click();
+  const invitations = page1.getByRole('region', { name: 'Invitaciones a esta empresa' });
+  await invitations.getByRole('heading', { name: 'Invitar colaboradores' }).waitFor();
+  const scoutName = 'Pilot Invited Scout';
+  const scoutEmail = `scout-${random}@example.test`;
+  const scoutPassword = 'Pilot-Invite-Scout-Password-2026!';
+  const teamName = 'Equipo operativo piloto';
+  await invitations.getByRole('textbox', { name: 'Email del destinatario' }).fill(scoutEmail);
+  const inviteAck = page1.waitForResponse(res =>
+    res.url().endsWith('/auth/invitations') && res.request().method() === 'POST');
+  await invitations.getByRole('button', { name: 'Generar invitación' }).click();
+  assert.equal((await inviteAck).status(), 201, 'real invitation must be created server-side');
+  await invitations.getByText('Invitación generada (todavía no enviada)').waitFor();
+  const secret = (await invitations.locator('code').textContent())?.trim() || '';
+  assert.match(secret, /^[0-9a-f-]{36}\.[a-f0-9]{64}$/i);
+  assert.equal(secret.slice(0, 36).toLowerCase(), tenantId.toLowerCase());
+  // No email, token or one-time invitation secret is written to the test log.
+  const inviteContext = await browser.newContext();
+  try {
+    const recipient = await inviteContext.newPage();
+    await recipient.goto('http://127.0.0.1:4177/');
+    assert.equal((await inviteContext.cookies()).some(c => c.name === 'sedeagro_session'), false);
+    await recipient.getByRole('button', { name: 'Tengo una invitación' }).click();
+    await recipient.getByLabel('Código privado de invitación').fill(secret);
+    await recipient.getByLabel('Nombre completo (solo si todavía no tenés cuenta)').fill(scoutName);
+    await recipient.locator('input[type="password"]').fill(scoutPassword);
+    const activationAck = recipient.waitForResponse(res =>
+      res.url().endsWith('/auth/invite/accept') && res.request().method() === 'POST');
+    await recipient.getByRole('button', { name: 'Activar mi acceso' }).click();
+    assert.equal((await activationAck).status(), 201, 'first invitation acceptance must succeed');
+    await recipient.getByText('se activó.', { exact: false }).waitFor();
+    await recipient.getByRole('button', { name: 'Ir a iniciar sesión' }).click();
+    await recipient.locator('#login-email').fill(scoutEmail);
+    await recipient.locator('#login-password').fill(scoutPassword);
+    const firstLogin = recipient.waitForResponse(res =>
+      res.url().endsWith('/auth/login') && res.request().method() === 'POST');
+    await recipient.locator('#login-submit').click();
+    const loginReply = await firstLogin;
+    assert.equal(loginReply.status(), 200);
+    const newActor = await loginReply.json();
+    assert.equal(newActor.tenant.id, tenantId);
+    assert.equal(newActor.membership.roleCode, 'scout');
+    await recipient.getByRole('button', { name: 'Sesiones' }).waitFor();
+  } finally {
+    await inviteContext.close();
+  }
+
+  // The admin is STILL in TeamPage: a second-device acceptance cannot be
+  // inferred from a cached list. Explicit refresh must obtain fresh scoped
+  // members, teams and invitation statuses without resubmitting the invite.
+  await page1.getByRole('button', { name: 'Actualizar equipo' }).click();
+  await invitations.getByText('Aceptada', { exact: false }).waitFor();
+  await page1.getByText(scoutName, { exact: true }).waitFor();
+  const createTeam = page1.getByRole('form', { name: 'Crear equipo de trabajo' });
+  await createTeam.getByRole('textbox', { name: 'Nombre del equipo' }).fill(teamName);
+  const teamAck = page1.waitForResponse(res =>
+    res.url().endsWith('/teams') && res.request().method() === 'POST');
+  await createTeam.getByRole('button', { name: 'Crear equipo' }).click();
+  assert.equal((await teamAck).status(), 201);
+  const addMember = page1.getByRole('form', { name: 'Agregar integrante a un equipo' });
+  await addMember.waitFor();
+  await addMember.getByRole('combobox', { name: 'Equipo', exact: true })
+    .selectOption({ label: teamName });
+  await addMember.getByRole('combobox', { name: 'Integrante activo' })
+    .selectOption({ label: `${scoutName} (${scoutEmail})` });
+  const memberAck = page1.waitForResponse(res =>
+    /\/teams\/[0-9a-f-]{36}\/members$/.test(new URL(res.url()).pathname) &&
+    res.request().method() === 'POST');
+  await addMember.getByRole('button', { name: 'Agregar integrante' }).click();
+  assert.equal((await memberAck).status(), 201);
+  await page1.locator('.team-tile').filter({ hasText: teamName })
+    .getByText(scoutName, { exact: true }).waitFor();
+  console.log('PASS: real admin invite -> independent recipient activation/login -> scoped refresh -> team assignment');
+
+
   // 0T.1: real authenticated portal; keyboard must remain inside the modal,
   // Escape must close it, and focus must return to the invoking control.
   await page1.getByRole('button', { name: 'Establecimientos' }).click();
