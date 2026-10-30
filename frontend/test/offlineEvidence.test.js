@@ -286,6 +286,9 @@ test('pilot real-browser field GPS/photo capture is committed offline and verifi
   assert.match(scenario, /await page1\.unroute\('\*\*\/api\/v1\/sync\/batches'\)/);
   assert.match(scenario, /getByRole\('button', \{ name: 'Enviar pendientes' \}\)/);
   assert.match(scenario, /batchReply = page1\.waitForResponse/);
+  assert.match(scenario, /visibleDraft\.waitFor\(\{ state: 'visible', timeout: 18000 \}\)/);
+  assert.match(scenario, /rowReady\.then\(\(\) => null\)/);
+  assert.match(scenario, /await sendButton\.isEnabled\(\)/);
   assert.match(scenario, /await page1\.unroute\('\*\*\/api\/v1\/sync\/batches'\)/);
   assert.match(scenario, /batchResult\.data\.status, 'processed'/);
   assert.match(scenario, /photoResponse\.status\(\), 201/);
