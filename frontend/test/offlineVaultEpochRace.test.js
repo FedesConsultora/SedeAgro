@@ -28,9 +28,11 @@ function createDeferredVaultDb() {
   const database = {
     close() {},
     transaction() {
+      let issued = false;
       const tx = {
         objectStore() {
           const request = (perform) => {
+            issued = true;
             const req = {};
             queueMicrotask(() => {
               try {
@@ -50,8 +52,13 @@ function createDeferredVaultDb() {
             delete(key) { return request(() => { if (key === 'active') saved = null; }) }
           };
         },
-        abort() { tx.onabort?.(); }
+        // IndexedDB abort events dispatch asynchronously; synchronous
+        // abort would mask the original application exception.
+        abort() { queueMicrotask(() => tx.onabort?.()); }
       };
+      // A readwrite transaction with zero requests still fires oncomplete.
+      // A superseded clear intentionally enqueues NO delete request.
+      queueMicrotask(() => { if (!issued) tx.oncomplete?.(); });
       return tx;
     }
   };
@@ -142,6 +149,16 @@ test('a delayed PBKDF2 enrollment cannot commit after a newer session locks the 
 test('offline unlock opened before a lock cannot grant capability after identity changes', async t => {
   const db = mountVault(t);
   await expectSettled(enrollOfflineFieldVault(profile(firstActor), phrase), 'enroll first');
+  // Node 22 may expose a global Navigator reporting online=true. Local
+  // unlock is deliberately offline-only even in this deterministic test.
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true, value: { onLine: false }
+  });
+  t.after(() => {
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  });
   const deferred = db.holdOpen();
   const unlock = unlockOfflineFieldVault(phrase);
   await expectSettled(deferred.started, 'held open start');
