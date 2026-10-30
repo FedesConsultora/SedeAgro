@@ -5,6 +5,7 @@ import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
 import { WorkOrderExecutionExceptions } from './WorkOrderExecutionExceptions.jsx';
 import { exceptionReadinessForReview } from '../services/executionReviewReadiness.js';
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
+import { needsExecutionReceiptLookup, reconcileExecutionReceipt } from '../services/workOrderExecutionReceipt.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
@@ -38,25 +39,78 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const onReadinessChanged = useCallback(next => setExceptionReadiness(next), []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [pendingPayload, setPendingPayload] = useState(null);
 
   if (!live) return null;
 
+  // Never retry the POST automatically. GET is performed under the current
+  // cookie, membership, tenant and backend orders.read policy.
+  const verifyInterruptedSubmission = async payload => {
+    try {
+      const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}`, {
+        silent: true
+      });
+      const outcome = reconcileExecutionReceipt(response, {
+        orderId: order.id, actorId: userId, payload
+      });
+      if (outcome.state === 'recorded') {
+        setPendingPayload(null);
+        setError('');
+        setNotice('El servidor registra un parte coincidente de tu usuario. Se actualizará la orden; no se volvió a enviar.');
+        onChanged?.();
+      } else if (outcome.state === 'different') {
+        setError('El servidor registra otro parte activo. No se volvió a enviar; actualizá la orden antes de continuar.');
+        onChanged?.();
+      } else if (outcome.state === 'ambiguous') {
+        setError('Hay varios partes coincidentes en el historial. Solicitá revisión a coordinación antes de intentar otro envío.');
+      } else {
+        setError('El servidor aún no confirma este parte. No se volvió a enviar; comprobá nuevamente con conexión estable antes de salir del formulario.');
+      }
+    } catch {
+      setError('No se pudo comprobar el parte en el servidor. El envío podría haberse guardado: no lo repitas sin verificar.');
+    }
+  };
+
   const submit = async event => {
     event.preventDefault();
-    if (!canSubmit || !attest || busy) return;
-    setBusy(true);
-    setError('');
+    if (!canSubmit || !attest || busy || pendingPayload) return;
+    let body;
     try {
-      const body = buildExecutionDraft({
+      body = buildExecutionDraft({
         started, finished, area, outcome, approvedAt: order.approved_at
       });
+    } catch (err) {
+      setError(err?.message || 'Revisá los datos declarados.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
       const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}/executions`, {
         method: 'POST', silent: true, body
       });
       validatedExecutionResponse(response, order.id, 'submitted');
       onChanged?.();
     } catch (err) {
-      setError(err?.message || 'No se guardó el parte de ejecución.');
+      if (needsExecutionReceiptLookup(err)) {
+        setPendingPayload(body);
+        await verifyInterruptedSubmission(body);
+      } else {
+        setError(err?.message || 'No se guardó el parte de ejecución.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recheckReceipt = async () => {
+    if (!pendingPayload || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await verifyInterruptedSubmission(pendingPayload);
     } finally {
       setBusy(false);
     }
@@ -107,9 +161,14 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     <h3>Parte de ejecución</h3>
     <p>Los datos son <strong>declarados por el responsable</strong>. Una revisión independiente
       permite cerrar administrativamente la orden; no constituye una medición automática.</p>
+    {notice && <p className="order-detail__notice" role="status">{notice}</p>}
     {error && <div className="order-detail__error" role="alert">
       {error} <button type="button" className="ghost-action"
         onClick={onChanged}>Actualizar datos</button>
+      {pendingPayload && <button type="button" className="ghost-action"
+        disabled={busy} onClick={() => void recheckReceipt()}>
+        {busy ? 'Comprobando…' : 'Comprobar parte en servidor'}
+      </button>}
     </div>}
     {canSubmit && <form className="order-detail__execution-form" onSubmit={submit}>
       <p className="order-detail__footnote">
@@ -138,7 +197,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
           onChange={e => setAttest(e.target.checked)} />
         Declaro que la información ingresada corresponde al trabajo que informo.
       </label>
-      <button type="submit" className="primary-action" disabled={!attest || busy || !started || !finished || !area || outcome.trim().length < 10}>
+      <button type="submit" className="primary-action" disabled={!attest || busy || Boolean(pendingPayload) || !started || !finished || !area || outcome.trim().length < 10}>
         {busy ? 'Enviando…' : 'Presentar parte para revisión'}
       </button>
     </form>}

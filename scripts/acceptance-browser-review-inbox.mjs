@@ -752,6 +752,77 @@ try {
   await moderatorPanel.getByText('Publicación obsoleta en esta campaña').waitFor();
   console.log('PASS: real Chromium admin revokes another publisher only after confirmation; audit survives reload and view stays private with owner');
 
+  // A genuine execution POST may commit but lose its reply on unstable radio.
+  // Reconcile through the live authorized order detail, not another POST.
+  const interruptedTitle = 'Browser execution ACK lost ' + token;
+  const interruptedOrder = (await admin.query(`
+    INSERT INTO work_orders
+      (tenant_id,field_id,requested_by,type,status,title,approved_at)
+    VALUES ($1,$2,$3,'inspection','in_progress',$4,now()-interval '2 hours')
+    RETURNING id
+  `, [ownerA.tenant.id,field,ownerA.user.id,interruptedTitle])).rows[0].id;
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(interruptedTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+interruptedTitle}).click();
+  const executionDrawer = page.getByRole('dialog',{name:interruptedTitle});
+  const executionForm = executionDrawer.locator('.order-detail__execution-form');
+  await executionForm.waitFor();
+  const localTimes = await page.evaluate(() => {
+    const local = minutesAgo => {
+      const d = new Date(Date.now() - minutesAgo * 60 * 1000);
+      const pad = n => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+        'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    };
+    return { started: local(45), finished: local(15) };
+  });
+  await executionForm.locator('input[type="datetime-local"]').nth(0).fill(localTimes.started);
+  await executionForm.locator('input[type="datetime-local"]').nth(1).fill(localTimes.finished);
+  await executionForm.locator('input[type="number"]').fill('12.50');
+  await executionForm.getByPlaceholder('Describí qué se hizo, resultado y cualquier desvío observado.')
+    .fill('Inspección de campo completada durante la visita programada.');
+  await executionForm.locator('input[type="checkbox"]').check();
+
+  let executionPostCount = 0;
+  let persistedExecutionId;
+  await page.route('**/api/v1/work-orders/' + interruptedOrder + '/executions', async route => {
+    executionPostCount += 1;
+    const actual = await route.fetch();
+    assert.equal(actual.status(),201,await actual.text());
+    const receipt = await actual.json();
+    assert.equal(receipt.data.work_order_id,interruptedOrder);
+    assert.equal(receipt.data.submitted_by,ownerA.user.id);
+    persistedExecutionId = receipt.data.id;
+    // Only the browser-facing ACK is dropped AFTER the real DB commit.
+    await route.abort('failed');
+  });
+  await executionForm.getByRole('button',{name:'Presentar parte para revisión'}).click();
+  // The UI must use a new genuine authorized GET and eventually render the
+  // confirmed report without a second write, even when the ACK is absent.
+  await executionDrawer.getByText('Declarado — pendiente de revisión').waitFor();
+  assert.equal(executionPostCount,1,'Lost ACK must never trigger an automatic retry');
+  const recoveredExecution = (await admin.query(`
+    SELECT id,submitted_by,review_status FROM work_order_executions
+    WHERE tenant_id=$1 AND work_order_id=$2
+  `,[ownerA.tenant.id,interruptedOrder])).rows;
+  assert.equal(recoveredExecution.length,1);
+  assert.equal(recoveredExecution[0].id,persistedExecutionId);
+  assert.equal(recoveredExecution[0].submitted_by,ownerA.user.id);
+  assert.equal(recoveredExecution[0].review_status,'submitted');
+  const executionAudits = (await admin.query(`
+    SELECT count(*)::integer AS count FROM audit_events
+    WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_submitted'
+  `,[ownerA.tenant.id,interruptedOrder])).rows[0].count;
+  assert.equal(executionAudits,1,'Exactly one audit event after lost execution response');
+  await page.unroute('**/api/v1/work-orders/' + interruptedOrder + '/executions');
+  // Close the actual detail drawer before the existing final multi-tenant
+  // logout test: its modal overlay deliberately captures background clicks.
+  await executionDrawer.getByRole('button',{name:'Cerrar '+interruptedTitle}).click();
+  assert.equal(await executionDrawer.count(),0,'Execution drawer must release the sidebar');
+  console.log('PASS: real execution POST 201 COMMIT + lost ACK -> authorized GET reconciles, exactly one report and audit without repeat POST');
+
   // Final independent API benchmark after all UI scenarios, so adding 5000
   // synthetic orders cannot change the earlier deterministic 50/61 assertions.
   // The browser's REAL HttpOnly cookie is forwarded by Playwright APIContext.
