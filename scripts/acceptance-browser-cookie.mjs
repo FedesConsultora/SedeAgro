@@ -10,6 +10,7 @@ import { chromium } from 'playwright';
 import { assertDialogFocus, pressReverseTabAtDialogRoot } from './support/assert-dialog-focus.mjs';
 import { getFocusStressCycles } from './support/focus-stress-config.mjs';
 import { assertSealedPendingCreate, assertNoPendingCreate } from './support/assert-create-journal-sealed.mjs';
+import { attachTestCameraJpeg, inspectSealedFieldDraft, SOURCE_GPS_EXIF_SENTINEL } from './support/assert-sealed-field-capture.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const focusCycles = getFocusStressCycles();
@@ -681,6 +682,93 @@ try {
   await assertNoPendingCreate(page1, 'sedeagro-scouting-run-recovery');
   await page1.unroute('**/api/v1/scouting/runs');
   console.log('PASS: real scouting COMMIT lost ACK, sealed reload and same-key replay; audit and notification exactly once');
+
+  // #163/#166 field pilot: real UI + a genuine offline network interruption.
+  // Camera and coordinates are accepted ONLY after an explicit opt-in.
+  const fieldObservationNote = 'Foto GPS real capturada sin internet ' + random;
+  const fieldPoint = { type: 'Point', coordinates: [-57.95453, -34.92145] };
+  await context1.grantPermissions(['geolocation'], { origin: 'http://127.0.0.1:4177' });
+  await context1.setGeolocation({ longitude: fieldPoint.coordinates[0],
+    latitude: fieldPoint.coordinates[1], accuracy: 11 });
+  const runRow = page1.locator('.scouting-workspace__table button.data-table__row')
+    .filter({ hasText: fieldName }).first();
+  await runRow.click();
+  await page1.getByRole('button', { name: 'Agregar observación' }).click();
+  const fieldCaptureDialog = page1.getByRole('dialog', { name: 'Agregar observación' });
+  await fieldCaptureDialog.locator('#obs-type').selectOption('pest');
+  await fieldCaptureDialog.locator('#obs-severity').selectOption('high');
+  await fieldCaptureDialog.locator('#obs-notes').fill(fieldObservationNote);
+  await context1.setOffline(true);
+  await fieldCaptureDialog.getByRole('button', { name: 'Usar ubicación actual' }).click();
+  await fieldCaptureDialog.getByText('Ubicación lista para adjuntar').waitFor();
+  const cameraFixture = await attachTestCameraJpeg(page1);
+  assert.ok(cameraFixture.size > 64, 'real Canvas JPEG must be created');
+  await fieldCaptureDialog.getByText(cameraFixture.name).waitFor();
+  await fieldCaptureDialog.getByRole('button', { name: 'Guardar observación' }).click();
+  await page1.getByText('Observación guardada en este dispositivo.', {
+    exact: false
+  }).waitFor();
+  const encryptedCaptureId = await inspectSealedFieldDraft(page1, {
+    note: fieldObservationNote, point: fieldPoint
+  });
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows[0].n, 0,
+  'no network: real backend must not have received the local observation');
+  console.log('PASS: offline real React observation opt-in GPS + Camera File, AES-GCM IndexedDB, zero server writes');
+
+  // An online signal does not constitute a confirmed server receipt.
+  // Force one transport interruption during reconnection; keep the stable
+  // encrypted batch and its separate photo until explicit recovery after reload.
+  let preventedAutomaticBatches = 0;
+  await page1.route('**/api/v1/sync/batches', route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    preventedAutomaticBatches++;
+    return route.abort('failed');
+  });
+  await context1.setOffline(false);
+  await page1.reload();
+  await page1.getByRole('button', { name: 'Sesiones' }).waitFor();
+  const reopenedCaptureId = await inspectSealedFieldDraft(page1, {
+    note: fieldObservationNote, point: fieldPoint, scopeId: encryptedCaptureId
+  });
+  assert.equal(reopenedCaptureId, encryptedCaptureId,
+    'full app reload must preserve same encrypted batch UUID');
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows[0].n, 0);
+  await page1.unroute('**/api/v1/sync/batches');
+  console.log('PASS: reconnect transport interruption + full SPA reload preserve exact AES-GCM GPS/photo draft');
+
+  // Actual SyncPage performs BOTH the observation batch and independently
+  // verified private photo upload; the queue may retire only after both.
+  await page1.getByRole('button', { name: 'Sync', exact: true }).click();
+  await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
+  await page1.getByText('Foto local: campo-ubicacion-privada.jpg', {
+    exact: false
+  }).waitFor();
+  const batchReply = page1.waitForResponse(response =>
+    response.url().endsWith('/api/v1/sync/batches') &&
+    response.request().method() === 'POST');
+  const photoReply = page1.waitForResponse(response =>
+    /\/api\/v1\/scouting\/observations\/[0-9a-f-]{36}\/evidence$/.test(
+      new URL(response.url()).pathname) && response.request().method() === 'POST');
+  await page1.getByRole('button', { name: 'Enviar solo esta' }).click();
+  const batchResponse = await batchReply;
+  assert.ok(batchResponse.ok(), 'real PostGIS sync batch must be accepted');
+  const batchResult = await batchResponse.json();
+  assert.equal(batchResult.data.status, 'processed');
+  const photoResponse = await photoReply;
+  assert.equal(photoResponse.status(), 201, await photoResponse.text());
+  const photoResult = await photoResponse.json();
+  assert.equal(photoResult.replayed, false);
+  const persistedObservationId = batchResult.data.operations[0].result.observation_id;
+  const persistedEvidenceId = photoResult.data.id;
+  assert.equal(photoResult.data.scouting_observation_id, persistedObservationId);
+  await page1.getByText('No hay observaciones pendientes.', {
+    exact: false
+  }).waitFor();
+  console.log('PASS: SyncPage actual batch and private photo POST both confirmed before encrypted draft retirement');
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
 
