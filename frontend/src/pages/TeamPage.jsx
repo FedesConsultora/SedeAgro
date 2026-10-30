@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Mail, Plus, Shield, ShieldCheck, UserPlus, Users as UsersIcon } from 'lucide-react';
+import { Mail, Plus, RefreshCw, Shield, ShieldCheck, UserPlus, Users as UsersIcon } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
 import { mockData } from '../services/mockData.js';
 import { Modal } from '../components/Modal.jsx';
@@ -293,6 +293,11 @@ export function TeamPage() {
           onClick={() => setShowInvite(true)}>
           <UserPlus size={16} /> Simular invitación
         </button>}
+        {dataMode === 'live' && scope && <button type="button" className="ghost-action"
+          onClick={() => setRevision(value => value + 1)}
+          disabled={loading || Boolean(changing)} aria-busy={loading}>
+          <RefreshCw size={16} aria-hidden="true" /> Actualizar equipo
+        </button>}
       </section>
 
       {dataMode === 'mock' &&
@@ -305,7 +310,7 @@ export function TeamPage() {
         onRetry={() => setRevision(value => value + 1)} />}
       {dataMode === 'live' && !scope &&
         <div className="auth-error" role="alert">La sesión no permite consultar miembros de esta empresa.</div>}
-      <MemberInvitationPanel api={api} session={session} dataMode={dataMode} />
+      <MemberInvitationPanel api={api} session={session} dataMode={dataMode} refreshKey={revision} />
       {visibleStatusError && <p role="alert" className="resource-error">{visibleStatusError}</p>}
       {loading ? (
         <div className="empty-state"><span>Cargando equipo…</span></div>
