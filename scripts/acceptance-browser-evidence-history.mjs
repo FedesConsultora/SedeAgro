@@ -261,10 +261,22 @@ try {
 
   // A transient validation failure must lock the old React view instead
   // of claiming the user was logged out or reviving private evidence.
-  await page.route('**/api/v1/auth/me', route => route.fulfill({
-    status: 503, contentType: 'application/json',
-    body: JSON.stringify({ error: { message: 'Temporary test outage' } })
-  }), { times: 1 });
+  // Two advisory tab-transition signals (BroadcastChannel and storage)
+  // may trigger overlapping /auth/me validations. A one-shot 503 mock let a
+  // later HTTP 200 race past the failure and clear the warning before the
+  // assertion, masking the intended "private UI stays locked" contract.
+  // Keep ALL revalidations unavailable until the locked view is visible.
+  let blockedProfileRechecks = 0;
+  const blockedProfileRoute = async route => {
+    blockedProfileRechecks += 1;
+    await route.fulfill({
+      status: 503, contentType: 'application/json',
+      body: JSON.stringify({ error: { message: 'Temporary test outage' } })
+    });
+  };
+  await page.route('**/api/v1/auth/me', blockedProfileRoute);
+  const firstUnavailableProfile = page.waitForResponse(res =>
+    res.url().endsWith('/api/v1/auth/me') && res.status() === 503);
   // Switch the shared browser cookie to a genuinely different tenant.
   await secondTab.getByRole('button', { name: 'Crear cuenta nueva' }).click();
   await secondTab.locator('#reg-org-name').fill('Other Browser Tenant');
@@ -281,8 +293,19 @@ try {
   secondTenantId = otherProfile.tenant.id;
   secondUserId = otherProfile.user.id;
 
+  await firstUnavailableProfile;
   await page.getByRole('alert').getByText('No se pudo verificar tu sesión').waitFor();
-  assert.equal(await panel.count(), 0);
+  assert.ok(blockedProfileRechecks >= 1,
+    'a cross-tab cookie change must revalidate /auth/me before exposing any private data');
+  assert.equal(await panel.count(), 0,
+    'an unavailable authority must keep the old evidence panel unmounted');
+  assert.equal(await page.getByTitle('Monitoreo').count(), 0,
+    'a transient 503 must not restore private navigation or claim a new identity');
+  assert.equal(await page.getByRole('heading', { name: 'Iniciar sesión' }).count(), 0,
+    'an outage must not be mistaken for a server-confirmed logout');
+  // Drop the controlled outage ONLY when the operator asks the backend to
+  // validate the new cookie again. This next response must be real PostGIS.
+  await page.unroute('**/api/v1/auth/me', blockedProfileRoute);
   await page.getByRole('button', { name: 'Reintentar verificación' }).click();
   await page.getByTitle('Perfil de usuario').click();
   await page.locator('.user-menu__tenant-name').getByText('Other Browser Tenant').waitFor();
