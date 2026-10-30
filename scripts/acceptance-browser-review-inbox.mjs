@@ -817,6 +817,10 @@ try {
   `,[ownerA.tenant.id,interruptedOrder])).rows[0].count;
   assert.equal(executionAudits,1,'Exactly one audit event after lost execution response');
   await page.unroute('**/api/v1/work-orders/' + interruptedOrder + '/executions');
+  // Close the actual detail drawer before the existing final multi-tenant
+  // logout test: its modal overlay deliberately captures background clicks.
+  await executionDrawer.getByRole('button',{name:'Cerrar '+interruptedTitle}).click();
+  assert.equal(await executionDrawer.count(),0,'Execution drawer must release the sidebar');
   console.log('PASS: real execution POST 201 COMMIT + lost ACK -> authorized GET reconciles, exactly one report and audit without repeat POST');
 
   // Final independent API benchmark after all UI scenarios, so adding 5000
