@@ -744,7 +744,7 @@ try {
   // verified private photo upload; the queue may retire only after both.
   await page1.getByRole('button', { name: 'Sync', exact: true }).click();
   await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
-  await page1.getByText('Foto local: campo-ubicacion-privada.jpg', {
+  await page1.getByText('Foto local: campo-ubicacion-privada-reducida.jpg', {
     exact: false
   }).waitFor();
   const batchReply = page1.waitForResponse(response =>
