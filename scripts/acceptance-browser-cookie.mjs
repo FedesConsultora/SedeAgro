@@ -754,26 +754,38 @@ try {
 
   await page1.getByRole('button', { name: 'Sync', exact: true }).click();
   await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
-  const waitForDelivery = async (millis) => Promise.race([
+  const waitForDelivery = millis => Promise.race([
     batchReply, new Promise(resolve => setTimeout(() => resolve(null), millis))
   ]);
-  let batchResponse = await waitForDelivery(1200);
-  // If the app has not auto-delivered, use the stable top-level action. It
-  // covers the whole single-item queue and is not destroyed when rows refresh.
-  // A concurrent automatic delivery may remove/disable this action; the
-  // already-registered receipt promise remains authoritative either way.
-  for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
-    const button = page1.getByRole('button', { name: 'Enviar pendientes' });
-    if (await button.isEnabled().catch(() => false)) {
-      await button.click({ timeout: 2000 }).catch(() => {
-        // A row disappearing concurrently is not proof of successful sync;
-        // only the genuine network receipt below can prove completion.
-      });
+  // React may mount SyncPage before its asynchronous IndexedDB decrypt has
+  // populated pendingCount. A visible but DISABLED header button is not ready
+  // for user interaction; checking it three times without awaiting loading
+  // incorrectly reports a lost POST in the 12-cycle stress run.
+  const visibleDraft = page1.getByText(
+    'Foto local: campo-ubicacion-privada-reducida.jpg', { exact: false });
+  const rowReady = visibleDraft.waitFor({ state: 'visible', timeout: 18000 })
+    .then(() => true).catch(() => false);
+  let batchResponse = await Promise.race([batchReply, rowReady.then(() => null)]);
+  const sendButton = page1.getByRole('button', {
+    name: /^(Enviar pendientes|Enviar todos mis pendientes)$/
+  });
+  if (!batchResponse && await rowReady) {
+    for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
+      // The latest row must still belong to the active UI. If auto-flush
+      // removes it concurrently, observe its genuine network receipt instead.
+      const ready = await sendButton.isEnabled().catch(() => false);
+      if (ready) {
+        await sendButton.click({ timeout: 2500 }).catch(() => {
+          // React may legitimately remove a row while its auto-flush commits.
+          // Do not treat a disappearing button as evidence of successful HTTP.
+        });
+      }
+      batchResponse = await waitForDelivery(5000);
     }
-    batchResponse = await waitForDelivery(5000);
   }
+  if (!batchResponse) batchResponse = await batchReply;
   assert.ok(batchResponse?.ok(),
-    'real authenticated PostGIS batch must commit via auto or explicit SyncPage action');
+    'real authenticated PostGIS batch must commit after SyncPage loads its local queue');
   const batchResult = await batchResponse.json();
   assert.equal(batchResult.data.status, 'processed');
   const photoResponse = await photoReply;
