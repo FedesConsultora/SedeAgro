@@ -268,3 +268,31 @@ test('freshly reread photo-only draft blocks a stale queue-list snapshot before 
   assert.equal(network,0);
   assert.deepEqual(records.get(saved.id),latest);
 });
+
+
+test('pilot real-browser field GPS/photo capture is committed offline and verified via private PostGIS receipts', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fixture = readFileSync(new URL('../../scripts/support/assert-sealed-field-capture.mjs', import.meta.url), 'utf8');
+  const browser = readFileSync(new URL('../../scripts/acceptance-browser-cookie.mjs', import.meta.url), 'utf8');
+  const scenario = browser.slice(browser.indexOf('// #163/#166 field pilot:'),
+    browser.indexOf('// TOP-inspired operational landing', browser.indexOf('// #163/#166 field pilot:')));
+  assert.ok(scenario.length > 4000, 'actual real-Chromium end-to-end capture must remain enabled');
+  assert.match(scenario, /await context1\.setOffline\(true\)/);
+  assert.match(scenario, /getByRole\('button', \{ name: 'Usar ubicación actual' \}\)/);
+  assert.match(scenario, /attachTestCameraJpeg\(page1\)/);
+  assert.match(scenario, /inspectSealedFieldDraft\(page1/);
+  assert.match(scenario, /await context1\.setOffline\(false\)/);
+  assert.match(scenario, /await page1\.reload\(\)/);
+  assert.match(scenario, /await page1\.unroute\('\*\*\/api\/v1\/sync\/batches'\)/);
+  assert.match(scenario, /getByRole\('button', \{ name: 'Enviar solo esta' \}\)/);
+  assert.match(scenario, /batchResult\.data\.status, 'processed'/);
+  assert.match(scenario, /photoResponse\.status\(\), 201/);
+  assert.match(scenario, /ST_X\(point\).*ST_Y\(point\)/);
+  assert.match(scenario, /SOURCE_GPS_EXIF_SENTINEL/);
+  assert.match(scenario, /privatePhoto\.content_sha256/);
+  assert.match(scenario, /anonymousContext\.request\.get/);
+  assert.doesNotMatch(scenario, /route\.fulfill\(\{\s*status:\s*201/);
+  assert.match(fixture, /new File\(\[source\]/);
+  assert.match(fixture, /new DataTransfer\(\)/);
+  assert.match(fixture, /row\.sealed\?\.ciphertext instanceof ArrayBuffer/);
+});
