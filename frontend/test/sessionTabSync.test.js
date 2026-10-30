@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import {
   createSessionTabSync, isSessionTabSignal, SESSION_TAB_KEY,
-  shouldRecheckOnForeground, FOREGROUND_RECHECK_MS
+  shouldRecheckOnForeground, FOREGROUND_RECHECK_MS, UNVERIFIED_FOREGROUND_RECHECK_MS
 } from '../src/services/sessionTabSync.js';
 
 function browserPair(withBroadcast = true) {
@@ -95,4 +95,28 @@ test('foreground revalidation is throttled and never forces an offline field ses
   assert.equal(shouldRecheckOnForeground(0, FOREGROUND_RECHECK_MS, false, true), false);
   assert.equal(shouldRecheckOnForeground(0, FOREGROUND_RECHECK_MS, true, false), false);
   assert.equal(shouldRecheckOnForeground(0, Number.NaN, true, true), false);
+});
+
+test('suspended tab recovers unverified server identity promptly on foreground', () => {
+  const last = 10_000;
+  assert.equal(shouldRecheckOnForeground(last,
+    last + UNVERIFIED_FOREGROUND_RECHECK_MS - 1, true, true, true), false,
+  'avoid rapid foreground focus thrashing during a network outage');
+  assert.equal(shouldRecheckOnForeground(last,
+    last + UNVERIFIED_FOREGROUND_RECHECK_MS, true, true, true), true,
+  'do not wait 60 seconds to verify a new cross-tab cookie');
+  assert.equal(shouldRecheckOnForeground(last,
+    last + UNVERIFIED_FOREGROUND_RECHECK_MS, true, true, false), false,
+  'same already-verified identity must still use normal 60-second throttling');
+  assert.equal(shouldRecheckOnForeground(last,
+    last + FOREGROUND_RECHECK_MS, true, true, false), true);
+  assert.equal(shouldRecheckOnForeground(last,
+    last + FOREGROUND_RECHECK_MS, false, true, true), false,
+  'background tab must not silently authenticate or render hidden private data');
+  assert.equal(shouldRecheckOnForeground(last,
+    last + FOREGROUND_RECHECK_MS, true, false, true), false,
+  'local offline vault must never become a server session');
+  assert.equal(shouldRecheckOnForeground(last,
+    last - 1, true, true, true), false,
+  'backwards clock must not bypass the minimum recheck interval');
 });
