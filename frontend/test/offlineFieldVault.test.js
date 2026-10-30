@@ -110,6 +110,6 @@ test('local envelope operations fence async IndexedDB mutations against identity
   assert.match(source, /const expected = lockOfflineFieldVault\(\);[\s\S]*await sealFieldProfile/);
   assert.match(source, /await transaction\('readwrite', store => \{[\s\S]*assertCurrentVaultGeneration\(expected\);[\s\S]*store\.put\(sealed\)/);
   assert.match(source, /const expected = generation;[\s\S]*await transaction\('readonly', store => store\.get\(RECORD\)\);[\s\S]*assertCurrentVaultGeneration\(expected\)/);
-  assert.match(source, /if \(generation !== expected\) return null;[\s\S]*store\.delete\(RECORD\)/);
+  assert.match(source, /if \(generation !== expected \|\| readSharedVaultEpoch\(\) !== sharedEpoch\) return null;[\s\S]*store\.delete\(RECORD\)/);
   assert.doesNotMatch(source, /localStorage|sessionStorage|\bfetch\(/);
 });
