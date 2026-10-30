@@ -1,7 +1,7 @@
 // End-to-end cookie login/logout and remote revocation against a REAL
 // Express/PostgreSQL backend and actual React app in Chromium. Disposable DB only.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -10,6 +10,7 @@ import { chromium } from 'playwright';
 import { assertDialogFocus, pressReverseTabAtDialogRoot } from './support/assert-dialog-focus.mjs';
 import { getFocusStressCycles } from './support/focus-stress-config.mjs';
 import { assertSealedPendingCreate, assertNoPendingCreate } from './support/assert-create-journal-sealed.mjs';
+import { attachTestCameraJpeg, inspectSealedFieldDraft, SOURCE_GPS_EXIF_SENTINEL } from './support/assert-sealed-field-capture.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const focusCycles = getFocusStressCycles();
@@ -681,6 +682,170 @@ try {
   await assertNoPendingCreate(page1, 'sedeagro-scouting-run-recovery');
   await page1.unroute('**/api/v1/scouting/runs');
   console.log('PASS: real scouting COMMIT lost ACK, sealed reload and same-key replay; audit and notification exactly once');
+
+  // #163/#166 field pilot: real UI + a genuine offline network interruption.
+  // Camera and coordinates are accepted ONLY after an explicit opt-in.
+  const fieldObservationNote = 'Foto GPS real capturada sin internet ' + random;
+  const fieldPoint = { type: 'Point', coordinates: [-57.95453, -34.92145] };
+  await context1.grantPermissions(['geolocation'], { origin: 'http://127.0.0.1:4177' });
+  await context1.setGeolocation({ longitude: fieldPoint.coordinates[0],
+    latitude: fieldPoint.coordinates[1], accuracy: 11 });
+  const runRow = page1.locator('.scouting-workspace__table button.data-table__row')
+    .filter({ hasText: fieldName }).first();
+  await runRow.click();
+  await page1.getByRole('button', { name: 'Agregar observación' }).click();
+  const fieldCaptureDialog = page1.getByRole('dialog', { name: 'Agregar observación' });
+  await fieldCaptureDialog.locator('#obs-type').selectOption('pest');
+  await fieldCaptureDialog.locator('#obs-severity').selectOption('high');
+  await fieldCaptureDialog.locator('#obs-notes').fill(fieldObservationNote);
+  await context1.setOffline(true);
+  await fieldCaptureDialog.getByRole('button', { name: 'Usar ubicación actual' }).click();
+  await fieldCaptureDialog.getByText('Ubicación lista para adjuntar').waitFor();
+  const cameraFixture = await attachTestCameraJpeg(page1);
+  assert.ok(cameraFixture.size > 64, 'real Canvas JPEG must be created');
+  await fieldCaptureDialog.getByText(cameraFixture.name).waitFor();
+  await fieldCaptureDialog.getByRole('button', { name: 'Guardar observación' }).click();
+  await page1.getByText('Observación guardada en este dispositivo.', {
+    exact: false
+  }).waitFor();
+  const encryptedCaptureId = await inspectSealedFieldDraft(page1, {
+    note: fieldObservationNote, point: fieldPoint
+  });
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows[0].n, 0,
+  'no network: real backend must not have received the local observation');
+  console.log('PASS: offline real React observation opt-in GPS + Camera File, AES-GCM IndexedDB, zero server writes');
+
+  // An online signal does not constitute a confirmed server receipt.
+  // Force one transport interruption during reconnection; keep the stable
+  // encrypted batch and its separate photo until explicit recovery after reload.
+  let preventedAutomaticBatches = 0;
+  await page1.route('**/api/v1/sync/batches', route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    preventedAutomaticBatches++;
+    return route.abort('failed');
+  });
+  await context1.setOffline(false);
+  await page1.reload();
+  await page1.getByRole('button', { name: 'Sesiones' }).waitFor();
+  const reopenedCaptureId = await inspectSealedFieldDraft(page1, {
+    note: fieldObservationNote, point: fieldPoint, scopeId: encryptedCaptureId
+  });
+  assert.equal(reopenedCaptureId, encryptedCaptureId,
+    'full app reload must preserve same encrypted batch UUID');
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows[0].n, 0);
+  // Subscribe BEFORE releasing the network fault: the authenticated app is
+  // allowed to auto-reconcile as soon as the queue scope lock becomes free.
+  // A pending draft can leave the DOM before Playwright can click a row.
+  const batchPredicate = response =>
+    response.url().endsWith('/api/v1/sync/batches') &&
+    response.request().method() === 'POST';
+  const batchReply = page1.waitForResponse(batchPredicate, { timeout: 55000 })
+    .catch(() => null);
+  const photoReply = page1.waitForResponse(response =>
+    /\/api\/v1\/scouting\/observations\/[0-9a-f-]{36}\/evidence$/.test(
+      new URL(response.url()).pathname) && response.request().method() === 'POST',
+    { timeout: 55000 }).catch(() => null);
+  await page1.unroute('**/api/v1/sync/batches');
+  console.log('PASS: reconnect transport interruption + full SPA reload preserve exact AES-GCM GPS/photo draft');
+
+  await page1.getByRole('button', { name: 'Sync', exact: true }).click();
+  await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
+  const waitForDelivery = async (millis) => Promise.race([
+    batchReply, new Promise(resolve => setTimeout(() => resolve(null), millis))
+  ]);
+  let batchResponse = await waitForDelivery(1200);
+  // If the app has not auto-delivered, use the stable top-level action. It
+  // covers the whole single-item queue and is not destroyed when rows refresh.
+  // A concurrent automatic delivery may remove/disable this action; the
+  // already-registered receipt promise remains authoritative either way.
+  for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
+    const button = page1.getByRole('button', { name: 'Enviar pendientes' });
+    if (await button.isEnabled().catch(() => false)) {
+      await button.click({ timeout: 2000 }).catch(() => {
+        // A row disappearing concurrently is not proof of successful sync;
+        // only the genuine network receipt below can prove completion.
+      });
+    }
+    batchResponse = await waitForDelivery(5000);
+  }
+  assert.ok(batchResponse?.ok(),
+    'real authenticated PostGIS batch must commit via auto or explicit SyncPage action');
+  const batchResult = await batchResponse.json();
+  assert.equal(batchResult.data.status, 'processed');
+  const photoResponse = await photoReply;
+  assert.ok(photoResponse, 'real private-photo upload ACK must arrive');
+  assert.equal(photoResponse.status(), 201, await photoResponse.text());
+  const photoResult = await photoResponse.json();
+  assert.equal(photoResult.replayed, false);
+  const persistedObservationId = batchResult.data.operations[0].result.observation_id;
+  const persistedEvidenceId = photoResult.data.id;
+  assert.equal(photoResult.data.scouting_observation_id, persistedObservationId);
+  await page1.getByText('No hay observaciones pendientes.', {
+    exact: false
+  }).waitFor();
+  console.log('PASS: SyncPage actual batch and private photo POST both confirmed before encrypted draft retirement');
+
+  // One committed WGS84 point + one private attachment, with no source
+  // camera EXIF/GPS marker ever crossing the HTTP or persistence boundary.
+  const [savedLocation] = (await admin.query(
+    'SELECT id, ST_X(point)::float8 AS longitude, ST_Y(point)::float8 AS latitude, observed_by ' +
+    'FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows;
+  assert.equal(savedLocation?.id, persistedObservationId);
+  assert.equal(savedLocation?.observed_by, userId);
+  assert.equal(savedLocation.longitude, fieldPoint.coordinates[0]);
+  assert.equal(savedLocation.latitude, fieldPoint.coordinates[1]);
+  const [privatePhoto] = (await admin.query(
+    'SELECT id, scouting_observation_id, uploaded_by, original_name, mime_type, size_bytes, content_sha256 ' +
+    'FROM evidence_assets WHERE tenant_id=$1 AND scouting_observation_id=$2',
+    [tenantId, persistedObservationId])).rows;
+  assert.equal(privatePhoto?.id, persistedEvidenceId);
+  assert.equal(privatePhoto?.uploaded_by, userId);
+  assert.equal(privatePhoto?.mime_type, 'image/jpeg');
+  assert.equal(privatePhoto?.original_name, 'campo-ubicacion-privada-reducida.jpg');
+  assert.ok(privatePhoto?.size_bytes > 64 && privatePhoto.size_bytes <= 512 * 1024);
+  assert.equal((await admin.query(
+    "SELECT count(*)::int AS n FROM audit_events WHERE tenant_id=$1 AND entity_id=$2 AND action='scouting.observation.synced'",
+    [tenantId, persistedObservationId])).rows[0].n, 0,
+  'audit entry for sync is run-scoped, not modeled as observation entity');
+
+  const realPhoto = await page1.evaluate(async ({ evidenceId, tenant }) => {
+    const result = await fetch('/api/v1/scouting/evidence/' + evidenceId + '/content', {
+      credentials: 'include', headers: { 'x-tenant-id': tenant }
+    });
+    if (result.status !== 200) throw new Error('Private file HTTP integrity/authorization failed: ' + result.status);
+    return result.json();
+  }, { evidenceId: persistedEvidenceId, tenant: tenantId });
+  assert.equal(realPhoto.data.id, persistedEvidenceId);
+  assert.equal(realPhoto.data.mime_type, 'image/jpeg');
+  const jpeg = Buffer.from(realPhoto.data.content_base64, 'base64');
+  assert.equal(jpeg.byteLength, privatePhoto.size_bytes);
+  assert.deepEqual([...jpeg.subarray(0, 3)], [255, 216, 255]);
+  assert.equal(jpeg.includes(Buffer.from(SOURCE_GPS_EXIF_SENTINEL)), false,
+    'source photo GPS/EXIF metadata must be removed before encryption/upload');
+  assert.equal(createHash('sha256').update(jpeg).digest('hex'), privatePhoto.content_sha256,
+    'downloaded private bytes must match persisted SHA-256');
+  const anonymousContext = await browser.newContext();
+  try {
+    const refused = await anonymousContext.request.get(
+      'http://127.0.0.1:4177/api/v1/scouting/evidence/' +
+      persistedEvidenceId + '/content',
+      { headers: { 'x-tenant-id': tenantId } });
+    assert.ok([401, 403, 404].includes(refused.status()),
+      'same-origin URL and asset UUID without valid cookie must not leak photo');
+    assert.notEqual(refused.status(), 200);
+  } finally { await anonymousContext.close(); }
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM sync_batches WHERE tenant_id=$1 AND submitted_by=$2 AND idempotency_key=$3',
+    [tenantId, userId, batchResult.data.idempotency_key])).rows[0].n, 1);
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM evidence_assets WHERE tenant_id=$1 AND scouting_observation_id=$2',
+    [tenantId, persistedObservationId])).rows[0].n, 1);
+  console.log('PASS: PostGIS true GPS point, exactly-once observation/photo and private JPEG SHA-256; source EXIF stripped and anonymous download denied');
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
 

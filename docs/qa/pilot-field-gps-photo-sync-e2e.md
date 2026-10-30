@@ -1,0 +1,24 @@
+# Piloto 0.1 — observación GPS + foto offline, recarga y sincronización privada
+
+**30/10/2026. Alcance #163/#166, base `main@a216581057785dbea1cc3aaa5478a24b0635a1bf`. Release #130 sigue NO-GO.**
+
+## Brecha de aceptación real detectada
+
+Antes de este bloque ya existían: (1) test de Chromium offline y cold-start de PWA con un perfil simulado; (2) tests PostgreSQL de sincronización, idempotencia, evidencia privada y FORCE RLS; (3) sanitización JPEG y GPS unitarias; (4) aplicación React para crear y sincronizar borradores. No existía una prueba única que fuera de **React UI autenticada** a **desconexión real del navegador**, **IndexedDB cifrado**, **recarga**, **POST de observación y archivo privados auténticos** y **verificación PostGIS + SHA-256 + rechazo anónimo**. Este bloque prueba la unión, sin reescribir capacidades existentes.
+
+## Recorrido de extremo a extremo con datos de prueba, sin servidor simulado
+
+- `scripts/acceptance-browser-cookie.mjs`: mantiene la creación real de empresa, scout invitado, establecimiento, lote, campaña y recorrida del flujo aprobado.
+- El propietario abre el detalle de esa recorrida en Monitoreo y selecciona «Agregar observación». Playwright otorga permiso de geolocalización de forma explícita en el contexto, configura una posición de prueba WGS84 y **desconecta todo el contexto Chromium** antes de que el usuario pulse «Usar ubicación actual».
+- Se adjunta a la entrada real de archivo un JPEG producido por Canvas con marcador APP1 sintético `PILOT_SOURCE_GPS_EXIF_MUST_NOT_SURVIVE`. Se completan tipo, severidad y notas y se pulsa el botón real «Guardar observación». Se confirma una sola fila AES-GCM en IndexedDB v2 con IV de 96 bits y sin texto de notas ni coordenadas sin cifrar. La consulta PostgreSQL confirma **cero observaciones** durante la desconexión.
+- Al reconectar, el test aborta las solicitudes automáticas a `POST /sync/batches`, sin simular un recibo exitoso ni mutar la base. Recarga la SPA y confirma que permanece **exactamente el mismo registro cifrado**, con misma identidad, sin creación en PostgreSQL.
+- Se registran los escuchas de recibos HTTP **antes** de retirar el bloqueo de transporte. Si la app realiza su sincronización automática al terminar el lock de la cuenta, se verifica ese camino. Si no, el usuario activa «Enviar pendientes» en Sincronizaciones. Ningún cambio visual o desaparición de fila es prueba de confirmación por sí mismo. Los **dos** recibos HTTP reales son obligatorios: `POST /sync/batches` con operación `processed` y `POST /scouting/observations/:id/evidence` con 201, `replayed=false` y observación vinculada. La cola sólo desaparece después de ambos ACK verificados.
+- La base PostGIS debe conservar exactamente la longitud/latitud WGS84 capturadas, `observed_by` correcto, una observación y un `evidence_asset` privado correspondiente. Un GET autenticado de los bytes debe pasar la verificación de SHA-256, comenzar con firma JPEG y carecer del marcador EXIF sintético. Un contexto de navegador **sin cookie** debe recibir 401/403/404 y nunca la fotografía.
+- `scripts/support/assert-sealed-field-capture.mjs`: utilidades focalizadas sobre Canvas/archivos de navegador y metadata IndexedDB; no imprime nombres reales, cookies, secretos, hashes de archivo ni bytes privados.
+- Se mantienen sin cambio los tests ya aprobados de pérdida ACK de campañas, órdenes y recorridas, convivencia de vault entre pestañas, seguridad de sesiones y RLS.
+
+## Límites y GO/NO-GO
+
+`context.setOffline(true)` aísla la red de Chromium, pero el permiso GPS y la fotografía utilizan **fixtures sintéticos**, no hardware físico ni cámara de campo real. La recarga del escenario se ejecuta **después de reconectar** contra Express/Vite/PostGIS reales; el **cold-start completamente offline** queda acreditado únicamente por la suite PWA independiente y no se declara aquí una prueba física de esa combinación. No implica verificación del receptor móvil/operador, llegada de SMS/email, aislamiento frente a scripts maliciosos de origen compartido, datos reales, GPS en terreno ni validación de navegadores iOS/Android.
+
+Se exige CI exacta sobre la PR con cinco gates (tenant-rls/backup+restore, real Chromium/PostGIS, Chromium offline, dependency-security, images) e independiente en `main` con siete gates (más OCI attestation y offline image import). Ningún gate se elimina ni se da por ejecutado prematuramente. No se hace deploy. Falta aprobación humana Product/Security, staging aislado y pruebas físicas (#163, #166, #130).
