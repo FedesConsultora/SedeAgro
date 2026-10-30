@@ -225,9 +225,18 @@ export function SessionProvider({ children }) {
     // A suspended/background tab may miss a browser event. Adopt TOP's
     // bounded foreground revalidation; never interrupt active offline work.
     const onForeground = () => {
-      if (!localStorage.getItem('sedeagro.tenantHint')) return;
+      const hint = localStorage.getItem('sedeagro.tenantHint');
+      if (!hint) return;
+      // A login in another tab can set a new cookie and tenant hint while
+      // this tab is hidden. Cross-tab notifications are advisory and may be
+      // missed or delayed; foreground rechecks the SERVER rather than taking
+      // the hint itself as permission to render private data.
+      const current = sessionRef.current;
+      const needsVerifiedIdentity = current?.authenticated !== true ||
+        current?.tenant?.id !== hint;
       if (shouldRecheckOnForeground(lastAttemptAt, Date.now(),
-        document.visibilityState === 'visible', navigator.onLine !== false)) {
+        document.visibilityState === 'visible', navigator.onLine !== false,
+        needsVerifiedIdentity)) {
         void revalidate({ quarantine: true });
       }
     };
