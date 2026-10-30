@@ -174,7 +174,7 @@ try {
   }).waitFor();
   assert.equal(lostAckCount, 1, 'double click / transport error must not auto-resubmit');
   assert.ok(committedCampaignId && firstCampaignRequestId);
-  assert.equal(await pendingCampaignDialog.getByRole('button', { name: 'Crear campaña' }).isDisabled(), true);
+  assert.equal(await pendingCampaignDialog.getByRole('button', { name: 'Confirmación pendiente' }).isDisabled(), true);
   const countBeforeRetry = (await admin.query(
     'SELECT count(*)::int AS n FROM campaigns WHERE tenant_id=$1 AND name=$2',
     [tenantId, campaignName])).rows[0].n;
@@ -214,7 +214,7 @@ try {
   }).waitFor();
   assert.equal(await recoveryCampaignDialog.locator('#campaign-name').inputValue(), campaignName);
   assert.equal(await recoveryCampaignDialog.locator('#campaign-name').isDisabled(), true);
-  assert.equal(await recoveryCampaignDialog.getByRole('button', { name: 'Crear campaña' }).isDisabled(), true);
+  assert.equal(await recoveryCampaignDialog.getByRole('button', { name: 'Confirmación pendiente' }).isDisabled(), true);
   let replayCount = 0;
   await page1.route('**/api/v1/campaigns', async route => {
     if (route.request().method() !== 'POST') return route.continue();
