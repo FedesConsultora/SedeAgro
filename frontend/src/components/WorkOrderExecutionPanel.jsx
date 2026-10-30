@@ -139,7 +139,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         setError('El servidor registra una revisión distinta. No se volvió a enviar; actualizá la orden y consultá con coordinación.');
         onChanged?.();
       } else {
-        setError('El servidor aún no confirma la revisión. No vuelvas a enviarla: comprobá nuevamente con conexión estable.');
+        setError('El servidor aún no confirma la revisión. Podés comprobar nuevamente o reintentar explícitamente la misma decisión con su clave original.');
       }
     } catch {
       setError('No se pudo comprobar la revisión. Podría haberse guardado; no la repitas sin verificar el estado del servidor.');
@@ -153,6 +153,38 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     try {
       await verifyInterruptedReview(pendingReview);
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const retryOriginalReview = async () => {
+    if (!pendingReview || busy || reviewInFlight.current ||
+        !pendingReview.body.client_request_id) return;
+    // The durable key is identical: the server can return the original
+    // receipt after a committed/lost ACK, never create a second audit event.
+    reviewInFlight.current = true;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await api.request(
+        `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(pendingReview.reportId)}/review`, {
+          method: 'POST', silent: true, body: pendingReview.body
+        });
+      validatedExecutionResponse(response, order.id,
+        pendingReview.body.decision, pendingReview.reportId);
+      setPendingReview(null);
+      setNotice(response.replayed === true
+        ? 'El servidor confirmó la revisión original, sin duplicarla.'
+        : 'El servidor confirmó la revisión. No se generó otra decisión.');
+      onChanged?.();
+    } catch (err) {
+      if (needsReviewReceiptLookup(err)) {
+        await verifyInterruptedReview(pendingReview);
+      } else {
+        setError(err?.message || 'No fue posible recuperar la revisión original.');
+      }
+    } finally {
+      reviewInFlight.current = false;
       setBusy(false);
     }
   };
@@ -181,7 +213,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       setError('Para rechazar, explicá el motivo con al menos 10 caracteres.');
       return;
     }
-    const body = { decision, ...(decision === 'rejected' ? { reason } : { checklist }) };
+    // Generated once for this human decision. Every explicit retry of an
+    // uncertain delivery must reuse this exact UUID and immutable body.
+    const body = { client_request_id: crypto.randomUUID(),
+      decision, ...(decision === 'rejected' ? { reason } : { checklist }) };
     // React state updates are asynchronous: guard two clicks in the same tick.
     reviewInFlight.current = true;
     setBusy(true);
@@ -219,6 +254,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       {pendingReview && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReview()}>
         {busy ? 'Comprobando…' : 'Comprobar revisión en servidor'}
+      </button>}
+      {pendingReview?.body.client_request_id && <button type="button"
+        className="ghost-action" disabled={busy}
+        onClick={() => void retryOriginalReview()}>
+        Reintentar revisión con la misma clave
       </button>}
       {pendingPayload && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReceipt()}>
