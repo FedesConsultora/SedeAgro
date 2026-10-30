@@ -33,6 +33,7 @@ import { putPrivateEvidence, getPrivateEvidenceByteLength, getBoundedPrivateEvid
 import { classifyEvidenceIntegrity, shouldReadEvidenceBytes } from '../scouting/evidenceIntegrity.js';
 import { canAttachExecutionEvidence, sameExecutionUpload, visibleExecutionEvidence, EXECUTION_EVIDENCE_LIMIT, ORDER_EVIDENCE_LIMIT } from './executionEvidencePolicy.js';
 import { canAcceptReviewChecklist } from './reviewChecklistPolicy.js';
+import { reserveExecutionReview } from './reviewIdempotency.js';
 import { buildInputDeclaration, sameInputDeclaration, hasRequiredInputDeclaration, MAX_DECLARED_INPUTS } from './inputDeclarationPolicy.js';
 import { positiveDeclaredQuantity, sameUnplannedRequest, canApproveWithExceptions,
   canReviewException, publicException, MAX_UNPLANNED_INPUTS } from './inputExceptionPolicy.js';
@@ -116,6 +117,7 @@ const inputDeclarationSchema = z.object({
 }).strict();
 
 const executionReviewSchema = z.object({
+  client_request_id: z.string().uuid().optional(),
   decision: z.enum(['verified', 'rejected']),
   reason: z.string().trim().min(10).max(500).optional(),
   checklist: reviewChecklistSchema.optional()
@@ -1064,10 +1066,6 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
   if (!['tenant_admin', 'agronomic_coordinator'].includes(roleCode)) {
     throw new HttpError(403, 'Solo coordinación puede revisar ejecuciones.');
   }
-  if (order.status !== 'in_progress') {
-    throw new HttpError(409, 'La orden ya no admite revisiones de ejecución.',
-      undefined, 'EXECUTION_REVIEW_CLOSED');
-  }
   const report = await WorkOrderExecution.findOne({
     where: { tenant_id: req.tenantId, work_order_id: order.id, id: req.params.executionId },
     transaction: req.dbTransaction, lock: req.dbTransaction.LOCK.UPDATE
@@ -1076,6 +1074,17 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
   if (!canReviewExecution(roleCode, req.auth.user.id, report.submitted_by)) {
     throw new HttpError(403, 'No podés revisar una declaración propia.',
       undefined, 'EXECUTION_SELF_REVIEW_DENIED');
+  }
+  // This receipt is committed by the SAME transaction as the review and audit.
+  // Replay is authorized afresh and allowed even after administrative closure.
+  const receipt = await reserveExecutionReview(req, report);
+  res.set('Cache-Control', 'private, no-store');
+  if (receipt.kind === 'replay') {
+    return res.status(200).json({ data: report, replayed: true });
+  }
+  if (order.status !== 'in_progress') {
+    throw new HttpError(409, 'La orden ya no admite revisiones de ejecución.',
+      undefined, 'EXECUTION_REVIEW_CLOSED');
   }
   if (report.review_status !== 'submitted') {
     throw new HttpError(409, 'Esta declaración ya fue revisada.',
@@ -1153,7 +1162,7 @@ workOrdersRouter.post('/:id/executions/:executionId/review', requireCapability('
         evidence_basis: req.body.checklist.evidence_basis, attachment_count: attachmentCount } : {}) },
     request_id: safeAuditRequestId(req.requestId)
   }, { transaction: req.dbTransaction });
-  res.json({ data: report });
+  res.json({ data: report, ...(receipt.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 // A single bounded metadata read avoids one request per report, and never

@@ -83,5 +83,11 @@ test('UI blocks repeat POST while confirmation is uncertain and uses an authoriz
   assert.match(ui, /reviewInFlight\.current = false/);
   assert.match(ui, /disabled=\{busy \|\| Boolean\(pendingReview\)\}/);
   assert.match(ui, /Comprobar revisión en servidor/);
+  assert.match(ui, /client_request_id: crypto\.randomUUID\(\)/);
+  assert.match(ui, /pendingReview\.body\.client_request_id/);
+  assert.match(ui, /body: pendingReview\.body/);
+  assert.match(ui, /Reintentar revisión con la misma clave/);
+  assert.match(ui, /onClick=\{\(\) => void retryOriginalReview\(\)\}/);
+  assert.match(ui, /reviewInFlight\.current = true/);
   assert.match(ui, /No se volvió a enviar/i);
 });

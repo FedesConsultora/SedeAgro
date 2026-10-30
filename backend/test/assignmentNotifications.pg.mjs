@@ -792,10 +792,25 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles })).status, 404);
     assert.equal((await request(reviewRoute, adminToken, tenantA,
       'POST', { decision: 'rejected' })).status, 422);
+    const rejectKey = randomUUID();
+    const rejectBody = { client_request_id: rejectKey,
+      decision: 'rejected', reason: 'Falta validar superficie realmente recorrida.' };
     const rejected = await request(reviewRoute, adminToken, tenantA,
-      'POST', { decision: 'rejected', reason: 'Falta validar superficie realmente recorrida.' });
+      'POST', rejectBody);
     assert.equal(rejected.status, 200, JSON.stringify(rejected.body));
     assert.equal(rejected.body.data.review_status, 'rejected');
+    assert.equal(rejected.body.replayed, false);
+    const rejectedReplay = await request(reviewRoute, adminToken, tenantA, 'POST', rejectBody);
+    assert.equal(rejectedReplay.status, 200, JSON.stringify(rejectedReplay.body));
+    assert.equal(rejectedReplay.body.replayed, true);
+    assert.equal(rejectedReplay.body.data.id, firstReportId);
+    assert.equal((await request(reviewRoute, adminToken, tenantA, 'POST',
+      { ...rejectBody, reason: 'Otro motivo de rechazo con la misma clave.' })).body.error.code,
+    'EXECUTION_REVIEW_REQUEST_CONFLICT');
+    assert.equal((await request(reviewRoute, adminBToken, tenantB, 'POST', rejectBody)).status, 404);
+    assert.equal(await count('work_order_execution_review_requests',
+      'tenant_id=$1 AND reviewed_by=$2 AND client_request_id=$3',
+      [tenantA, adminA, rejectKey]), 1);
     assert.equal((await request(reviewRoute, adminToken, tenantA,
       'POST', { decision: 'verified', checklist: checkedReviewWithFiles })).status, 409);
 
@@ -813,10 +828,29 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
       { decision: 'verified', checklist: checkedReviewWithFiles })).status, 409,
     'Cannot say files were reviewed if the report has none');
+    const verifyKey = randomUUID();
+    const verifyBody = { client_request_id: verifyKey,
+      decision: 'verified', checklist: checkedReviewNoFiles };
+    assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
+      { ...verifyBody, client_request_id: rejectKey })).body.error.code,
+    'EXECUTION_REVIEW_REQUEST_CONFLICT',
+    'A prior review UUID cannot be attached to a different execution');
     const verified = await request(correctedReviewUrl,
-      adminToken, tenantA, 'POST', { decision: 'verified', checklist: checkedReviewNoFiles });
+      adminToken, tenantA, 'POST', verifyBody);
     assert.equal(verified.status, 200, JSON.stringify(verified.body));
     assert.equal(verified.body.data.review_status, 'verified');
+    assert.equal(verified.body.replayed, false);
+    // Same-key concurrent HTTP requests must serialize under the order
+    // lock and tenant-actor receipt unique constraint, without new audits.
+    const concurrentReplay = await Promise.all([
+      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody),
+      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody)
+    ]);
+    assert.ok(concurrentReplay.every(x => x.status === 200 && x.body.replayed === true),
+      JSON.stringify(concurrentReplay.map(x => x.body)));
+    assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
+      { ...verifyBody, checklist: checkedReviewWithFiles })).body.error.code,
+    'EXECUTION_REVIEW_REQUEST_CONFLICT');
     const globalClosure = await request(reviewQueue + '?state=closure', adminToken, tenantA);
     assert.equal(globalClosure.status, 200, JSON.stringify(globalClosure.body));
     assert.equal(globalClosure.body.data.some(item => item.id === orderId), true);
@@ -833,6 +867,15 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
       coordinatorToken, tenantA, 'PATCH', { status: 'completed' });
     assert.equal(completed.status, 200, JSON.stringify(completed.body));
     assert.ok(completed.body.data.completed_at);
+    // A replay after an administrative close does not restart the review.
+    const replayAfterClosure = await request(correctedReviewUrl, adminToken,
+      tenantA, 'POST', verifyBody);
+    assert.equal(replayAfterClosure.status, 200, JSON.stringify(replayAfterClosure.body));
+    assert.equal(replayAfterClosure.body.replayed, true);
+    assert.equal(replayAfterClosure.body.data.id, correctedId);
+    assert.equal(await count('work_order_execution_review_requests',
+      'tenant_id=$1 AND reviewed_by=$2 AND work_order_id=$3',
+      [tenantA, adminA, orderId]), 2);
     // Replays survive closure without creating a second blob; a new upload
     // after the report was rejected and the order completed stays denied.
     const closedReplay = await request(evidenceUrl, contractorToken, tenantA,
@@ -852,6 +895,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     await appClient.query("SELECT set_config('app.current_tenant',$1,true)", [tenantB]);
     assert.equal((await appClient.query('SELECT id FROM work_order_executions WHERE id=$1',
       [correctedId])).rowCount, 0);
+    assert.equal((await appClient.query(
+      'SELECT count(*)::int AS n FROM work_order_execution_review_requests'
+    )).rows[0].n, 0, 'Receipts must obey tenant B FORCE RLS');
     await appClient.query('ROLLBACK');
 
     // Admin authors cannot self-review, even though their role can review others.
