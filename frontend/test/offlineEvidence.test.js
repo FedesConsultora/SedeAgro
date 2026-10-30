@@ -284,7 +284,9 @@ test('pilot real-browser field GPS/photo capture is committed offline and verifi
   assert.match(scenario, /await context1\.setOffline\(false\)/);
   assert.match(scenario, /await page1\.reload\(\)/);
   assert.match(scenario, /await page1\.unroute\('\*\*\/api\/v1\/sync\/batches'\)/);
-  assert.match(scenario, /getByRole\('button', \{ name: 'Enviar solo esta' \}\)/);
+  assert.match(scenario, /getByRole\('button', \{ name: 'Enviar pendientes' \}\)/);
+  assert.match(scenario, /batchReply = page1\.waitForResponse/);
+  assert.match(scenario, /await page1\.unroute\('\*\*\/api\/v1\/sync\/batches'\)/);
   assert.match(scenario, /batchResult\.data\.status, 'processed'/);
   assert.match(scenario, /photoResponse\.status\(\), 201/);
   assert.match(scenario, /ST_X\(point\).*ST_Y\(point\)/);
