@@ -168,7 +168,7 @@ try {
     const activationAck = recipient.waitForResponse(res =>
       res.url().endsWith('/auth/invite/accept') && res.request().method() === 'POST');
     await recipient.getByRole('button', { name: 'Activar mi acceso' }).click();
-    assert.equal((await activationAck).status(), 200, 'first invitation acceptance must succeed');
+    assert.equal((await activationAck).status(), 201, 'first invitation acceptance must succeed');
     await recipient.getByText('se activó.', { exact: false }).waitFor();
     await recipient.getByRole('button', { name: 'Ir a iniciar sesión' }).click();
     await recipient.locator('#login-email').fill(scoutEmail);
