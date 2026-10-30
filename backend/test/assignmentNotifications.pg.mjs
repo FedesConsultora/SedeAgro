@@ -22,8 +22,10 @@ const { isSafeRuntimeDbRole } = await import('../src/core/tenantDbSafety.js');
 const { Client } = pg;
 
 test('assignment notifications: transactional writes, replay, ownership, RLS, rollback', async t => {
-  const owner = new Client({ connectionString: adminUrl });
-  const appClient = new Client({ connectionString: appUrl });
+  const owner = new Client({ connectionString: adminUrl,
+    statement_timeout: 20000, query_timeout: 25000 });
+  const appClient = new Client({ connectionString: appUrl,
+    statement_timeout: 20000, query_timeout: 25000 });
   const server = createApp().listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
