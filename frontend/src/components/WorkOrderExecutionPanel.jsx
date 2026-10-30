@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
@@ -6,6 +6,7 @@ import { WorkOrderExecutionExceptions } from './WorkOrderExecutionExceptions.jsx
 import { exceptionReadinessForReview } from '../services/executionReviewReadiness.js';
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { needsExecutionReceiptLookup, reconcileExecutionReceipt } from '../services/workOrderExecutionReceipt.js';
+import { needsReviewReceiptLookup, reconcileReviewReceipt } from '../services/workOrderReviewReceipt.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
@@ -41,6 +42,8 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
+  const [pendingReview, setPendingReview] = useState(null);
+  const reviewInFlight = useRef(false);
 
   if (!live) return null;
 
@@ -116,8 +119,46 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     }
   };
 
+  // A prior review may have COMMITTED before its HTTP ACK was lost.
+  // Never issue another POST as a recovery action: inspect its exact server row.
+  const verifyInterruptedReview = async pending => {
+    try {
+      const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}`, {
+        silent: true
+      });
+      const receipt = reconcileReviewReceipt(response, {
+        orderId: order.id, reportId: pending.reportId, reviewerId: userId,
+        ...pending.body
+      });
+      if (receipt.state === 'recorded') {
+        setPendingReview(null);
+        setError('');
+        setNotice('La revisión figura registrada por tu usuario en el servidor. No se volvió a enviar.');
+        onChanged?.();
+      } else if (receipt.state === 'different') {
+        setError('El servidor registra una revisión distinta. No se volvió a enviar; actualizá la orden y consultá con coordinación.');
+        onChanged?.();
+      } else {
+        setError('El servidor aún no confirma la revisión. No vuelvas a enviarla: comprobá nuevamente con conexión estable.');
+      }
+    } catch {
+      setError('No se pudo comprobar la revisión. Podría haberse guardado; no la repitas sin verificar el estado del servidor.');
+    }
+  };
+
+  const recheckReview = async () => {
+    if (!pendingReview || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await verifyInterruptedReview(pendingReview);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const review = async (report, decision) => {
-    if (!canReviewExecutionReport(order, report, role, userId, live) || busy) return;
+    if (!canReviewExecutionReport(order, report, role, userId, live) || busy || pendingReview || reviewInFlight.current) return;
     if (decision === 'verified') {
       const readiness = exceptionReadinessForReview(order, report, exceptionReadiness);
       if (!readiness.allowed) {
@@ -140,19 +181,29 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       setError('Para rechazar, explicá el motivo con al menos 10 caracteres.');
       return;
     }
+    const body = { decision, ...(decision === 'rejected' ? { reason } : { checklist }) };
+    // React state updates are asynchronous: guard two clicks in the same tick.
+    reviewInFlight.current = true;
     setBusy(true);
     setError('');
+    setNotice('');
     try {
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/review`, {
-          method: 'POST', silent: true,
-          body: { decision, ...(decision === 'rejected' ? { reason } : { checklist }) }
+          method: 'POST', silent: true, body
         });
       validatedExecutionResponse(response, order.id, decision, report.id);
       onChanged?.();
     } catch (err) {
-      setError(err?.message || 'No se confirmó la revisión.');
+      if (needsReviewReceiptLookup(err)) {
+        const pending = { reportId: report.id, body };
+        setPendingReview(pending);
+        await verifyInterruptedReview(pending);
+      } else {
+        setError(err?.message || 'No se confirmó la revisión.');
+      }
     } finally {
+      reviewInFlight.current = false;
       setBusy(false);
     }
   };
@@ -165,6 +216,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     {error && <div className="order-detail__error" role="alert">
       {error} <button type="button" className="ghost-action"
         onClick={onChanged}>Actualizar datos</button>
+      {pendingReview && <button type="button" className="ghost-action"
+        disabled={busy} onClick={() => void recheckReview()}>
+        {busy ? 'Comprobando…' : 'Comprobar revisión en servidor'}
+      </button>}
       {pendingPayload && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReceipt()}>
         {busy ? 'Comprobando…' : 'Comprobar parte en servidor'}
@@ -224,7 +279,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       {report.review_status === 'verified' && !reviewChecklistOutcome(report) &&
         <p className="order-detail__footnote">Revisión histórica, sin checklist estructurado; no se infieren controles retroactivos.</p>}
       {canReviewExecutionReport(order, report, role, userId, live) && <div className="order-detail__execution-review">
-        <fieldset className="order-detail__review-checklist" disabled={busy}>
+        <fieldset className="order-detail__review-checklist" disabled={busy || Boolean(pendingReview)}>
           <legend>Controles de revisión para {order.type} (solo aceptación)</legend>
           {[
             ['time_checked', 'Contrasté las fechas y horas declaradas.'],
@@ -257,7 +312,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         </fieldset>
         <label className="form-field">Motivo de rechazo (obligatorio solo si rechazás)
           <textarea maxLength={500} rows={2} value={reviewReason[report.id] || ''}
-            disabled={busy} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
+            disabled={busy || Boolean(pendingReview)} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
         </label>
         {!exceptionReadinessForReview(order, report, exceptionReadiness).allowed &&
           <p className="order-detail__footnote" role="status">
@@ -265,10 +320,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
           </p>}
         <div className="order-detail__execution-actions">
           <button className="primary-action" type="button"
-            disabled={busy || hasPlannedInputsWithoutDeclaration(order, report) ||
+            disabled={busy || Boolean(pendingReview) || hasPlannedInputsWithoutDeclaration(order, report) ||
               !exceptionReadinessForReview(order, report, exceptionReadiness).allowed}
             onClick={() => void review(report, 'verified')}>Aceptar revisión</button>
-          <button className="ghost-action" type="button" disabled={busy}
+          <button className="ghost-action" type="button" disabled={busy || Boolean(pendingReview)}
             onClick={() => void review(report, 'rejected')}>Rechazar parte</button>
         </div>
       </div>}
