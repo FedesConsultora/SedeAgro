@@ -131,20 +131,38 @@ async function transaction(mode, operation) {
   } finally { db.close(); }
 }
 
+// A request may wait on PBKDF2 or IndexedDB.open while a different account
+// logs in, logs out or gets revoked. In-memory epoch fencing must be checked
+// again *inside* each IndexedDB write transaction, after the asynchronous open.
+function assertCurrentVaultGeneration(expected) {
+  if (generation !== expected) {
+    throw new Error('El acceso local cambió durante la operación. Volvé a verificar tu sesión.');
+  }
+}
+
 export async function enrollOfflineFieldVault(profile, passphrase) {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     throw new Error('Debés verificar tu sesión con el servidor antes de habilitar acceso local.');
   }
+  // Invalidate pending clears and older enrollments BEFORE costly PBKDF2.
+  // Otherwise an old session can overwrite a newly authorized local scope.
+  const expected = lockOfflineFieldVault();
   const sealed = await sealFieldProfile(profile, passphrase);
-  // Only one scoped identity is locally recoverable. Previous ciphertext is
-  // overwritten atomically, never exposed via localStorage/tenantHint.
-  await transaction('readwrite', store => store.put(sealed));
+  assertCurrentVaultGeneration(expected);
+  // Only one scoped identity is locally recoverable. A delayed transaction
+  // must not re-create an old actor's envelope after the account changed.
+  await transaction('readwrite', store => {
+    assertCurrentVaultGeneration(expected);
+    return store.put(sealed);
+  });
+  assertCurrentVaultGeneration(expected);
   lockOfflineFieldVault();
   return true;
 }
 
 export function lockOfflineFieldVault() {
   generation += 1;
+  return generation;
 }
 
 function checkedCapability(ticket) {
@@ -162,15 +180,20 @@ export async function unlockOfflineFieldVault(passphrase) {
     throw new Error('Este acceso sólo funciona sin conexión. Validá tu sesión en línea.');
   }
   if (Date.now() < blockedUntil) throw new Error('Demasiados intentos. Volvé a probar más tarde.');
+  const expected = generation;
   const record = await transaction('readonly', store => store.get(RECORD));
+  assertCurrentVaultGeneration(expected);
   if (!record) throw new Error('No se configuró acceso local. Configuralo con la sesión verificada y conexión.');
   let profile;
   try {
     profile = await openFieldProfile(record, passphrase);
   } catch (error) {
+    // A late decrypt from an obsolete actor is not a bad-passphrase attempt.
+    assertCurrentVaultGeneration(expected);
     if (++failures >= 5) { blockedUntil = Date.now() + 60_000; failures = 0; }
     throw error;
   }
+  assertCurrentVaultGeneration(expected);
   failures = 0;
   const ticket = Object.freeze({});
   capabilities.set(ticket, {
@@ -212,6 +235,12 @@ export async function queueOfflineFieldObservation(ticket, runId, values) {
 }
 
 export async function clearOfflineFieldVault() {
-  lockOfflineFieldVault();
-  await transaction('readwrite', store => store.delete(RECORD));
+  const expected = lockOfflineFieldVault();
+  // Clearing a revoked session is allowed to finish after React has already
+  // signed in another actor. A superseded deletion must NEVER erase the new
+  // actor's freshly enrolled AES-GCM envelope.
+  await transaction('readwrite', store => {
+    if (generation !== expected) return null;
+    return store.delete(RECORD);
+  });
 }
