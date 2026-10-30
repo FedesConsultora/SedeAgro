@@ -18,6 +18,12 @@ export async function up({ context: queryInterface }) {
       CONSTRAINT execution_review_receipt_execution_fk FOREIGN KEY (tenant_id, execution_id)
         REFERENCES work_order_executions(tenant_id, id) ON DELETE CASCADE
     );
+    -- The PK serves actor/key lookups; these additional indexes bound FK
+    -- checks when a tenant/order/execution is removed during test or retention.
+    CREATE INDEX idx_execution_review_receipt_order
+      ON work_order_execution_review_requests(tenant_id, work_order_id);
+    CREATE INDEX idx_execution_review_receipt_execution
+      ON work_order_execution_review_requests(tenant_id, execution_id);
     ALTER TABLE work_order_execution_review_requests ENABLE ROW LEVEL SECURITY;
     ALTER TABLE work_order_execution_review_requests FORCE ROW LEVEL SECURITY;
     CREATE POLICY execution_review_receipts_tenant_isolation
