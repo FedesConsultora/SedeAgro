@@ -95,19 +95,28 @@ function mountVault(t) {
   return idb;
 }
 
+async function expectSettled(promise, step) {
+  let timer;
+  try {
+    return await Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('IndexedDB test harness stalled at ' + step)), 3000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 test('slow old-session IDB delete cannot erase a newly enrolled account envelope', async t => {
   const db = mountVault(t);
-  await enrollOfflineFieldVault(profile(firstActor), phrase);
+  await expectSettled(enrollOfflineFieldVault(profile(firstActor), phrase), 'enroll first');
   assert.ok(db.row);
 
   const deferred = db.holdOpen();
   const oldRetirement = clearOfflineFieldVault();
-  await deferred.started;
-  await enrollOfflineFieldVault(profile(nextActor), phrase);
+  await expectSettled(deferred.started, 'held open start');
+  await expectSettled(enrollOfflineFieldVault(profile(nextActor), phrase), 'enroll replacement');
   const newerEnvelope = db.row;
   assert.ok(newerEnvelope);
   deferred.release();
-  await oldRetirement;
+  await expectSettled(oldRetirement, 'retire stale');
 
   assert.equal(db.row, newerEnvelope,
     'late clear must not remove the new actor envelope');
@@ -123,7 +132,7 @@ test('a delayed PBKDF2 enrollment cannot commit after a newer session locks the 
   const db = mountVault(t);
   const deferred = db.holdOpen();
   const obsolete = enrollOfflineFieldVault(profile(firstActor), phrase);
-  await deferred.started;
+  await expectSettled(deferred.started, 'held open start');
   lockOfflineFieldVault();
   deferred.release();
   await assert.rejects(obsolete, /acceso local cambió/);
@@ -132,10 +141,10 @@ test('a delayed PBKDF2 enrollment cannot commit after a newer session locks the 
 
 test('offline unlock opened before a lock cannot grant capability after identity changes', async t => {
   const db = mountVault(t);
-  await enrollOfflineFieldVault(profile(firstActor), phrase);
+  await expectSettled(enrollOfflineFieldVault(profile(firstActor), phrase), 'enroll first');
   const deferred = db.holdOpen();
   const unlock = unlockOfflineFieldVault(phrase);
-  await deferred.started;
+  await expectSettled(deferred.started, 'held open start');
   lockOfflineFieldVault();
   deferred.release();
   await assert.rejects(unlock, /acceso local cambió/);
