@@ -36,7 +36,7 @@ test('receipt reservation remains tenant/actor scoped and locked within original
   const router = readFileSync(
     new URL('../src/modules/workOrders/router.js', import.meta.url), 'utf8');
   const migration = readFileSync(
-    new URL('../../db/migrations/202610300001_execution_review_requests.js', import.meta.url), 'utf8');
+    new URL('../db/migrations/202610300001_execution_review_requests.js', import.meta.url), 'utf8');
   assert.match(source, /ON CONFLICT \(tenant_id, reviewed_by, client_request_id\) DO NOTHING/);
   assert.match(source, /tenant_id=:tenant AND reviewed_by=:actor AND client_request_id=:key/);
   assert.match(source, /EXECUTION_REVIEW_REQUEST_CONFLICT/);
