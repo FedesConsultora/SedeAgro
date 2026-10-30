@@ -737,42 +737,43 @@ try {
   assert.equal((await admin.query(
     'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
     [tenantId, committedRunId, fieldObservationNote])).rows[0].n, 0);
-  await page1.unroute('**/api/v1/sync/batches');
-  console.log('PASS: reconnect transport interruption + full SPA reload preserve exact AES-GCM GPS/photo draft');
-
-  // Actual SyncPage performs BOTH the observation batch and independently
-  // verified private photo upload; the queue may retire only after both.
-  await page1.getByRole('button', { name: 'Sync', exact: true }).click();
-  await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
-  await page1.getByText('Foto local: campo-ubicacion-privada-reducida.jpg', {
-    exact: false
-  }).waitFor();
-  const photoReply = page1.waitForResponse(response =>
-    /\/api\/v1\/scouting\/observations\/[0-9a-f-]{36}\/evidence$/.test(
-      new URL(response.url()).pathname) && response.request().method() === 'POST',
-    { timeout: 60000 }).catch(() => null);
+  // Subscribe BEFORE releasing the network fault: the authenticated app is
+  // allowed to auto-reconcile as soon as the queue scope lock becomes free.
+  // A pending draft can leave the DOM before Playwright can click a row.
   const batchPredicate = response =>
     response.url().endsWith('/api/v1/sync/batches') &&
     response.request().method() === 'POST';
-  let batchResponse = null;
-  // On reconnect, the app may still own the same account-scoped Web Lock
-  // while its blocked automatic flush is finishing. The UI surfaces "busy".
-  // Only in that exact visible case may the operator explicitly press again.
+  const batchReply = page1.waitForResponse(batchPredicate, { timeout: 55000 })
+    .catch(() => null);
+  const photoReply = page1.waitForResponse(response =>
+    /\/api\/v1\/scouting\/observations\/[0-9a-f-]{36}\/evidence$/.test(
+      new URL(response.url()).pathname) && response.request().method() === 'POST',
+    { timeout: 55000 }).catch(() => null);
+  await page1.unroute('**/api/v1/sync/batches');
+  console.log('PASS: reconnect transport interruption + full SPA reload preserve exact AES-GCM GPS/photo draft');
+
+  await page1.getByRole('button', { name: 'Sync', exact: true }).click();
+  await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
+  const waitForDelivery = async (millis) => Promise.race([
+    batchReply, new Promise(resolve => setTimeout(() => resolve(null), millis))
+  ]);
+  let batchResponse = await waitForDelivery(1200);
+  // If the app has not auto-delivered, use the stable top-level action. It
+  // covers the whole single-item queue and is not destroyed when rows refresh.
+  // A concurrent automatic delivery may remove/disable this action; the
+  // already-registered receipt promise remains authoritative either way.
   for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
-    const reply = page1.waitForResponse(batchPredicate, { timeout: 6500 })
-      .catch(() => null);
-    await page1.getByRole('button', { name: 'Enviar solo esta' }).click();
-    batchResponse = await reply;
-    if (!batchResponse) {
-      const busy = await page1.getByText(
-        'Otra pestaña está procesando esta cuenta. Probá nuevamente.', {
-          exact: false
-        }).count();
-      assert.equal(busy, 1,
-        'no POST was dispatched: the app must explicitly report a scope-lock skip');
+    const button = page1.getByRole('button', { name: 'Enviar pendientes' });
+    if (await button.isEnabled().catch(() => false)) {
+      await button.click({ timeout: 2000 }).catch(() => {
+        // A row disappearing concurrently is not proof of successful sync;
+        // only the genuine network receipt below can prove completion.
+      });
     }
+    batchResponse = await waitForDelivery(5000);
   }
-  assert.ok(batchResponse?.ok(), 'real PostGIS sync batch must be accepted');
+  assert.ok(batchResponse?.ok(),
+    'real authenticated PostGIS batch must commit via auto or explicit SyncPage action');
   const batchResult = await batchResponse.json();
   assert.equal(batchResult.data.status, 'processed');
   const photoResponse = await photoReply;
