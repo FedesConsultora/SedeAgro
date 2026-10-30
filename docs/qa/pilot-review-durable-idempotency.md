@@ -14,6 +14,7 @@ La revisión de un parte podía quedar confirmada por PostgreSQL pero perder el 
 - Pruebas puras: fingerprint canónico, choque de identidad, scope y contrato RLS.
 - `backend/test/assignmentNotifications.pg.mjs`: real HTTP Express+PostGIS, roles distintos, tenant B, revisión `rejected` + `verified`, replay simultáneo, colisión de UUID, verificación posterior al cierre, auditoría exactamente dos eventos y visibilidad RLS cero para tenant externo.
 - Frontend: test de clave UUID, botón consciente de reintento y cuerpo inmutable; el cambio conserva revisión administrativa separada de certificación física.
+- `scripts/acceptance-browser-review-inbox.mjs`: Chromium con React y cookie real, dos personas distintas, POST de revisión exitoso en Express/PostGIS con ACK abortado por Playwright **después del COMMIT**; respuesta de recuperación GET temporal 503 (nunca 2xx simulada), acción humana de reintentar la clave original, respuesta real 200 `replayed:true`, una fila/recibo y un solo evento de auditoría. Esta prueba forma parte del gate `browser-postgis` de CI.
 - Ejecutar: `node --test backend/test/reviewIdempotency.test.js`, suite `backend/test/assignmentNotifications.pg.mjs` con dos URLs `*_test` migradas y rol non-owner, `npm test`, `npm run build`, y CI exact-HEAD PR + CI independiente sobre merge.
 
 ## Límites, seguridad y rollback
