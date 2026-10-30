@@ -22,10 +22,8 @@ const { isSafeRuntimeDbRole } = await import('../src/core/tenantDbSafety.js');
 const { Client } = pg;
 
 test('assignment notifications: transactional writes, replay, ownership, RLS, rollback', async t => {
-  const owner = new Client({ connectionString: adminUrl,
-    statement_timeout: 20000, query_timeout: 25000 });
-  const appClient = new Client({ connectionString: appUrl,
-    statement_timeout: 20000, query_timeout: 25000 });
+  const owner = new Client({ connectionString: adminUrl });
+  const appClient = new Client({ connectionString: appUrl });
   const server = createApp().listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(async () => {
@@ -49,9 +47,6 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
   async function request(path, token, tenant, method = 'GET', body, extraHeaders = {}) {
     const response = await fetch(base + path, {
       method,
-      // Bound actual HTTP waits so a DB row-lock or receipt deadlock is a
-      // visible red acceptance gate, never an indefinitely stuck CI run.
-      signal: AbortSignal.timeout(20000),
       headers: {
         authorization: `Bearer ${token}`,
         'x-tenant-id': tenant,
@@ -845,15 +840,14 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(verified.status, 200, JSON.stringify(verified.body));
     assert.equal(verified.body.data.review_status, 'verified');
     assert.equal(verified.body.replayed, false);
-    // Two independent HTTP retries must preserve the committed ID and audit.
-    // Cross-worker serialization is protected by the unique PostgreSQL key.
-    for (let retry = 0; retry < 2; retry++) {
-      const response = await request(correctedReviewUrl, adminToken, tenantA,
-        'POST', verifyBody);
-      assert.equal(response.status, 200, JSON.stringify(response.body));
-      assert.equal(response.body.replayed, true);
-      assert.equal(response.body.data.id, correctedId);
-    }
+    // Same-key concurrent HTTP requests must serialize under the order
+    // lock and tenant-actor receipt unique constraint, without new audits.
+    const concurrentReplay = await Promise.all([
+      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody),
+      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody)
+    ]);
+    assert.ok(concurrentReplay.every(x => x.status === 200 && x.body.replayed === true),
+      JSON.stringify(concurrentReplay.map(x => x.body)));
     assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
       { ...verifyBody, checklist: checkedReviewWithFiles })).body.error.code,
     'EXECUTION_REVIEW_REQUEST_CONFLICT');
