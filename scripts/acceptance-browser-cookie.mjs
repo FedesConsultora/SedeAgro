@@ -418,6 +418,92 @@ try {
   await page1.getByText('Esta sesión').waitFor();
   console.log('PASS: real /auth/me enrollment persists encrypted vault before logout');
 
+  // MOB-05 cross-tab: TWO pages in the SAME BrowserContext share origin and
+  // IndexedDB. An obsolete clear has already claimed its origin-wide nonce,
+  // but is blocked before IDB.open. The second tab re-enrolls using a genuine
+  // server-verified /auth/me; releasing the old clear MUST keep the new row.
+  await page1.evaluate(async () => {
+    const originalOpen = indexedDB.open.bind(indexedDB);
+    window.__vaultOpenHeld = false;
+    window.__vaultReleaseOpen = null;
+    window.__vaultOpenOriginal = originalOpen;
+    let holdNext = true;
+    indexedDB.open = (name, version) => {
+      if (name !== 'sedeagro-field-offline-vault' || !holdNext)
+        return originalOpen(name, version);
+      holdNext = false;
+      const fake = { result: null, error: null, onsuccess: null,
+        onupgradeneeded: null, onerror: null, onblocked: null };
+      window.__vaultOpenHeld = true;
+      window.__vaultReleaseOpen = () => {
+        const req = originalOpen(name, version);
+        req.onupgradeneeded = event => {
+          fake.result = req.result;
+          fake.onupgradeneeded?.(event);
+        };
+        req.onerror = () => { fake.error = req.error; fake.onerror?.(); };
+        req.onblocked = event => fake.onblocked?.(event);
+        req.onsuccess = () => {
+          fake.result = req.result;
+          fake.onsuccess?.();
+        };
+      };
+      return fake;
+    };
+    const { clearOfflineFieldVault } = await import('/src/services/offlineFieldVault.js');
+    window.__vaultOldClear = clearOfflineFieldVault();
+  });
+  assert.equal(await page1.evaluate(() => window.__vaultOpenHeld), true);
+  const sameOriginTab = await context1.newPage();
+  try {
+    await sameOriginTab.goto('http://127.0.0.1:4177/');
+    await sameOriginTab.getByRole('button', { name: 'Sesiones' }).waitFor();
+    await sameOriginTab.evaluate(async id => {
+      const response = await fetch('/api/v1/auth/me', {
+        credentials: 'include', headers: { 'x-tenant-id': id }
+      });
+      if (response.status !== 200) throw new Error('real server identity required');
+      const profile = await response.json();
+      if (profile?.tenant?.id !== id) throw new Error('wrong real server tenant');
+      const { enrollOfflineFieldVault } = await import('/src/services/offlineFieldVault.js');
+      await enrollOfflineFieldVault({ ...profile, authenticated: true },
+        'Browser field recovery phrase 2026!');
+    }, tenantId);
+    const readIv = async () => sameOriginTab.evaluate(() => new Promise((resolve, reject) => {
+      const req = indexedDB.open('sedeagro-field-offline-vault', 1);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction('offline-vault', 'readonly');
+        const row = tx.objectStore('offline-vault').get('active');
+        row.onsuccess = () => {
+          const iv = row.result?.iv;
+          db.close();
+          resolve(Array.isArray(iv) ? iv.join(',') : null);
+        };
+        row.onerror = () => { db.close(); reject(row.error); };
+      };
+    }));
+    const currentIv = await readIv();
+    assert.ok(currentIv, 'independent second tab must persist a new sealed envelope');
+    await page1.evaluate(async () => {
+      window.__vaultReleaseOpen();
+      try { await window.__vaultOldClear; }
+      finally { indexedDB.open = window.__vaultOpenOriginal; }
+    });
+    assert.equal(await readIv(), currentIv,
+      'superseded first-tab deletion must not erase second-tab committed vault');
+    assert.equal(await hasOfflineFieldEnvelope(page1), true);
+    console.log('PASS: real same-origin Chromium tabs fence stale clear against newer encrypted vault');
+  } finally {
+    await sameOriginTab.close();
+    await page1.evaluate(() => {
+      if (window.__vaultOpenOriginal) indexedDB.open = window.__vaultOpenOriginal;
+      delete window.__vaultReleaseOpen;
+      delete window.__vaultOldClear;
+    });
+  }
+
   // Second independent browser context signs in to the same tenant.
   const context2 = await browser.newContext();
   const page2 = await context2.newPage();
