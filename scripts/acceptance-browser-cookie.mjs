@@ -1,7 +1,7 @@
 // End-to-end cookie login/logout and remote revocation against a REAL
 // Express/PostgreSQL backend and actual React app in Chromium. Disposable DB only.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -769,6 +769,64 @@ try {
     exact: false
   }).waitFor();
   console.log('PASS: SyncPage actual batch and private photo POST both confirmed before encrypted draft retirement');
+
+  // One committed WGS84 point + one private attachment, with no source
+  // camera EXIF/GPS marker ever crossing the HTTP or persistence boundary.
+  const [savedLocation] = (await admin.query(
+    'SELECT id, ST_X(point)::float8 AS longitude, ST_Y(point)::float8 AS latitude, observed_by ' +
+    'FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+    [tenantId, committedRunId, fieldObservationNote])).rows;
+  assert.equal(savedLocation?.id, persistedObservationId);
+  assert.equal(savedLocation?.observed_by, userId);
+  assert.equal(savedLocation.longitude, fieldPoint.coordinates[0]);
+  assert.equal(savedLocation.latitude, fieldPoint.coordinates[1]);
+  const [privatePhoto] = (await admin.query(
+    'SELECT id, scouting_observation_id, uploaded_by, original_name, mime_type, size_bytes, content_sha256 ' +
+    'FROM evidence_assets WHERE tenant_id=$1 AND scouting_observation_id=$2',
+    [tenantId, persistedObservationId])).rows;
+  assert.equal(privatePhoto?.id, persistedEvidenceId);
+  assert.equal(privatePhoto?.uploaded_by, userId);
+  assert.equal(privatePhoto?.mime_type, 'image/jpeg');
+  assert.equal(privatePhoto?.original_name, 'campo-ubicacion-privada-reducida.jpg');
+  assert.ok(privatePhoto?.size_bytes > 64 && privatePhoto.size_bytes <= 512 * 1024);
+  assert.equal((await admin.query(
+    "SELECT count(*)::int AS n FROM audit_events WHERE tenant_id=$1 AND entity_id=$2 AND action='scouting.observation.synced'",
+    [tenantId, persistedObservationId])).rows[0].n, 0,
+  'audit entry for sync is run-scoped, not modeled as observation entity');
+
+  const realPhoto = await page1.evaluate(async ({ evidenceId, tenant }) => {
+    const result = await fetch('/api/v1/scouting/evidence/' + evidenceId + '/content', {
+      credentials: 'include', headers: { 'x-tenant-id': tenant }
+    });
+    if (result.status !== 200) throw new Error('Private file HTTP integrity/authorization failed: ' + result.status);
+    return result.json();
+  }, { evidenceId: persistedEvidenceId, tenant: tenantId });
+  assert.equal(realPhoto.data.id, persistedEvidenceId);
+  assert.equal(realPhoto.data.mime_type, 'image/jpeg');
+  const jpeg = Buffer.from(realPhoto.data.content_base64, 'base64');
+  assert.equal(jpeg.byteLength, privatePhoto.size_bytes);
+  assert.deepEqual([...jpeg.subarray(0, 3)], [255, 216, 255]);
+  assert.equal(jpeg.includes(Buffer.from(SOURCE_GPS_EXIF_SENTINEL)), false,
+    'source photo GPS/EXIF metadata must be removed before encryption/upload');
+  assert.equal(createHash('sha256').update(jpeg).digest('hex'), privatePhoto.content_sha256,
+    'downloaded private bytes must match persisted SHA-256');
+  const anonymousContext = await browser.newContext();
+  try {
+    const refused = await anonymousContext.request.get(
+      'http://127.0.0.1:4177/api/v1/scouting/evidence/' +
+      persistedEvidenceId + '/content',
+      { headers: { 'x-tenant-id': tenantId } });
+    assert.ok([401, 403, 404].includes(refused.status()),
+      'same-origin URL and asset UUID without valid cookie must not leak photo');
+    assert.notEqual(refused.status(), 200);
+  } finally { await anonymousContext.close(); }
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM sync_batches WHERE tenant_id=$1 AND submitted_by=$2 AND idempotency_key=$3',
+    [tenantId, userId, batchResult.data.idempotency_key])).rows[0].n, 1);
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM evidence_assets WHERE tenant_id=$1 AND scouting_observation_id=$2',
+    [tenantId, persistedObservationId])).rows[0].n, 1);
+  console.log('PASS: PostGIS true GPS point, exactly-once observation/photo and private JPEG SHA-256; source EXIF stripped and anonymous download denied');
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
 
