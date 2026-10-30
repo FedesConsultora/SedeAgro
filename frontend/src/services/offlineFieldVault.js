@@ -5,6 +5,7 @@
 import { offlineQueue } from './offlineQueue.js';
 import { indexedDbQueueStore } from './offlineQueueStore.js';
 import { sessionScope } from './offlineSyncModel.js';
+import { claimSharedVaultEpoch, readSharedVaultEpoch, assertSharedVaultEpoch } from './offlineVaultCrossTabEpoch.js';
 
 const DB = 'sedeagro-field-offline-vault';
 const STORE = 'offline-vault';
@@ -147,15 +148,19 @@ export async function enrollOfflineFieldVault(profile, passphrase) {
   // Invalidate pending clears and older enrollments BEFORE costly PBKDF2.
   // Otherwise an old session can overwrite a newly authorized local scope.
   const expected = lockOfflineFieldVault();
+  const sharedEpoch = claimSharedVaultEpoch();
   const sealed = await sealFieldProfile(profile, passphrase);
   assertCurrentVaultGeneration(expected);
+  assertSharedVaultEpoch(sharedEpoch);
   // Only one scoped identity is locally recoverable. A delayed transaction
   // must not re-create an old actor's envelope after the account changed.
   await transaction('readwrite', store => {
     assertCurrentVaultGeneration(expected);
+    assertSharedVaultEpoch(sharedEpoch);
     return store.put(sealed);
   });
   assertCurrentVaultGeneration(expected);
+  assertSharedVaultEpoch(sharedEpoch);
   lockOfflineFieldVault();
   return true;
 }
@@ -168,6 +173,7 @@ export function lockOfflineFieldVault() {
 function checkedCapability(ticket) {
   const state = ticket && typeof ticket === 'object' ? capabilities.get(ticket) : null;
   if (!state || state.generation !== generation ||
+      readSharedVaultEpoch() !== state.sharedEpoch ||
       Date.now() >= state.validUntil || Date.now() >= state.unlockedUntil ||
       typeof navigator !== 'undefined' && navigator.onLine !== false) {
     throw new Error('El acceso local está bloqueado. Desbloquealo de nuevo sin conexión.');
@@ -181,8 +187,10 @@ export async function unlockOfflineFieldVault(passphrase) {
   }
   if (Date.now() < blockedUntil) throw new Error('Demasiados intentos. Volvé a probar más tarde.');
   const expected = generation;
+  const sharedEpoch = readSharedVaultEpoch();
   const record = await transaction('readonly', store => store.get(RECORD));
   assertCurrentVaultGeneration(expected);
+  assertSharedVaultEpoch(sharedEpoch);
   if (!record) throw new Error('No se configuró acceso local. Configuralo con la sesión verificada y conexión.');
   let profile;
   try {
@@ -190,16 +198,18 @@ export async function unlockOfflineFieldVault(passphrase) {
   } catch (error) {
     // A late decrypt from an obsolete actor is not a bad-passphrase attempt.
     assertCurrentVaultGeneration(expected);
+    assertSharedVaultEpoch(sharedEpoch);
     if (++failures >= 5) { blockedUntil = Date.now() + 60_000; failures = 0; }
     throw error;
   }
   assertCurrentVaultGeneration(expected);
+  assertSharedVaultEpoch(sharedEpoch);
   failures = 0;
   const ticket = Object.freeze({});
   capabilities.set(ticket, {
     scope: profile.scope, tenantId: profile.tenantId, userId: profile.userId,
     role: profile.role, validUntil: profile.validUntil,
-    unlockedUntil: Date.now() + 15 * 60_000, generation
+    unlockedUntil: Date.now() + 15 * 60_000, generation, sharedEpoch
   });
   return ticket;
 }
@@ -236,11 +246,12 @@ export async function queueOfflineFieldObservation(ticket, runId, values) {
 
 export async function clearOfflineFieldVault() {
   const expected = lockOfflineFieldVault();
+  const sharedEpoch = claimSharedVaultEpoch();
   // Clearing a revoked session is allowed to finish after React has already
   // signed in another actor. A superseded deletion must NEVER erase the new
   // actor's freshly enrolled AES-GCM envelope.
   await transaction('readwrite', store => {
-    if (generation !== expected) return null;
+    if (generation !== expected || readSharedVaultEpoch() !== sharedEpoch) return null;
     return store.delete(RECORD);
   });
 }
