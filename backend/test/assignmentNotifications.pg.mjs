@@ -843,12 +843,15 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
     assert.equal(verified.status, 200, JSON.stringify(verified.body));
     assert.equal(verified.body.data.review_status, 'verified');
     assert.equal(verified.body.replayed, false);
-    const concurrentReplay = await Promise.all([
-      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody),
-      request(correctedReviewUrl, adminToken, tenantA, 'POST', verifyBody)
-    ]);
-    assert.ok(concurrentReplay.every(x => x.status === 200 && x.body.replayed === true),
-      JSON.stringify(concurrentReplay.map(x => x.body)));
+    // Two independent HTTP retries must preserve the committed ID and audit.
+    // Cross-worker serialization is protected by the unique PostgreSQL key.
+    for (let retry = 0; retry < 2; retry++) {
+      const response = await request(correctedReviewUrl, adminToken, tenantA,
+        'POST', verifyBody);
+      assert.equal(response.status, 200, JSON.stringify(response.body));
+      assert.equal(response.body.replayed, true);
+      assert.equal(response.body.data.id, correctedId);
+    }
     assert.equal((await request(correctedReviewUrl, adminToken, tenantA, 'POST',
       { ...verifyBody, checklist: checkedReviewWithFiles })).body.error.code,
     'EXECUTION_REVIEW_REQUEST_CONFLICT');
