@@ -103,3 +103,13 @@ test('client never silently treats local unlock as authenticated HTTP session', 
   assert.match(sync, /OfflineFieldSetup api=\{api\} session=\{session\}/);
   assert.match(app, /Desbloquear borradores de campo sin conexión/);
 });
+
+test('local envelope operations fence async IndexedDB mutations against identity changes', () => {
+  const source = code('../src/services/offlineFieldVault.js');
+  assert.match(source, /function assertCurrentVaultGeneration\(expected\)/);
+  assert.match(source, /const expected = lockOfflineFieldVault\(\);[\s\S]*await sealFieldProfile/);
+  assert.match(source, /await transaction\('readwrite', store => \{[\s\S]*assertCurrentVaultGeneration\(expected\);[\s\S]*store\.put\(sealed\)/);
+  assert.match(source, /const expected = generation;[\s\S]*await transaction\('readonly', store => store\.get\(RECORD\)\);[\s\S]*assertCurrentVaultGeneration\(expected\)/);
+  assert.match(source, /if \(generation !== expected\) return null;[\s\S]*store\.delete\(RECORD\)/);
+  assert.doesNotMatch(source, /localStorage|sessionStorage|\bfetch\(/);
+});
