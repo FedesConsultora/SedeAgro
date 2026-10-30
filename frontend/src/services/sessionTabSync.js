@@ -3,10 +3,19 @@
 export const SESSION_TAB_KEY = 'sedeagro.auth-transition-v1';
 const CHANNEL = 'sedeagro-auth-transitions-v1';
 export const FOREGROUND_RECHECK_MS = 60_000;
+// A foreground tab can miss an advisory BroadcastChannel/storage event while
+// suspended. If it has NO verified identity for the cookie's current tenant
+// hint, it must recheck the real server promptly, not wait 60 seconds.
+export const UNVERIFIED_FOREGROUND_RECHECK_MS = 1_000;
 
-export function shouldRecheckOnForeground(lastAttemptAt, now, visible, online) {
-  return visible && online && Number.isFinite(now) &&
-    (lastAttemptAt === 0 || now - lastAttemptAt >= FOREGROUND_RECHECK_MS);
+export function shouldRecheckOnForeground(
+  lastAttemptAt, now, visible, online, needsVerifiedIdentity = false
+) {
+  if (!visible || !online || !Number.isFinite(now)) return false;
+  if (lastAttemptAt === 0) return true;
+  const elapsed = now - lastAttemptAt;
+  return elapsed >= FOREGROUND_RECHECK_MS ||
+    (needsVerifiedIdentity && elapsed >= UNVERIFIED_FOREGROUND_RECHECK_MS);
 }
 
 export function isSessionTabSignal(value) {
