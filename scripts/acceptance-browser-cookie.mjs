@@ -9,6 +9,7 @@ import pg from 'pg';
 import { chromium } from 'playwright';
 import { assertDialogFocus, pressReverseTabAtDialogRoot } from './support/assert-dialog-focus.mjs';
 import { getFocusStressCycles } from './support/focus-stress-config.mjs';
+import { assertSealedPendingCreate, assertNoPendingCreate } from './support/assert-create-journal-sealed.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const focusCycles = getFocusStressCycles();
@@ -459,6 +460,227 @@ try {
   await farmToggle.press('Space');
   assert.equal(await farmToggle.getAttribute('aria-expanded'), 'true');
   console.log('PASS: live farm form never falls back to mock producer list');
+
+  // Prepare the actual farm -> field -> campaign-field path with authenticated
+  // application HTTP; do not inject rows behind the runtime RLS policy.
+  const farmId = (await admin.query(
+    'SELECT id FROM farms WHERE tenant_id=$1 AND name=$2',
+    [tenantId, 'Fixture Accesibilidad 0T1'])).rows[0]?.id;
+  const cropId = (await admin.query(
+    "SELECT id FROM crop_types WHERE code='soy'")).rows[0]?.id;
+  assert.ok(farmId && cropId && committedCampaignId);
+  const fieldName = 'Lote piloto ACK ' + random;
+  const fieldId = await page1.evaluate(async fixture => {
+    const response = await fetch('/api/v1/fields', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId,
+        'x-sedeagro-request': '1' },
+      body: JSON.stringify({ farm_id: fixture.farmId, name: fixture.fieldName,
+        area_hectares: 14.75, status: 'active' })
+    });
+    const result = await response.json();
+    if (response.status !== 201) throw new Error('Real field API rejected pilot setup: ' +
+      response.status + ' ' + JSON.stringify(result.error));
+    return result.data.id;
+  }, { tenantId, farmId, fieldName });
+  assert.match(fieldId, /^[a-f0-9-]{36}$/i);
+  const campaignFieldId = await page1.evaluate(async fixture => {
+    const response = await fetch('/api/v1/campaigns/' + fixture.campaignId + '/fields', {
+      method: 'POST', credentials: 'include',
+      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId,
+        'x-sedeagro-request': '1' },
+      body: JSON.stringify({ field_id: fixture.fieldId,
+        crop_type_id: fixture.cropId, status: 'planned' })
+    });
+    const result = await response.json();
+    if (response.status !== 201) throw new Error('Real campaign-field API rejected pilot setup: ' +
+      response.status + ' ' + JSON.stringify(result.error));
+    return result.data.id;
+  }, { tenantId, campaignId: committedCampaignId, fieldId, cropId });
+  assert.match(campaignFieldId, /^[a-f0-9-]{36}$/i);
+
+  // P1 #204: the real Orders modal persists one AES-GCM request before POST.
+  // Express commits 201, but Chromium does NOT receive that ACK.
+  const orderTitle = 'Orden ACK perdido ' + random;
+  let committedOrderId = null;
+  let orderRequestId = null;
+  let orderFirstPosts = 0;
+  await page1.locator('.sidebar__item[title="Órdenes"]').click();
+  await page1.getByRole('heading', { name: 'Órdenes de trabajo' }).waitFor();
+  await page1.getByRole('button', { name: 'Nueva orden' }).click();
+  const lostOrderDialog = page1.getByRole('dialog', { name: 'Nueva orden de trabajo' });
+  await lostOrderDialog.locator('#wo-field').selectOption(fieldId);
+  await lostOrderDialog.locator('#wo-title').fill(orderTitle);
+  await lostOrderDialog.locator('#wo-instructions').fill('Control de campo con acuse ambiguo');
+  await page1.route('**/api/v1/work-orders', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    orderFirstPosts++;
+    const authored = route.request().postDataJSON();
+    orderRequestId = authored.client_request_id;
+    assert.match(orderRequestId || '', /^[a-f0-9-]{36}$/i);
+    assert.equal(authored.field_id, fieldId);
+    assert.equal(authored.title, orderTitle);
+    const response = await route.fetch();
+    assert.equal(response.status(), 201, await response.text());
+    const receipt = await response.json();
+    assert.equal(receipt.replayed, false);
+    assert.equal(receipt.data.tenant_id, tenantId);
+    committedOrderId = receipt.data.id;
+    await route.abort('failed');
+  });
+  await lostOrderDialog.getByRole('button', { name: 'Crear orden' }).click();
+  await lostOrderDialog.getByText('No pudimos confirmar la orden.', { exact: false }).waitFor();
+  assert.equal(orderFirstPosts, 1, 'lost ACK must not cause silent resend');
+  assert.ok(orderRequestId && committedOrderId);
+  assert.equal(await lostOrderDialog.getByRole('button', {
+    name: 'Confirmación pendiente'
+  }).isDisabled(), true);
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1 AND title=$2',
+    [tenantId, orderTitle])).rows[0].n, 1, 'real order COMMIT happened before ACK loss');
+  await assertSealedPendingCreate(page1, 'sedeagro-work-order-recovery',
+    orderRequestId, orderTitle);
+  await page1.unroute('**/api/v1/work-orders');
+
+  await page1.reload();
+  await page1.locator('.sidebar__item[title="Órdenes"]').click();
+  await page1.getByRole('button', { name: 'Nueva orden' }).click();
+  const retryOrderDialog = page1.getByRole('dialog', { name: 'Nueva orden de trabajo' });
+  await retryOrderDialog.getByText('Hay una orden pendiente de confirmar.', {
+    exact: false
+  }).waitFor();
+  assert.equal(await retryOrderDialog.locator('#wo-title').inputValue(), orderTitle);
+  assert.equal(await retryOrderDialog.locator('#wo-title').isDisabled(), true);
+  assert.equal(await retryOrderDialog.getByRole('button', {
+    name: 'Confirmación pendiente'
+  }).isDisabled(), true);
+  let orderReplays = 0;
+  await page1.route('**/api/v1/work-orders', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    orderReplays++;
+    const authored = route.request().postDataJSON();
+    assert.equal(authored.client_request_id, orderRequestId);
+    assert.equal(authored.title, orderTitle);
+    assert.equal(authored.field_id, fieldId);
+    const response = await route.fetch();
+    assert.equal(response.status(), 200, await response.text());
+    const receipt = await response.json();
+    assert.equal(receipt.replayed, true);
+    assert.equal(receipt.data.id, committedOrderId);
+    await route.fulfill({ response });
+  });
+  await retryOrderDialog.getByRole('button', { name: 'Reintentar el mismo envío' }).click();
+  await retryOrderDialog.waitFor({ state: 'detached' });
+  assert.equal(orderReplays, 1);
+  await page1.getByRole('button', { name: 'Abrir orden: ' + orderTitle }).waitFor();
+  assert.equal(await page1.getByRole('button', {
+    name: 'Abrir orden: ' + orderTitle
+  }).count(), 1);
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1 AND title=$2',
+    [tenantId, orderTitle])).rows[0].n, 1);
+  await assertNoPendingCreate(page1, 'sedeagro-work-order-recovery');
+  await page1.unroute('**/api/v1/work-orders');
+  console.log('PASS: real work-order COMMIT lost ACK, encrypted recovery reload, exact-key 200 replay, one order');
+
+  // P1 #207: same contract for a field scouting run, including the unique
+  // audit event and assigned scout's notification. Use a genuine invited
+  // actor and live campaign-field rather than an unscoped fixture.
+  const scoutUserId = (await admin.query(
+    'SELECT id FROM users WHERE email=$1', [scoutEmail])).rows[0]?.id;
+  assert.ok(scoutUserId, 'invited scout must exist in real tenant');
+  const runSummary = 'Recorrida ACK perdido ' + random;
+  let committedRunId = null;
+  let runRequestId = null;
+  let runFirstPosts = 0;
+  await page1.locator('.sidebar__item[title="Monitoreo"]').click();
+  await page1.getByRole('heading', { name: 'Monitoreo' }).waitFor();
+  await page1.getByRole('button', { name: 'Nueva recorrida' }).click();
+  const lostRunDialog = page1.getByRole('dialog', { name: 'Nueva recorrida de monitoreo' });
+  await lostRunDialog.locator('select').nth(0).selectOption(campaignFieldId);
+  await lostRunDialog.locator('select').nth(1).selectOption(scoutUserId);
+  await lostRunDialog.locator('textarea').fill(runSummary);
+  await page1.route('**/api/v1/scouting/runs', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    runFirstPosts++;
+    const authored = route.request().postDataJSON();
+    runRequestId = authored.client_request_id;
+    assert.match(runRequestId || '', /^[a-f0-9-]{36}$/i);
+    assert.equal(authored.campaign_field_id, campaignFieldId);
+    assert.equal(authored.assigned_to, scoutUserId);
+    assert.equal(authored.summary, runSummary);
+    const response = await route.fetch();
+    assert.equal(response.status(), 201, await response.text());
+    const receipt = await response.json();
+    assert.equal(receipt.replayed, false);
+    assert.equal(receipt.data.tenant_id, tenantId);
+    committedRunId = receipt.data.id;
+    await route.abort('failed');
+  });
+  await lostRunDialog.getByRole('button', { name: 'Crear recorrida' }).click();
+  await lostRunDialog.getByText('No pudimos confirmar la creación.', {
+    exact: false
+  }).waitFor();
+  assert.equal(runFirstPosts, 1, 'lost run ACK must not be resent automatically');
+  assert.ok(runRequestId && committedRunId);
+  assert.equal(await lostRunDialog.getByRole('button', {
+    name: 'Confirmación pendiente'
+  }).isDisabled(), true);
+  const runArtifactCounts = async () => (await admin.query(
+    'SELECT ' +
+    '(SELECT count(*)::int FROM scouting_runs WHERE tenant_id=$1 AND campaign_field_id=$2 AND summary=$3) AS runs, ' +
+    "(SELECT count(*)::int FROM audit_events WHERE tenant_id=$1 AND entity_id=$4 AND action='scouting.run.created') AS audits, " +
+    "(SELECT count(*)::int FROM notifications WHERE tenant_id=$1 AND entity_id=$4 AND entity_type='scouting_run') AS notices",
+    [tenantId, campaignFieldId, runSummary, committedRunId])).rows[0];
+  assert.deepEqual(await runArtifactCounts(), {
+    runs: 1, audits: 1, notices: 1
+  }, 'first real run commit generated exactly one audit and assignment notification');
+  await assertSealedPendingCreate(page1, 'sedeagro-scouting-run-recovery',
+    runRequestId, runSummary);
+  await page1.unroute('**/api/v1/scouting/runs');
+
+  await page1.reload();
+  await page1.locator('.sidebar__item[title="Monitoreo"]').click();
+  await page1.getByRole('button', { name: 'Nueva recorrida' }).click();
+  const retryRunDialog = page1.getByRole('dialog', { name: 'Nueva recorrida de monitoreo' });
+  await retryRunDialog.getByText('Hay una recorrida pendiente de confirmar.', {
+    exact: false
+  }).waitFor();
+  assert.equal(await retryRunDialog.locator('textarea').inputValue(), runSummary);
+  assert.equal(await retryRunDialog.locator('textarea').isDisabled(), true);
+  assert.equal(await retryRunDialog.getByRole('button', {
+    name: 'Confirmación pendiente'
+  }).isDisabled(), true);
+  let runReplays = 0;
+  await page1.route('**/api/v1/scouting/runs', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    runReplays++;
+    const authored = route.request().postDataJSON();
+    assert.equal(authored.client_request_id, runRequestId);
+    assert.equal(authored.campaign_field_id, campaignFieldId);
+    assert.equal(authored.assigned_to, scoutUserId);
+    assert.equal(authored.summary, runSummary);
+    const response = await route.fetch();
+    assert.equal(response.status(), 200, await response.text());
+    const receipt = await response.json();
+    assert.equal(receipt.replayed, true);
+    assert.equal(receipt.data.id, committedRunId);
+    await route.fulfill({ response });
+  });
+  await retryRunDialog.getByRole('button', {
+    name: 'Reintentar el mismo envío (sin duplicar)'
+  }).click();
+  await retryRunDialog.waitFor({ state: 'detached' });
+  assert.equal(runReplays, 1, 'run recovery must use one explicit original-key POST');
+  await page1.locator('.scouting-workspace__table button.data-table__row')
+    .filter({ hasText: fieldName }).first().waitFor();
+  assert.equal(await page1.locator('.scouting-workspace__table button.data-table__row')
+    .filter({ hasText: fieldName }).count(), 1);
+  assert.deepEqual(await runArtifactCounts(), { runs: 1, audits: 1, notices: 1 },
+    'replay cannot duplicate a run or its tenant-scoped side effects');
+  await assertNoPendingCreate(page1, 'sedeagro-scouting-run-recovery');
+  await page1.unroute('**/api/v1/scouting/runs');
+  console.log('PASS: real scouting COMMIT lost ACK, sealed reload and same-key replay; audit and notification exactly once');
   await page1.getByRole('button', { name: 'Sesiones' }).click();
   await page1.getByText('Esta sesión').waitFor();
 

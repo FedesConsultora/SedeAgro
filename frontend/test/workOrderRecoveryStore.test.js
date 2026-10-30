@@ -86,3 +86,19 @@ test('new work order and previous authority cannot render each other private for
   assert.match(modal,/recoveryState\?\.api === api/);
   assert.match(modal,/recoveryLoading \|\| recoveryBlocked/);
 });
+
+test('real Chromium pilot tests work-order COMMIT with lost ACK and sealed reload without duplicating', () => {
+  const browser = source('../../scripts/acceptance-browser-cookie.mjs');
+  const scenario = browser.slice(browser.indexOf('// P1 #204:'), browser.indexOf('// P1 #207:'));
+  assert.ok(scenario.length > 3800);
+  assert.match(scenario, /await route\.fetch\(\)/);
+  assert.match(scenario, /await route\.abort\('failed'\)/);
+  assert.match(scenario, /await page1\.reload\(\)/);
+  assert.match(scenario, /assertSealedPendingCreate\(page1, 'sedeagro-work-order-recovery'/);
+  assert.match(scenario, /assertNoPendingCreate\(page1, 'sedeagro-work-order-recovery'\)/);
+  assert.match(scenario, /authored\.client_request_id, orderRequestId/);
+  assert.match(scenario, /receipt\.replayed, true/);
+  assert.match(scenario, /receipt\.data\.id, committedOrderId/);
+  assert.match(scenario, /await retryOrderDialog\.getByRole\('button', \{ name: 'Reintentar el mismo envío' \}\)\.click\(\)/);
+  assert.match(scenario, /SELECT count\(\*\)::int AS n FROM work_orders WHERE tenant_id=\$1 AND title=\$2/);
+});
