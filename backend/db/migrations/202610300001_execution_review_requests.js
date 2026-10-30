@@ -12,7 +12,7 @@ export async function up({ context: queryInterface }) {
       created_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY (tenant_id, reviewed_by, client_request_id),
       CONSTRAINT execution_review_receipt_reviewer_fk FOREIGN KEY (tenant_id, reviewed_by)
-        REFERENCES memberships(tenant_id, user_id),
+        REFERENCES memberships(tenant_id, user_id) ON DELETE CASCADE,
       CONSTRAINT execution_review_receipt_order_fk FOREIGN KEY (tenant_id, work_order_id)
         REFERENCES work_orders(tenant_id, id) ON DELETE CASCADE,
       CONSTRAINT execution_review_receipt_execution_fk FOREIGN KEY (tenant_id, execution_id)
