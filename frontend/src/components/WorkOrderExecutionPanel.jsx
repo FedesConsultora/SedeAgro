@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
@@ -43,6 +43,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [notice, setNotice] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
   const [pendingReview, setPendingReview] = useState(null);
+  const reviewInFlight = useRef(false);
 
   if (!live) return null;
 
@@ -157,7 +158,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   };
 
   const review = async (report, decision) => {
-    if (!canReviewExecutionReport(order, report, role, userId, live) || busy || pendingReview) return;
+    if (!canReviewExecutionReport(order, report, role, userId, live) || busy || pendingReview || reviewInFlight.current) return;
     if (decision === 'verified') {
       const readiness = exceptionReadinessForReview(order, report, exceptionReadiness);
       if (!readiness.allowed) {
@@ -181,6 +182,8 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       return;
     }
     const body = { decision, ...(decision === 'rejected' ? { reason } : { checklist }) };
+    // React state updates are asynchronous: guard two clicks in the same tick.
+    reviewInFlight.current = true;
     setBusy(true);
     setError('');
     setNotice('');
@@ -200,6 +203,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         setError(err?.message || 'No se confirmó la revisión.');
       }
     } finally {
+      reviewInFlight.current = false;
       setBusy(false);
     }
   };
