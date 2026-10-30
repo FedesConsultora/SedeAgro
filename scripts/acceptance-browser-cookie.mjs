@@ -747,18 +747,36 @@ try {
   await page1.getByText('Foto local: campo-ubicacion-privada-reducida.jpg', {
     exact: false
   }).waitFor();
-  const batchReply = page1.waitForResponse(response =>
-    response.url().endsWith('/api/v1/sync/batches') &&
-    response.request().method() === 'POST');
   const photoReply = page1.waitForResponse(response =>
     /\/api\/v1\/scouting\/observations\/[0-9a-f-]{36}\/evidence$/.test(
-      new URL(response.url()).pathname) && response.request().method() === 'POST');
-  await page1.getByRole('button', { name: 'Enviar solo esta' }).click();
-  const batchResponse = await batchReply;
-  assert.ok(batchResponse.ok(), 'real PostGIS sync batch must be accepted');
+      new URL(response.url()).pathname) && response.request().method() === 'POST',
+    { timeout: 60000 }).catch(() => null);
+  const batchPredicate = response =>
+    response.url().endsWith('/api/v1/sync/batches') &&
+    response.request().method() === 'POST';
+  let batchResponse = null;
+  // On reconnect, the app may still own the same account-scoped Web Lock
+  // while its blocked automatic flush is finishing. The UI surfaces "busy".
+  // Only in that exact visible case may the operator explicitly press again.
+  for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
+    const reply = page1.waitForResponse(batchPredicate, { timeout: 6500 })
+      .catch(() => null);
+    await page1.getByRole('button', { name: 'Enviar solo esta' }).click();
+    batchResponse = await reply;
+    if (!batchResponse) {
+      const busy = await page1.getByText(
+        'Otra pestaña está procesando esta cuenta. Probá nuevamente.', {
+          exact: false
+        }).count();
+      assert.equal(busy, 1,
+        'no POST was dispatched: the app must explicitly report a scope-lock skip');
+    }
+  }
+  assert.ok(batchResponse?.ok(), 'real PostGIS sync batch must be accepted');
   const batchResult = await batchResponse.json();
   assert.equal(batchResult.data.status, 'processed');
   const photoResponse = await photoReply;
+  assert.ok(photoResponse, 'real private-photo upload ACK must arrive');
   assert.equal(photoResponse.status(), 201, await photoResponse.text());
   const photoResult = await photoResponse.json();
   assert.equal(photoResult.replayed, false);
