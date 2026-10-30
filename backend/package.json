@@ -16,7 +16,7 @@
     "db:prepare": "npm run migrate && npm run seed",
     "audit:raw-sql": "node scripts/audit-raw-sql.mjs",
     "test": "node --test test/*.test.js",
-    "test:db": "node --test test/*.pg.mjs"
+    "test:db": "node --test --test-concurrency=1 test/*.pg.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
