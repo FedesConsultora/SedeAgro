@@ -9,7 +9,7 @@ import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutc
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
   executionReports, canDeclareExecution, canReviewExecutionReport,
-  toExecutionTimestamp, validatedExecutionResponse
+  buildExecutionDraft, validatedExecutionResponse
 } from '../services/workOrderExecution.js';
 
 const REVIEW_LABELS = { submitted: 'Declarado — pendiente de revisión',
@@ -47,12 +47,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     setBusy(true);
     setError('');
     try {
+      const body = buildExecutionDraft({
+        started, finished, area, outcome, approvedAt: order.approved_at
+      });
       const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}/executions`, {
-        method: 'POST', silent: true, body: {
-          started_at: toExecutionTimestamp(started),
-          finished_at: toExecutionTimestamp(finished),
-          worked_area_hectares: Number(area), result_summary: outcome.trim()
-        }
+        method: 'POST', silent: true, body
       });
       validatedExecutionResponse(response, order.id, 'submitted');
       onChanged?.();
@@ -113,6 +112,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         onClick={onChanged}>Actualizar datos</button>
     </div>}
     {canSubmit && <form className="order-detail__execution-form" onSubmit={submit}>
+      <p className="order-detail__footnote">
+        Indicá fechas posteriores a la aprobación y la superficie efectivamente trabajada.
+        El dispositivo muestra horas locales; el servidor comprueba el intervalo antes de guardar.
+      </p>
       <label className="form-field">Inicio real informado *
         <input type="datetime-local" required value={started} disabled={busy}
           onChange={e => setStarted(e.target.value)} />
