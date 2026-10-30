@@ -473,7 +473,8 @@ try {
   const fieldId = await page1.evaluate(async fixture => {
     const response = await fetch('/api/v1/fields', {
       method: 'POST', credentials: 'include',
-      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId },
+      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId,
+        'x-sedeagro-request': '1' },
       body: JSON.stringify({ farm_id: fixture.farmId, name: fixture.fieldName,
         area_hectares: 14.75, status: 'active' })
     });
@@ -486,7 +487,8 @@ try {
   const campaignFieldId = await page1.evaluate(async fixture => {
     const response = await fetch('/api/v1/campaigns/' + fixture.campaignId + '/fields', {
       method: 'POST', credentials: 'include',
-      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId },
+      headers: { 'content-type': 'application/json', 'x-tenant-id': fixture.tenantId,
+        'x-sedeagro-request': '1' },
       body: JSON.stringify({ field_id: fixture.fieldId,
         crop_type_id: fixture.cropId, status: 'planned' })
     });
