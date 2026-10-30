@@ -41,3 +41,24 @@ test('restoration is a user-confirmed manual operation and never resends automat
   assert.match(modal, /scopeRef\.current !== authority/);
   assert.match(modal, /apiRef\.current !== api/);
 });
+
+test('real Chromium pilot exercises actual post-COMMIT ACK loss and one same-key reload replay', () => {
+  const browser = source('../../scripts/acceptance-browser-cookie.mjs');
+  const scenario = browser.slice(
+    browser.indexOf('// P1 #211 — The server COMMIT'),
+    browser.indexOf('// P0 #222:', browser.indexOf('// P1 #211 — The server COMMIT'))
+  );
+  assert.ok(scenario.length > 3000, 'the real lost-ACK E2E scenario must exist');
+  assert.match(scenario, /const realResponse = await route\.fetch\(\);/);
+  assert.match(scenario, /assert\.equal\(realResponse\.status\(\), 201/);
+  assert.match(scenario, /await route\.abort\('failed'\)/);
+  assert.match(scenario, /await page1\.reload\(\)/);
+  assert.match(scenario, /await recoveryCampaignDialog\.getByRole\('button', \{[\s\S]*name: 'Reintentar el mismo envío'/);
+  assert.match(scenario, /assert\.equal\(posted\.client_request_id, firstCampaignRequestId\)/);
+  assert.match(scenario, /assert\.equal\(receipt\.replayed, true\)/);
+  assert.match(scenario, /assert\.equal\(receipt\.data\.id, committedCampaignId\)/);
+  assert.match(scenario, /assert\.equal\(remainingJournal, 0/);
+  assert.match(scenario, /SELECT count\(\*\)::int AS n FROM campaigns WHERE tenant_id=\$1 AND name=\$2/);
+  assert.match(scenario, /row\.ciphertext instanceof ArrayBuffer/);
+  assert.doesNotMatch(scenario, /await route\.fulfill\(\{\s*status:\s*201/);
+});
