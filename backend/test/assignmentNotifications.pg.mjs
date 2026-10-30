@@ -47,6 +47,9 @@ test('assignment notifications: transactional writes, replay, ownership, RLS, ro
   async function request(path, token, tenant, method = 'GET', body, extraHeaders = {}) {
     const response = await fetch(base + path, {
       method,
+      // Bound actual HTTP waits so a DB row-lock or receipt deadlock is a
+      // visible red acceptance gate, never an indefinitely stuck CI run.
+      signal: AbortSignal.timeout(20000),
       headers: {
         authorization: `Bearer ${token}`,
         'x-tenant-id': tenant,
