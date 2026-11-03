@@ -228,7 +228,7 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
 workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
   // A replay never bypasses current scouting permission/entitlement. The
   // receipt is actor-scoped but is NOT a read capability for its origin.
-  if (req.body.origin_observation_id) await prepareObservationOrigin(req, req.body);
+  const origin = await prepareObservationOrigin(req, req.body);
   const reservation = await reserveWorkOrderCreate(req, req.body);
   res.set('Cache-Control', 'private, no-store');
   if (reservation.kind === 'replay') {
@@ -264,7 +264,6 @@ workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrder
         undefined, 'WORK_ORDER_CAMPAIGN_FIELD_MISMATCH');
     }
   }
-  const origin = await prepareObservationOrigin(req, req.body);
   const { client_request_id: _clientRequestId,
     origin_observation_id: _originObservationId, ...orderInput } = req.body;
   const order = await WorkOrder.create({
