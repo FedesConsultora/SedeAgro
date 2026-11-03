@@ -934,7 +934,24 @@ try {
   await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
   await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
   const recoveredReviewDrawer=page.getByRole('dialog',{name:reviewTitle});
-  await recoveredReviewDrawer.getByText(/El servidor confirmó la revisión original y se limpió el registro cifrado/).waitFor();
+  // The drawer refresh can unmount its transient notice, so assert the
+  // actual CAS deletion in IndexedDB, not a short-lived React message.
+  await page.waitForFunction(async () => {
+    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db=await new Promise((resolve,reject)=>{
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      const count=await new Promise((resolve,reject)=>{
+        const tx=db.transaction('pending-creates','readonly');
+        const op=tx.objectStore('pending-creates').count();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      return count===0;
+    } finally { db.close(); }
+  },null,{timeout:15000});
   await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
   assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
   assert.equal(await recoveredReviewDrawer.getByRole('button',
