@@ -17,7 +17,7 @@ test('selected draft is drawn only from the current actor and focused run list',
 
 test('targeted actions send exactly one ID through the existing account-locked queue', () => {
   assert.match(page, /offlineQueue\.flushOne\(session, item\.id,/);
-  assert.match(queue, /onlyId: id, force: true, manualReview: true, sendEvidence/);
+  assert.match(queue, /onlyId: id, force: true, manualReview: true, waitForBusy: true, sendEvidence/);
   assert.match(queue, /const items = single\s*\? \[await store\.get\(onlyId\)\]\.filter\(Boolean\)/);
   assert.match(queue, /inFlightScopes\.has\(scope\)/);
   assert.match(queue, /withLock\(scope, async \(\) =>/);
@@ -51,7 +51,10 @@ test('global send behavior remains explicit about the entire tenant queue', () =
 });
 
 test('failure or a competing tab never appears to be a completed upload', () => {
-  assert.match(page, /result\.skipped\) setNotice\('Otra pestaña/);
+  assert.match(page, /if \(result\.skipped\) setNotice\(/);
+  assert.match(page, /No se confirmó un envío de esta captura/);
+  assert.match(page, /agotó la espera/);
+  assert.match(queue, /if \(!waitForBusy \|\| !flight/);
   assert.match(page, /result\.sent === 1\) setNotice\('Esta captura se confirmó/);
   assert.match(page, /result\.attempted === 1\) setNotice\(/);
   assert.match(page, /La captura permanece para reintentar/);
