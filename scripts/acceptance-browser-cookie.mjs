@@ -767,9 +767,14 @@ try {
     name: /^(Enviar pendientes|Enviar todos mis pendientes)$/
   });
   if (!batchResponse && await rowReady) {
-    // Playwright's click waits until the button is enabled (after encrypted
-    // IndexedDB hydration); if auto-flush already consumed the draft, there
-    // is nothing left to click. Do not issue three artificial POST retries.
+    // Check immediate readiness independently from the eventual click. The
+    // async IndexedDB decrypt may finish after the row first becomes visible.
+    // Playwright still waits for the same button to become enabled; false is
+    // not a server acknowledgment and does not suppress the single click.
+    const wasEnabled = await sendButton.isEnabled().catch(() => false);
+    if (!wasEnabled) {
+      console.log('SyncPage: awaiting encrypted-queue hydration before the single manual click');
+    }
     const oneManualClick = sendButton.click({ timeout: 18000 })
       .then(() => true, () => false);
     batchResponse = await Promise.race([batchReply, oneManualClick.then(() => null)]);
