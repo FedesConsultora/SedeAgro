@@ -148,7 +148,8 @@ try {
   // The encrypted-journal check and authorized GET /fields are independent.
   // React may render the contextual note before the real lot <option>
   // exists; wait for the server-backed selector, not a transient empty DOM.
-  await originDialog.locator('#wo-field option[value="' + field + '"]').waitFor();
+  await originDialog.locator('#wo-field option[value="' + field + '"]')
+    .waitFor({ state: 'attached' });
   assert.equal(await originDialog.locator('#wo-field').inputValue(),field);
   assert.equal(await originDialog.locator('#wo-field').isDisabled(),true,
     'an observation-origin order must not silently point at another lot');
