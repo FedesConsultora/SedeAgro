@@ -76,7 +76,9 @@ function Shell() {
     if (id === '__logout__') { void logout(); return; }
     if (!canNavigateView(id, access)) return;
     setActiveView(id);
-    setFocused(focus?.id ? { view: id, id: focus.id } : null);
+    setFocused(id === 'orders' && focus?.orderDraft
+      ? { view: 'orders', orderDraft: focus.orderDraft }
+      : focus?.id ? { view: id, id: focus.id } : null);
     setSidebarOpen(false);
   };
 
@@ -119,7 +121,10 @@ function Shell() {
         {currentView === 'campaigns'  && <CampaignsPage />}
         {currentView === 'scouting'   && <ScoutingPage focusRunId={focused?.view === 'scouting' ? focused.id : null}
           onNavigate={handleViewChange} />}
-        {currentView === 'orders'     && <WorkOrdersPage focusOrderId={focused?.view === 'orders' ? focused.id : null} />}
+        {currentView === 'orders'     && <WorkOrdersPage
+          focusOrderId={focused?.view === 'orders' ? focused.id : null}
+          observationDraft={focused?.view === 'orders' ? focused.orderDraft : null}
+          onClearObservationDraft={() => setFocused(null)} />}
         {currentView === 'reports'    && <ReportsPage />}
         {currentView === 'teams'      && <TeamPage />}
         {currentView === 'admin'      && <TenantAdminPage />}
