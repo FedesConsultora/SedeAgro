@@ -69,7 +69,7 @@ test('XLSX is real OOXML ZIP, Unicode text only, never an Excel formula', () => 
   assert.equal(files.size, 6);
   const xml = files.get('xl/worksheets/sheet1.xml');
   assert.match(xml, /<sheetData>/);
-  assert.match(xml, /<autoFilter ref="A1:I4"/);
+  assert.match(xml, /<autoFilter ref="A1:K4"/);
   assert.match(xml, /t="inlineStr"/);
   assert.match(xml, /Lote Ñandú/);
   assert.match(xml, /Estancia Río/);
@@ -100,4 +100,28 @@ test('all document formats use exact same auditable row contract as CSV', () => 
   assert.equal(rows[2][0], 'observacion');
   assert.equal(rows[3][0], 'orden');
   assert.equal(rows[2][8], snapshot.observations[0].notes);
+});
+
+test('verified order origin is exported in separate CSV/XLSX columns and legible PDF, never inferred from title', () => {
+  const observationId = 'b6a4534c-6e82-4f4e-b0a2-35b6d4f9317d';
+  const runId = 'ce2405b5-2d3e-48b0-905f-b294e90df64f';
+  const linked = { ...snapshot, workOrders: [{
+    ...snapshot.workOrders[0],
+    observation_origin: { scouting_observation_id: observationId, scouting_run_id: runId }
+  }] };
+  const rows = fieldReportRows(linked);
+  assert.equal(rows[0].length, 11);
+  assert.deepEqual(rows[0].slice(-2), ['observacion_origen_id', 'recorrida_origen_id']);
+  assert.deepEqual(rows[3].slice(-2), [observationId, runId]);
+  assert.deepEqual(rows[2].slice(-2), ['', ''], 'observation rows have no inferred order origin');
+  assert.deepEqual(fieldReportRows(snapshot)[3].slice(-2), ['', ''],
+    'legacy order titles never invent an origin');
+  const pdf = buildFieldPdf(linked).toString('latin1');
+  assert.ok(pdf.includes('Origen verificado: observacion ' + observationId));
+  assert.ok(pdf.includes('Recorrida de origen: ' + runId));
+  assert.ok(!buildFieldPdf(snapshot).toString('latin1').includes('Origen verificado'));
+  const xml = unzipStoredEntries(buildFieldXlsx(linked)).get('xl/worksheets/sheet1.xml');
+  assert.ok(xml.includes(observationId) && xml.includes(runId));
+  assert.match(xml, /<autoFilter ref="A1:K4"/);
+  assert.doesNotMatch(xml, /<f[\\s>]/);
 });
