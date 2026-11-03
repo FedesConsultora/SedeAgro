@@ -16,6 +16,8 @@ const journal = createEncryptedCreateJournal({
   validateBody: body =>
     UUID.test(body.field_id || '') &&
     (body.campaign_field_id == null || UUID.test(body.campaign_field_id)) &&
+    (body.origin_observation_id == null ||
+      (UUID.test(body.origin_observation_id) && UUID.test(body.campaign_field_id))) &&
     TYPES.has(body.type) &&
     PRIORITIES.has(body.priority) &&
     typeof body.title === 'string' &&
