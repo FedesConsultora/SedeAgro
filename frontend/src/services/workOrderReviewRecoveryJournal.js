@@ -12,7 +12,7 @@ const keysAre = (value, expected) => Boolean(value && typeof value === 'object' 
   !Array.isArray(value) && Object.keys(value).length === expected.length &&
   expected.every(key => Object.hasOwn(value, key)));
 
-function validReviewBody(item) {
+export function validReviewRecoveryBody(item) {
   if (!item || !['verified', 'rejected'].includes(item.decision) ||
       !['client_request_id', 'tenant_id', 'reviewer_id', 'order_id', 'report_id']
         .every(key => UUID.test(item[key] || ''))) return false;
@@ -33,7 +33,7 @@ function validReviewBody(item) {
 const journal = createEncryptedCreateJournal({
   databaseName: 'sedeagro-work-order-review-recovery-v1',
   aadDomain: 'sedeagro:work-order-review-recovery:v1:',
-  validateBody: validReviewBody
+  validateBody: validReviewRecoveryBody
 });
 
 function scopedIdentity(session, orderId) {
@@ -62,7 +62,7 @@ export async function reviewRecoveryScope(session, orderId) {
 }
 
 function fromSealed(item, session, orderId) {
-  if (!validReviewBody(item) || item.tenant_id !== session.tenant.id ||
+  if (!validReviewRecoveryBody(item) || item.tenant_id !== session.tenant.id ||
       item.reviewer_id !== session.user.id || item.order_id !== orderId) {
     throw new Error('La revisión cifrada pertenece a otra empresa, usuario u orden.');
   }
@@ -101,7 +101,7 @@ export async function savePendingReview(session, orderId, reportId, body) {
       ? { checklist: body.checklist }
       : { reason: body?.reason })
   };
-  if (!validReviewBody(item)) {
+  if (!validReviewRecoveryBody(item)) {
     throw new Error('La revisión no tiene un contenido válido para el guardado cifrado.');
   }
   await journal.save(scope, item);
