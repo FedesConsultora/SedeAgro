@@ -8,6 +8,7 @@ import { EvidenceUploadModal } from '../components/EvidenceUploadModal.jsx';
 import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { parseScoutingPrivateEvidence } from '../services/scoutingPrivateEvidenceClient.js';
 import { sessionScope } from '../services/offlineSyncModel.js';
+import { observationWorkOrderDraft } from '../services/observationWorkOrderDraft.js';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
@@ -35,7 +36,7 @@ function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_ES[status] || status}</span>;
 }
 
-function RunDetail({ run, onChanged, onOpenSync }) {
+function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder }) {
   const { api, dataMode, session } = useSession();
   const [details, setDetails] = useState(dataMode === 'mock' ? run : null);
   const [loading, setLoading] = useState(dataMode === 'live');
@@ -328,6 +329,13 @@ function RunDetail({ run, onChanged, onOpenSync }) {
                   </div>
                   {canObserve && <button className="ghost-action" type="button"
                     style={{ marginTop: 8 }} onClick={() => setShowEvidModal(obs.id)}>+ Adjuntar archivo</button>}
+                  {onCreateWorkOrder && observationWorkOrderDraft(details, obs, session, dataMode) &&
+                    <button className="ghost-action" type="button"
+                      aria-label={'Preparar orden desde observación ' + obs.id.slice(0, 8)}
+                      style={{ marginTop: 8 }} onClick={() => {
+                        const draft = observationWorkOrderDraft(details, obs, session, dataMode);
+                        if (draft) onCreateWorkOrder(draft);
+                      }}>Preparar orden de inspección</button>}
                 </div>
               ))}
             </div>
@@ -469,7 +477,8 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
                   <ChevronRight size={16} style={{ color: '#94a3b8', transform: expanded[run.id] ? 'rotate(90deg)' : 'none' }} />
                 </button>
                 {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load}
-                  onOpenSync={() => onNavigate?.('sync', { id: run.id })} />}
+                  onOpenSync={() => onNavigate?.('sync', { id: run.id })}
+                  onCreateWorkOrder={draft => onNavigate?.('orders', { orderDraft: draft })} />}
               </div>
             ))}
         </div>
