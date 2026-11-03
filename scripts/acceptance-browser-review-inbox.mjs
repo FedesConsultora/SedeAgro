@@ -913,17 +913,44 @@ try {
   await checkSection.getByRole('combobox').selectOption('no_files');
   let reviewPostCount = 0;
   let originalReviewBody;
+  let finishReviewCommit;
+  const reviewCommit = new Promise(resolve => { finishReviewCommit = resolve; });
   const reviewEndpoint = '**/api/v1/work-orders/' + reviewOrder + '/executions/' + reviewReport + '/review';
   const detailEndpoint = '**/api/v1/work-orders/' + reviewOrder;
   await page.route(reviewEndpoint,async route=>{
     reviewPostCount++;
+    const originalUrl = route.request().url();
+    const originalJson = route.request().postData();
     originalReviewBody = route.request().postDataJSON();
     assert.match(originalReviewBody.client_request_id,/^[0-9a-f-]{36}$/);
     assert.equal(originalReviewBody.decision,'verified');
-    const actual = await route.fetch();
-    assert.equal(actual.status(),200,await actual.text());
-    assert.equal((await actual.json()).replayed,false);
-    await route.abort('failed'); // Drop only the browser ACK after real COMMIT.
+    // Do not route.fetch() and later route.abort(): when Chromium cancels the
+    // original request while the upstream response is consumed, Playwright may
+    // report "Route is already handled". Fail the original browser transport
+    // immediately; no browser receives a successful HTTP ACK.
+    await route.abort('failed');
+    try {
+      // This test-only APIContext SHARES the browser context's REAL HttpOnly
+      // cookie. Submit the captured exact POST bytes ONCE to real Express /
+      // PostgreSQL, rather than fabricating a success response. The client
+      // remains uncertain until its subsequent authorized GET reconciles it.
+      const committed = await context.request.post(originalUrl, {
+        data: originalJson,
+        headers: {
+          'content-type': 'application/json',
+          'x-sedeagro-request': '1',
+          'x-tenant-id': ownerA.tenant.id,
+          origin: 'http://127.0.0.1:4177'
+        }
+      });
+      assert.equal(committed.status(), 200,
+        'The original captured review must COMMIT through real Express');
+      assert.equal((await committed.json()).replayed,false,
+        'The mirrored test request must be the first actual server review');
+      finishReviewCommit({ ok: true });
+    } catch (error) {
+      finishReviewCommit({ ok: false, reason: error?.message || 'Review POST failed' });
+    }
   },{times:1});
   // Force only the next authorized GET to fail, never fake a successful reply.
   await page.route(detailEndpoint,route=>route.fulfill({
@@ -934,6 +961,11 @@ try {
   await reviewDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
   const retryReview=reviewDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
   await retryReview.waitFor();
+  // The browser's failed transport is NOT proof of a server COMMIT. Await
+  // the independent real API call and check the database receipt below.
+  const committedReview = await reviewCommit;
+  assert.equal(committedReview.ok, true, committedReview.reason ||
+    'No real PostgreSQL commit was confirmed for the intercepted review');
   assert.equal(reviewPostCount,1,'A lost ACK must not automatically repeat the POST');
 
   // Inspect the browser's REAL IndexedDB, before reload, not a mocked store.
