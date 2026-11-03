@@ -32,7 +32,8 @@ export function csvSafeCell(input) {
 
 const COLUMNS = [
   'tipo_registro','id','fecha_utc','lote','establecimiento',
-  'categoria','estado','prioridad','detalle'
+  'categoria','estado','prioridad','detalle',
+  'observacion_origen_id','recorrida_origen_id'
 ];
 
 function iso(input) {
@@ -46,14 +47,16 @@ export function fieldReportRows({ field, observations, workOrders }) {
   return [
     [...COLUMNS],
     ['lote', field.id, '', name, farm, 'hectareas', '', '',
-      field.area_hectares ?? ''],
+      field.area_hectares ?? '', '', ''],
     ...observations.map(item => [
       'observacion', item.id, iso(item.observed_at), name, farm,
-      item.observation_type, item.severity, '', item.notes || ''
+      item.observation_type, item.severity, '', item.notes || '', '', ''
     ]),
     ...workOrders.map(item => [
       'orden', item.id, iso(item.created_at), name, farm,
-      item.type, item.status, item.priority, item.title
+      item.type, item.status, item.priority, item.title,
+      item.observation_origin?.scouting_observation_id || '',
+      item.observation_origin?.scouting_run_id || ''
     ])
   ];
 }
