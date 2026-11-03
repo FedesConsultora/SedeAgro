@@ -877,16 +877,85 @@ try {
   await reviewDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
   const retryReview=reviewDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
   await retryReview.waitFor();
-  assert.equal(reviewPostCount,1,'There must be no automatic second review POST');
-  const retryReply=page.waitForResponse(response=>
-    response.url().endsWith('/work-orders/'+reviewOrder+'/executions/'+reviewReport+'/review') &&
-    response.request().method()==='POST' && response.status()===200);
-  await retryReview.click();
-  const replayResponse=await retryReply;
-  const replayBody=await replayResponse.json();
-  assert.equal(replayBody.replayed,true,'The real backend must acknowledge the first persisted review');
-  assert.equal(replayBody.data.id,reviewReport);
-  await reviewDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(reviewPostCount,1,'A lost ACK must not automatically repeat the POST');
+
+  // Inspect the browser's REAL IndexedDB, before reload, not a mocked store.
+  const sealedBeforeReload = await page.evaluate(async () => {
+    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db = await new Promise((resolve,reject) => {
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      const tx=db.transaction(['pending-creates','scope-keys'],'readonly');
+      const rows = await new Promise((resolve,reject)=>{
+        const op=tx.objectStore('pending-creates').getAll();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      const keys = await new Promise((resolve,reject)=>{
+        const op=tx.objectStore('scope-keys').getAll();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      return { rows: rows.map(row=>({
+        id:row.id,scope:row.scope,iv:row.iv,
+        sealed:row.ciphertext instanceof ArrayBuffer,
+        bytes:row.ciphertext.byteLength,fields:Object.keys(row).sort()
+      })), keys:keys.map(row=>({
+        scope:row.scope,type:row.key?.type,extractable:row.key?.extractable
+      })) };
+    } finally { db.close(); }
+  });
+  assert.equal(sealedBeforeReload.rows.length,1,'Committed but unacknowledged review remains locally encrypted');
+  const sealedRow=sealedBeforeReload.rows[0];
+  assert.equal(sealedRow.id,originalReviewBody.client_request_id);
+  assert.match(sealedRow.scope,/^review:[a-f0-9]{64}$/);
+  assert.equal(sealedRow.sealed,true);
+  assert.equal(sealedRow.iv.length,12);
+  assert.ok(sealedRow.bytes>60);
+  assert.deepEqual(sealedRow.fields,['ciphertext','id','iv','scope']);
+  assert.equal(sealedBeforeReload.keys.length,1);
+  assert.equal(sealedBeforeReload.keys[0].type,'secret');
+  assert.equal(sealedBeforeReload.keys[0].extractable,false);
+  for(const sensitive of [reviewOrder,reviewReport,ownerA.tenant.id,ownerA.user.id,
+    'no_files','verified']) {
+    assert.equal(JSON.stringify(sealedBeforeReload).includes(sensitive),false,
+      'Review metadata must not disclose authenticated IDs or decision');
+  }
+
+  // Lose React state and the original error response completely. The next
+  // browser mount reads AES-GCM data *after* server cookie revalidation;
+  // it performs ONLY a real GET, never a second POST.
+  await page.unroute(detailEndpoint);
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
+  const recoveredReviewDrawer=page.getByRole('dialog',{name:reviewTitle});
+  await recoveredReviewDrawer.getByText(/El servidor confirmó la revisión original y se limpió el registro cifrado/).waitFor();
+  await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
+  assert.equal(await recoveredReviewDrawer.getByRole('button',
+    {name:'Reintentar revisión con la misma clave'}).count(),0);
+  const sealedAfterReload = await page.evaluate(async () => {
+    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db=await new Promise((resolve,reject)=>{
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      return await new Promise((resolve,reject)=>{
+        const tx=db.transaction('pending-creates','readonly');
+        const req=tx.objectStore('pending-creates').count();
+        req.onsuccess=()=>resolve(req.result);
+        req.onerror=()=>reject(req.error);
+      });
+    } finally {db.close();}
+  });
+  assert.equal(sealedAfterReload,0,'Only an authorized exact matching GET may clear ciphertext');
+
   const reviewRows=(await admin.query(`
     SELECT review_status,reviewed_by,review_checklist
     FROM work_order_executions WHERE tenant_id=$1 AND id=$2
@@ -904,13 +973,11 @@ try {
     WHERE tenant_id=$1 AND work_order_id=$2 AND reviewed_by=$3 AND client_request_id=$4
   `,[ownerA.tenant.id,reviewOrder,ownerA.user.id,
     originalReviewBody.client_request_id])).rows[0].count;
-  assert.equal(reviewAudits,1,'Lost ACK + manual replay must create only one audit');
+  assert.equal(reviewAudits,1,'Lost ACK + reload GET must retain one audit');
   assert.equal(reviewReceipts,1,'Durable UUID receipt must be recorded once');
-  assert.equal(reviewPostCount,1,'Only first POST is intercepted; browser explicitly retried once');
-  await reviewDrawer.getByRole('button',{name:'Cerrar '+reviewTitle}).click();
-  await page.unroute(detailEndpoint);
+  await recoveredReviewDrawer.getByRole('button',{name:'Cerrar '+reviewTitle}).click();
   await page.unroute(reviewEndpoint);
-  console.log('PASS: authentic two-person review POST COMMIT + lost ACK + temporary GET 503 + explicit same-UUID 200 replay, one audit and receipt');
+  console.log('PASS: real review COMMIT, lost ACK, AES-GCM sealed IndexedDB scope, reload + real /auth/me and authorized GET; one review/audit and CAS-cleared ciphertext, zero repeat POST');
 
   // Final independent API benchmark after all UI scenarios, so adding 5000
   // synthetic orders cannot change the earlier deterministic 50/61 assertions.
