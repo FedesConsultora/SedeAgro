@@ -94,3 +94,17 @@ test('UI blocks repeat POST while confirmation is uncertain and uses an authoriz
   assert.match(ui, /await discardPendingReview\(session, order\.id,/);
   assert.match(ui, /await readPendingReview\(session, order\.id\)/);
 });
+
+
+test('pending encrypted review recovery stays actionable without a transient error banner', () => {
+  const ui = readFileSync(new URL('../src/components/WorkOrderExecutionPanel.jsx', import.meta.url), 'utf8');
+  // A background refresh may clear informational error text. A locally sealed
+  // request is still authoritative as an unresolved client intent until exact
+  // server receipt reconciliation; never strand it without explicit controls.
+  assert.match(ui, /\(error \|\| activePendingReview \|\| pendingPayload\)/);
+  assert.match(ui, /role=\{error \? 'alert' : 'status'\}/);
+  assert.match(ui, /Hay una revisión cifrada pendiente de confirmación/);
+  assert.match(ui, /Comprobar revisión en servidor/);
+  assert.match(ui, /Reintentar revisión con la misma clave/);
+  assert.match(ui, /activePendingReview\?\.body\.client_request_id/);
+});
