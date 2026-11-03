@@ -254,3 +254,46 @@ test('offline single send skips without modifying local state', async () => {
   assert.equal(called, false);
   assert.deepEqual(h.records.get(item.id), item);
 });
+
+test('manual click waits for a failed automatic photo upload and NEVER repeats applied observation POST', async () => {
+  const h = harness();
+  const item = pending(RUN_A, true);
+  h.records.set(item.id, item);
+  let started, release;
+  const begun = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  let batchPosts = 0;
+  let uploadAttempts = 0;
+  const automatic = h.queue.flush(session(), async body => {
+    batchPosts++;
+    return ack(body);
+  }, { sendEvidence: async () => {
+    uploadAttempts++;
+    started();
+    await hold;
+    throw new TypeError('Private photo ACK never arrived');
+  } });
+  await begun;
+  const manual = h.queue.flushOne(session(), item.id, async () => {
+    batchPosts++;
+    throw new Error('An applied observation must not be reposted');
+  }, { sendEvidence: async () => {
+    uploadAttempts++;
+    throw new Error('Manual single-item send cannot silently retry photo-only');
+  } });
+  assert.equal(batchPosts, 1);
+  release();
+  assert.equal((await automatic).sent, 0);
+  const result = await manual;
+  assert.equal(result.photoRecoveryRequired, true);
+  assert.equal(result.attempted, 0);
+  assert.equal(result.sent, 0);
+  assert.equal(batchPosts, 1);
+  assert.equal(uploadAttempts, 1);
+  const saved = h.records.get(item.id);
+  assert.equal(saved.syncedObservationId, OBS);
+  assert.equal(saved.evidence.client_upload_id, item.evidence.client_upload_id);
+  assert.equal(saved.evidence.content_base64, item.evidence.content_base64);
+  assert.equal(saved.state, 'pending');
+  assert.equal(saved.attempts, 1);
+});
