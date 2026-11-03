@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
@@ -7,6 +7,7 @@ import { exceptionReadinessForReview } from '../services/executionReviewReadines
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { needsExecutionReceiptLookup, reconcileExecutionReceipt } from '../services/workOrderExecutionReceipt.js';
 import { needsReviewReceiptLookup, reconcileReviewReceipt } from '../services/workOrderReviewReceipt.js';
+import { readPendingReview, savePendingReview, discardPendingReview } from '../services/workOrderReviewRecoveryJournal.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
@@ -43,7 +44,45 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [notice, setNotice] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
   const [pendingReview, setPendingReview] = useState(null);
+  const [reviewJournal, setReviewJournal] = useState(null);
   const reviewInFlight = useRef(false);
+  const reviewIdentity = live && ['tenant_admin', 'agronomic_coordinator'].includes(role) &&
+    session?.membership?.status === 'active' && session?.tenant?.id && userId && order?.id
+    ? `${session.tenant.id}:${userId}:${order.id}` : null;
+  const reviewReady = Boolean(reviewIdentity && reviewJournal?.identity === reviewIdentity &&
+    reviewJournal.ready === true);
+  const activePendingReview = pendingReview?.identity === reviewIdentity ? pendingReview : null;
+
+  // An authenticated session is mandatory before reading the encrypted slot.
+  // On reload the exact pending decision is recovered and only GET is automatic.
+  // Never enable the first POST until local recovery completes successfully.
+  useEffect(() => {
+    if (!reviewIdentity) return;
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const recovered = await readPendingReview(session, order.id);
+        if (cancelled) return;
+        setReviewJournal({ identity: reviewIdentity, ready: true });
+        if (recovered) {
+          const pending = { ...recovered, identity: reviewIdentity };
+          setPendingReview(pending);
+          setError('Se recuperó una revisión cifrada pendiente. Comprobando el servidor antes de permitir otra decisión.');
+          await verifyInterruptedReview(pending, () => !cancelled);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setReviewJournal({ identity: reviewIdentity, ready: false });
+        setError('No se pudo recuperar el registro cifrado de revisión. No se enviará ninguna nueva decisión. ' +
+          (err?.message || 'Revisá el almacenamiento local.'));
+      }
+    };
+    void restore();
+    return () => { cancelled = true; };
+  // React identity includes tenant, actor and order; refreshes of this detail
+  // are not supposed to reopen IndexedDB or reissue an automatic GET.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewIdentity]);
 
   if (!live) return null;
 
@@ -119,67 +158,85 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     }
   };
 
-  // A prior review may have COMMITTED before its HTTP ACK was lost.
-  // Never issue another POST as a recovery action: inspect its exact server row.
-  const verifyInterruptedReview = async pending => {
+  // A review may have COMMITTED before the ACK was lost, including before
+  // a browser reload. The authenticated GET is the only automatic recovery.
+  const verifyInterruptedReview = async (pending, isCurrent = () => true) => {
     try {
       const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}`, {
         silent: true
       });
+      if (!isCurrent()) return;
       const receipt = reconcileReviewReceipt(response, {
         orderId: order.id, reportId: pending.reportId, reviewerId: userId,
         ...pending.body
       });
       if (receipt.state === 'recorded') {
-        setPendingReview(null);
+        // Only exact authenticated confirmation may remove the encrypted
+        // receipt. CAS protects a new request from a stale tab's cleanup.
+        const discarded = await discardPendingReview(session, order.id,
+          pending.body.client_request_id);
+        if (!isCurrent()) return;
+        if (!discarded) {
+          throw new Error('No fue posible confirmar la limpieza cifrada del recibo.');
+        }
+        setPendingReview(current => current?.body.client_request_id ===
+          pending.body.client_request_id ? null : current);
         setError('');
-        setNotice('La revisión figura registrada por tu usuario en el servidor. No se volvió a enviar.');
+        setNotice('El servidor confirmó la revisión original y se limpió el registro cifrado. No se volvió a enviar.');
         onChanged?.();
       } else if (receipt.state === 'different') {
-        setError('El servidor registra una revisión distinta. No se volvió a enviar; actualizá la orden y consultá con coordinación.');
+        setError('El servidor registra una revisión distinta. No se volvió a enviar; mantenemos el recibo cifrado para que coordinación investigue.');
         onChanged?.();
       } else {
-        setError('El servidor aún no confirma la revisión. Podés comprobar nuevamente o reintentar explícitamente la misma decisión con su clave original.');
+        setError('El servidor aún no confirma la revisión. El recibo cifrado sigue guardado; comprobá nuevamente o reintentá explícitamente con la misma clave.');
       }
     } catch {
-      setError('No se pudo comprobar la revisión. Podría haberse guardado; no la repitas sin verificar el estado del servidor.');
+      if (!isCurrent()) return;
+      setError('No se pudo comprobar o limpiar la revisión cifrada. Podría haberse guardado; no se hará otra revisión automática.');
     }
   };
 
   const recheckReview = async () => {
-    if (!pendingReview || busy) return;
+    if (!activePendingReview || busy || !reviewReady) return;
     setBusy(true);
     setError('');
     try {
-      await verifyInterruptedReview(pendingReview);
+      await verifyInterruptedReview(activePendingReview);
     } finally {
       setBusy(false);
     }
   };
 
   const retryOriginalReview = async () => {
-    if (!pendingReview || busy || reviewInFlight.current ||
-        !pendingReview.body.client_request_id) return;
-    // The durable key is identical: the server can return the original
-    // receipt after a committed/lost ACK, never create a second audit event.
+    if (!activePendingReview || !reviewReady || busy || reviewInFlight.current) return;
+    // Read the sealed body again, not mutable React state: a different tab
+    // cannot substitute a new decision or order under the same pending UUID.
     reviewInFlight.current = true;
     setBusy(true);
     setError('');
     try {
+      const saved = await readPendingReview(session, order.id);
+      if (!saved || saved.reportId !== activePendingReview.reportId ||
+          saved.body.client_request_id !== activePendingReview.body.client_request_id) {
+        throw new Error('No coincide el intento cifrado original. No se envió nada.');
+      }
       const response = await api.request(
-        `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(pendingReview.reportId)}/review`, {
-          method: 'POST', silent: true, body: pendingReview.body
+        `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(saved.reportId)}/review`, {
+          method: 'POST', silent: true, body: saved.body
         });
-      validatedExecutionResponse(response, order.id,
-        pendingReview.body.decision, pendingReview.reportId);
-      setPendingReview(null);
+      validatedExecutionResponse(response, order.id, saved.body.decision, saved.reportId);
+      const discarded = await discardPendingReview(session, order.id,
+        saved.body.client_request_id);
+      if (!discarded) throw new Error('La revisión se confirmó, pero no se pudo limpiar el recibo cifrado.');
+      setPendingReview(current => current?.body.client_request_id ===
+        saved.body.client_request_id ? null : current);
       setNotice(response.replayed === true
-        ? 'El servidor confirmó la revisión original, sin duplicarla.'
-        : 'El servidor confirmó la revisión. No se generó otra decisión.');
+        ? 'El servidor confirmó la revisión original sin duplicarla; se limpió el registro cifrado.'
+        : 'El servidor recibió la decisión original; se limpió el registro cifrado.');
       onChanged?.();
     } catch (err) {
       if (needsReviewReceiptLookup(err)) {
-        await verifyInterruptedReview(pendingReview);
+        await verifyInterruptedReview(activePendingReview);
       } else {
         setError(err?.message || 'No fue posible recuperar la revisión original.');
       }
@@ -190,7 +247,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   };
 
   const review = async (report, decision) => {
-    if (!canReviewExecutionReport(order, report, role, userId, live) || busy || pendingReview || reviewInFlight.current) return;
+    if (!canReviewExecutionReport(order, report, role, userId, live) || !reviewReady || busy || activePendingReview || reviewInFlight.current) return;
     if (decision === 'verified') {
       const readiness = exceptionReadinessForReview(order, report, exceptionReadiness);
       if (!readiness.allowed) {
@@ -222,20 +279,39 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     setBusy(true);
     setError('');
     setNotice('');
+    let pending = null;
     try {
+      // This is a write-ahead recovery journal. No POST before IndexedDB
+      // confirms AES-GCM storage, even when connectivity is perfect.
+      const sealed = await savePendingReview(session, order.id, report.id, body);
+      pending = { ...sealed, identity: reviewIdentity };
+      setPendingReview(pending);
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/review`, {
-          method: 'POST', silent: true, body
+          method: 'POST', silent: true, body: sealed.body
         });
       validatedExecutionResponse(response, order.id, decision, report.id);
+      const discarded = await discardPendingReview(session, order.id,
+        sealed.body.client_request_id);
+      if (!discarded) throw new Error('No se pudo limpiar el recibo cifrado tras confirmar la revisión.');
+      setPendingReview(current => current?.body.client_request_id ===
+        sealed.body.client_request_id ? null : current);
+      setNotice('El servidor registró la revisión y se limpió el intento cifrado.');
       onChanged?.();
     } catch (err) {
-      if (needsReviewReceiptLookup(err)) {
-        const pending = { reportId: report.id, body };
-        setPendingReview(pending);
+      if (pending && needsReviewReceiptLookup(err)) {
         await verifyInterruptedReview(pending);
+      } else if (pending) {
+        setError((err?.message || 'No se confirmó la revisión.') +
+          ' Conservamos el recibo cifrado: no inicies otra decisión sin recuperar esta.');
       } else {
-        setError(err?.message || 'No se confirmó la revisión.');
+        // Even after a race with another tab, never send without a journal.
+        try {
+          const saved = await readPendingReview(session, order.id);
+          if (saved) setPendingReview({ ...saved, identity: reviewIdentity });
+        } catch { /* The original storage error remains authoritative. */ }
+        setError('No se envió ninguna revisión: el almacenamiento cifrado no confirmó el intento. ' +
+          (err?.message || 'Revisá IndexedDB.'));
       }
     } finally {
       reviewInFlight.current = false;
@@ -251,11 +327,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     {error && <div className="order-detail__error" role="alert">
       {error} <button type="button" className="ghost-action"
         onClick={onChanged}>Actualizar datos</button>
-      {pendingReview && <button type="button" className="ghost-action"
+      {activePendingReview && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReview()}>
         {busy ? 'Comprobando…' : 'Comprobar revisión en servidor'}
       </button>}
-      {pendingReview?.body.client_request_id && <button type="button"
+      {activePendingReview?.body.client_request_id && <button type="button"
         className="ghost-action" disabled={busy}
         onClick={() => void retryOriginalReview()}>
         Reintentar revisión con la misma clave
@@ -319,7 +395,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       {report.review_status === 'verified' && !reviewChecklistOutcome(report) &&
         <p className="order-detail__footnote">Revisión histórica, sin checklist estructurado; no se infieren controles retroactivos.</p>}
       {canReviewExecutionReport(order, report, role, userId, live) && <div className="order-detail__execution-review">
-        <fieldset className="order-detail__review-checklist" disabled={busy || Boolean(pendingReview)}>
+        {!reviewReady && <p className="order-detail__footnote" role="status">
+          Preparando recuperación cifrada de revisiones. No se enviará ninguna decisión
+          hasta comprobar el almacenamiento local y la sesión de coordinación.
+        </p>}
+        <fieldset className="order-detail__review-checklist" disabled={busy || !reviewReady || Boolean(activePendingReview)}>
           <legend>Controles de revisión para {order.type} (solo aceptación)</legend>
           {[
             ['time_checked', 'Contrasté las fechas y horas declaradas.'],
@@ -352,7 +432,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         </fieldset>
         <label className="form-field">Motivo de rechazo (obligatorio solo si rechazás)
           <textarea maxLength={500} rows={2} value={reviewReason[report.id] || ''}
-            disabled={busy || Boolean(pendingReview)} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
+            disabled={busy || !reviewReady || Boolean(activePendingReview)} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
         </label>
         {!exceptionReadinessForReview(order, report, exceptionReadiness).allowed &&
           <p className="order-detail__footnote" role="status">
@@ -360,10 +440,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
           </p>}
         <div className="order-detail__execution-actions">
           <button className="primary-action" type="button"
-            disabled={busy || Boolean(pendingReview) || hasPlannedInputsWithoutDeclaration(order, report) ||
+            disabled={busy || !reviewReady || Boolean(activePendingReview) || hasPlannedInputsWithoutDeclaration(order, report) ||
               !exceptionReadinessForReview(order, report, exceptionReadiness).allowed}
             onClick={() => void review(report, 'verified')}>Aceptar revisión</button>
-          <button className="ghost-action" type="button" disabled={busy || Boolean(pendingReview)}
+          <button className="ghost-action" type="button" disabled={busy || !reviewReady || Boolean(activePendingReview)}
             onClick={() => void review(report, 'rejected')}>Rechazar parte</button>
         </div>
       </div>}

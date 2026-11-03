@@ -877,16 +877,102 @@ try {
   await reviewDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
   const retryReview=reviewDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
   await retryReview.waitFor();
-  assert.equal(reviewPostCount,1,'There must be no automatic second review POST');
-  const retryReply=page.waitForResponse(response=>
-    response.url().endsWith('/work-orders/'+reviewOrder+'/executions/'+reviewReport+'/review') &&
-    response.request().method()==='POST' && response.status()===200);
-  await retryReview.click();
-  const replayResponse=await retryReply;
-  const replayBody=await replayResponse.json();
-  assert.equal(replayBody.replayed,true,'The real backend must acknowledge the first persisted review');
-  assert.equal(replayBody.data.id,reviewReport);
-  await reviewDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(reviewPostCount,1,'A lost ACK must not automatically repeat the POST');
+
+  // Inspect the browser's REAL IndexedDB, before reload, not a mocked store.
+  const sealedBeforeReload = await page.evaluate(async () => {
+    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db = await new Promise((resolve,reject) => {
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      const tx=db.transaction(['pending-creates','scope-keys'],'readonly');
+      const rows = await new Promise((resolve,reject)=>{
+        const op=tx.objectStore('pending-creates').getAll();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      const keys = await new Promise((resolve,reject)=>{
+        const op=tx.objectStore('scope-keys').getAll();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      return { rows: rows.map(row=>({
+        id:row.id,scope:row.scope,iv:row.iv,
+        sealed:row.ciphertext instanceof ArrayBuffer,
+        bytes:row.ciphertext.byteLength,fields:Object.keys(row).sort()
+      })), keys:keys.map(row=>({
+        scope:row.scope,type:row.key?.type,extractable:row.key?.extractable
+      })) };
+    } finally { db.close(); }
+  });
+  assert.equal(sealedBeforeReload.rows.length,1,'Committed but unacknowledged review remains locally encrypted');
+  const sealedRow=sealedBeforeReload.rows[0];
+  assert.equal(sealedRow.id,originalReviewBody.client_request_id);
+  assert.match(sealedRow.scope,/^review:[a-f0-9]{64}$/);
+  assert.equal(sealedRow.sealed,true);
+  assert.equal(sealedRow.iv.length,12);
+  assert.ok(sealedRow.bytes>60);
+  assert.deepEqual(sealedRow.fields,['ciphertext','id','iv','scope']);
+  assert.equal(sealedBeforeReload.keys.length,1);
+  assert.equal(sealedBeforeReload.keys[0].type,'secret');
+  assert.equal(sealedBeforeReload.keys[0].extractable,false);
+  for(const sensitive of [reviewOrder,reviewReport,ownerA.tenant.id,ownerA.user.id,
+    'no_files','verified']) {
+    assert.equal(JSON.stringify(sealedBeforeReload).includes(sensitive),false,
+      'Review metadata must not disclose authenticated IDs or decision');
+  }
+
+  // Lose React state and the original error response completely. The next
+  // browser mount reads AES-GCM data *after* server cookie revalidation;
+  // it performs ONLY a real GET, never a second POST.
+  await page.unroute(detailEndpoint);
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
+  const recoveredReviewDrawer=page.getByRole('dialog',{name:reviewTitle});
+  // The drawer refresh can unmount its transient notice, so assert the
+  // actual CAS deletion in IndexedDB, not a short-lived React message.
+  await page.waitForFunction(async () => {
+    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db=await new Promise((resolve,reject)=>{
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      const count=await new Promise((resolve,reject)=>{
+        const tx=db.transaction('pending-creates','readonly');
+        const op=tx.objectStore('pending-creates').count();
+        op.onsuccess=()=>resolve(op.result);
+        op.onerror=()=>reject(op.error);
+      });
+      return count===0;
+    } finally { db.close(); }
+  },null,{timeout:15000});
+  await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
+  await recoveredReviewDrawer.getByRole('button',
+    {name:'Reintentar revisión con la misma clave'}).waitFor({state:'detached'});
+  const sealedAfterReload = await page.evaluate(async () => {
+    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
+    const db=await new Promise((resolve,reject)=>{
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error);
+    });
+    try {
+      return await new Promise((resolve,reject)=>{
+        const tx=db.transaction('pending-creates','readonly');
+        const req=tx.objectStore('pending-creates').count();
+        req.onsuccess=()=>resolve(req.result);
+        req.onerror=()=>reject(req.error);
+      });
+    } finally {db.close();}
+  });
+  assert.equal(sealedAfterReload,0,'Only an authorized exact matching GET may clear ciphertext');
+
   const reviewRows=(await admin.query(`
     SELECT review_status,reviewed_by,review_checklist
     FROM work_order_executions WHERE tenant_id=$1 AND id=$2
@@ -904,13 +990,98 @@ try {
     WHERE tenant_id=$1 AND work_order_id=$2 AND reviewed_by=$3 AND client_request_id=$4
   `,[ownerA.tenant.id,reviewOrder,ownerA.user.id,
     originalReviewBody.client_request_id])).rows[0].count;
-  assert.equal(reviewAudits,1,'Lost ACK + manual replay must create only one audit');
+  assert.equal(reviewAudits,1,'Lost ACK + reload GET must retain one audit');
   assert.equal(reviewReceipts,1,'Durable UUID receipt must be recorded once');
-  assert.equal(reviewPostCount,1,'Only first POST is intercepted; browser explicitly retried once');
-  await reviewDrawer.getByRole('button',{name:'Cerrar '+reviewTitle}).click();
-  await page.unroute(detailEndpoint);
+  await recoveredReviewDrawer.getByRole('button',{name:'Cerrar '+reviewTitle}).click();
   await page.unroute(reviewEndpoint);
-  console.log('PASS: authentic two-person review POST COMMIT + lost ACK + temporary GET 503 + explicit same-UUID 200 replay, one audit and receipt');
+  console.log('PASS: real review COMMIT, lost ACK, AES-GCM sealed IndexedDB scope, reload + real /auth/me and authorized GET; one review/audit and CAS-cleared ciphertext, zero repeat POST');
+
+  // Second genuine browser scenario: the first review POST NEVER reaches
+  // Express, so the authorized GET after reload must remain unconfirmed and
+  // the user must explicitly send the SAME saved body to perform the review.
+  const undeliveredTitle='Browser review not delivered '+token;
+  const undeliveredOrder=(await admin.query(`
+    INSERT INTO work_orders
+      (tenant_id,field_id,requested_by,type,status,title,approved_at)
+    VALUES ($1,$2,$3,'inspection','in_progress',$4,now()-interval '2 hours')
+    RETURNING id
+  `,[ownerA.tenant.id,field,ownerA.user.id,undeliveredTitle])).rows[0].id;
+  const undeliveredReport=(await admin.query(`
+    INSERT INTO work_order_executions
+      (tenant_id,work_order_id,submitted_by,started_at,finished_at,
+       worked_area_hectares,result_summary)
+    VALUES($1,$2,$3,now()-interval '1 hour',now()-interval '30 minutes',
+      1.50,'Informe para revisar sin respaldo documental.')
+    RETURNING id
+  `,[ownerA.tenant.id,undeliveredOrder,extraAuthor])).rows[0].id;
+  // Fixture was inserted directly in PostGIS; the page's prior authorized
+  // work-order snapshot cannot contain it until a fresh real API load.
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(undeliveredTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
+  const undeliveredDrawer=page.getByRole('dialog',{name:undeliveredTitle});
+  const undeliveredChecks=undeliveredDrawer.getByRole('group',{name:/Controles de revisión/});
+  await undeliveredChecks.waitFor();
+  for(let i=0;i<4;i++) await undeliveredChecks.locator('input[type="checkbox"]').nth(i).check();
+  await undeliveredChecks.getByRole('combobox').selectOption('no_files');
+  const undeliveredEndpoint='**/api/v1/work-orders/'+undeliveredOrder+'/executions/'+undeliveredReport+'/review';
+  let undeliveredBody;
+  let undeliveredPostCount=0;
+  page.on('request',request=>{
+    if(request.url().endsWith('/work-orders/'+undeliveredOrder+
+        '/executions/'+undeliveredReport+'/review') && request.method()==='POST') {
+      undeliveredPostCount++;
+    }
+  });
+  await page.route(undeliveredEndpoint,async route=>{
+    undeliveredBody=route.request().postDataJSON();
+    assert.match(undeliveredBody.client_request_id,/^[0-9a-f-]{36}$/);
+    await route.abort('failed'); // No route.fetch: server never receives this POST.
+  },{times:1});
+  page.once('dialog',dialog=>void dialog.accept());
+  await undeliveredDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
+  await undeliveredDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'}).waitFor();
+  assert.equal(undeliveredPostCount,1);
+  const submittedBeforeReload=(await admin.query(`
+    SELECT review_status FROM work_order_executions WHERE tenant_id=$1 AND id=$2
+  `,[ownerA.tenant.id,undeliveredReport])).rows;
+  assert.equal(submittedBeforeReload[0].review_status,'submitted','No client route returned a fake server commit');
+
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(undeliveredTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
+  const retryDrawer=page.getByRole('dialog',{name:undeliveredTitle});
+  const recoveredRetry=retryDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
+  await recoveredRetry.waitFor();
+  assert.equal(undeliveredPostCount,1,'GET after reload must not automatically send an uncommitted POST');
+  const realRetryResponse=page.waitForResponse(response=>
+    response.url().endsWith('/work-orders/'+undeliveredOrder+
+      '/executions/'+undeliveredReport+'/review') &&
+    response.request().method()==='POST' && response.status()===200);
+  await recoveredRetry.click();
+  const realRetry=await realRetryResponse;
+  assert.equal((await realRetry.json()).replayed,false,'The actual FIRST server commit cannot be fabricated');
+  assert.deepEqual(realRetry.request().postDataJSON(),undeliveredBody,
+    'Manual retry after reload must send EXACTLY the original UUID and body');
+  await retryDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(undeliveredPostCount,2,'Exactly one failed transport and one deliberate POST');
+  const undeliveredAudit=(await admin.query(`
+    SELECT count(*)::int AS count FROM audit_events
+    WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'
+  `,[ownerA.tenant.id,undeliveredOrder])).rows[0].count;
+  assert.equal(undeliveredAudit,1);
+  const undeliveredReceipt=(await admin.query(`
+    SELECT count(*)::int AS count FROM work_order_execution_review_requests
+    WHERE tenant_id=$1 AND work_order_id=$2 AND client_request_id=$3
+  `,[ownerA.tenant.id,undeliveredOrder,undeliveredBody.client_request_id])).rows[0].count;
+  assert.equal(undeliveredReceipt,1);
+  await retryDrawer.getByRole('button',{name:'Cerrar '+undeliveredTitle}).click();
+  await page.unroute(undeliveredEndpoint);
+  console.log('PASS: POST never reaches Express, encrypted pending decision survives reload + authenticated GET, and manual same-body POST commits exactly once');
 
   // Final independent API benchmark after all UI scenarios, so adding 5000
   // synthetic orders cannot change the earlier deterministic 50/61 assertions.
