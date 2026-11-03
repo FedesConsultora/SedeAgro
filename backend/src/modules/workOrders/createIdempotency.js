@@ -8,6 +8,7 @@ export function workOrderCreateFingerprint(input) {
   // Canonical authored values after Zod coercions/defaults.
   const canonical = {
     campaign_field_id: input.campaign_field_id ?? null,
+    origin_observation_id: input.origin_observation_id ?? null,
     field_id: input.field_id,
     type: input.type,
     priority: input.priority,
