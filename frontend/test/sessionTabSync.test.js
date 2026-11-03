@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import {
-  createSessionTabSync, isSessionTabSignal, SESSION_TAB_KEY,
+  createSessionTabSync, isSessionTabSignal, SESSION_TAB_KEY, SESSION_TAB_WITNESS_KEY,
   shouldRecheckOnForeground, FOREGROUND_RECHECK_MS
 } from '../src/services/sessionTabSync.js';
 
@@ -24,6 +24,7 @@ function browserPair(withBroadcast = true) {
   const make = () => {
     const listeners = new Map();
     const browser = {
+      suspended: false,
       crypto: { randomUUID },
       ...(withBroadcast ? { BroadcastChannel: Channel } : {}),
       addEventListener(event, cb) {
@@ -33,15 +34,16 @@ function browserPair(withBroadcast = true) {
       removeEventListener(event, cb) { listeners.get(event)?.delete(cb); },
       dispatch(type, event) { for (const cb of listeners.get(type) || []) cb(event); },
       localStorage: {
+        getItem(key) { return values.get(key) ?? null; },
         setItem(key, value) {
           values.set(key, value);
-          for (const other of all) if (other !== browser) {
+          for (const other of all) if (other !== browser && !other.suspended) {
             other.dispatch('storage', { key, newValue: value });
           }
         },
         removeItem(key) {
           values.delete(key);
-          for (const other of all) if (other !== browser) {
+          for (const other of all) if (other !== browser && !other.suspended) {
             other.dispatch('storage', { key, newValue: null });
           }
         }
@@ -63,6 +65,13 @@ test('signals never carry tenant, user, token, cookie or protected information',
   sender.publish();
   assert.deepEqual(events, ['received'], 'broadcast + storage must be deduplicated');
   assert.equal(values.has(SESSION_TAB_KEY), false, 'temporary storage signal must be cleared');
+  const witness = JSON.parse(values.get(SESSION_TAB_WITNESS_KEY));
+  assert.equal(isSessionTabSignal(witness), true);
+  assert.deepEqual(Object.keys(witness).sort(), ['kind', 'nonce', 'source']);
+  assert.ok(!JSON.stringify(witness).includes('tenant') &&
+    !JSON.stringify(witness).includes('user') &&
+    !JSON.stringify(witness).includes('token'));
+  assert.equal(other.catchUp(), false, 'delivered events may not re-fire on foreground');
   assert.equal(isSessionTabSignal({
     kind: 'session-transition', source: 'opaque', nonce: randomUUID()
   }), true);
@@ -95,4 +104,52 @@ test('foreground revalidation is throttled and never forces an offline field ses
   assert.equal(shouldRecheckOnForeground(0, FOREGROUND_RECHECK_MS, false, true), false);
   assert.equal(shouldRecheckOnForeground(0, FOREGROUND_RECHECK_MS, true, false), false);
   assert.equal(shouldRecheckOnForeground(0, Number.NaN, true, true), false);
+});
+
+test('suspended tab recovers a missed transition from opaque witness exactly once', () => {
+  const { a, b } = browserPair(false); // no BroadcastChannel
+  let deliveries = 0;
+  const sender = createSessionTabSync(() => {}, a);
+  const receiver = createSessionTabSync(() => { deliveries++; }, b);
+  b.suspended = true; // both transient storage events are lost by the tab
+  sender.publish();
+  sender.publish();
+  assert.equal(deliveries, 0, 'a suspended tab must not receive transient events');
+  b.suspended = false;
+  assert.equal(receiver.catchUp(), true);
+  assert.equal(deliveries, 1, 'a single /auth/me revalidation handles the latest cookie');
+  assert.equal(receiver.catchUp(), false);
+  assert.equal(deliveries, 1, 'foreground focus cannot cause duplicate revalidation');
+  sender.close();
+  receiver.close();
+});
+
+test('newly mounted tab does not replay a stale witness (it verifies its cookie on mount)', () => {
+  const { a, b } = browserPair(false);
+  const sender = createSessionTabSync(() => {}, a);
+  sender.publish();
+  let called = 0;
+  const newReceiver = createSessionTabSync(() => { called++; }, b);
+  assert.equal(newReceiver.catchUp(), false);
+  assert.equal(called, 0);
+  sender.publish();
+  assert.equal(called, 1);
+  assert.equal(newReceiver.catchUp(), false);
+  newReceiver.close();
+  sender.close();
+});
+
+test('opaque witness refuses malformed storage and falls back without throwing', () => {
+  const { a, b, values } = browserPair(false);
+  const receiver = createSessionTabSync(() => {}, b);
+  values.set(SESSION_TAB_WITNESS_KEY, '{"kind":"session-transition","token":"secret"}');
+  assert.equal(receiver.catchUp(), false);
+  values.set(SESSION_TAB_WITNESS_KEY, '{broken JSON');
+  assert.equal(receiver.catchUp(), false);
+  b.localStorage.getItem = () => { throw new Error('Storage denied'); };
+  assert.equal(receiver.catchUp(), false);
+  receiver.close();
+  const sender = createSessionTabSync(() => {}, a);
+  assert.doesNotThrow(() => sender.publish());
+  sender.close();
 });

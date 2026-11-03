@@ -59,3 +59,40 @@ test('only a current-session 401 retires local field access and closes the view'
   assert.match(handler, /void retireOfflineFieldVault\(\)[\s\S]*setSession\(null\)/);
   assert.match(handler, /if \(!cleared\) showError/);
 });
+
+test('a missed transition quarantines before bounded foreground polling, even without tenant hint', () => {
+  const onForeground = provider.slice(
+    provider.indexOf('const onForeground = () => {'),
+    provider.indexOf('const onOnline = () => {'));
+  assert.match(onForeground, /if \(document\.visibilityState !== 'visible'\) return;/);
+  assert.match(onForeground, /if \(sync\.catchUp\(\)\) return;/);
+  assert.ok(onForeground.indexOf('sync.catchUp()') <
+    onForeground.indexOf('shouldRecheckOnForeground('),
+    'missed identity must bypass the 60s throttle');
+  assert.ok(onForeground.indexOf('sync.catchUp()') <
+    onForeground.indexOf('if (!hint) return;'),
+    'a missed logout must quarantine even when the shared tenant hint is missing');
+  assert.match(onForeground, /hint !== sessionRef\.current\?\.tenant\?\.id/);
+});
+
+test('late old-tenant 401 or 200 cannot override a new cross-tab login', () => {
+  const resolution = provider.slice(provider.indexOf('}).then((result) => {'),
+    provider.indexOf('}).catch(() => {',provider.indexOf('}).then((result) => {')));
+  assert.match(resolution, /tabSyncRef\.current\?\.catchUp\(\)/);
+  assert.match(resolution, /if \(!isCurrent\(\)\) return;/);
+  assert.match(resolution, /localStorage\.getItem\('sedeagro\.tenantHint'\)/);
+  assert.match(resolution, /void revalidate\(\{ quarantine: true \}\);/);
+  assert.ok(resolution.indexOf('catchUp()') <
+    resolution.indexOf('result.unauthorized'),
+    'fence the old response before logging out the replacement account');
+  assert.ok(resolution.indexOf('sedeagro.tenantHint') <
+    resolution.indexOf('setSession({ ...result.profile'),
+    'fence the old response before authenticating an old profile');
+});
+
+test('witness is opaque; no account, draft or cookie can be written to browser storage', () => {
+  assert.match(tabSync, /SESSION_TAB_WITNESS_KEY/);
+  assert.match(tabSync, /browser\.localStorage\.setItem\(SESSION_TAB_WITNESS_KEY, JSON\.stringify\(signal\)\)/);
+  assert.match(tabSync, /catchUp\(\) \{/);
+  assert.doesNotMatch(tabSync, /localStorage\.setItem\([^\n]*tenant|localStorage\.setItem\([^\n]*token/);
+});
