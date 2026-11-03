@@ -979,6 +979,88 @@ try {
   await page.unroute(reviewEndpoint);
   console.log('PASS: real review COMMIT, lost ACK, AES-GCM sealed IndexedDB scope, reload + real /auth/me and authorized GET; one review/audit and CAS-cleared ciphertext, zero repeat POST');
 
+  // Second genuine browser scenario: the first review POST NEVER reaches
+  // Express, so the authorized GET after reload must remain unconfirmed and
+  // the user must explicitly send the SAME saved body to perform the review.
+  const undeliveredTitle='Browser review not delivered '+token;
+  const undeliveredOrder=(await admin.query(`
+    INSERT INTO work_orders
+      (tenant_id,field_id,requested_by,type,status,title,approved_at)
+    VALUES ($1,$2,$3,'inspection','in_progress',$4,now()-interval '2 hours')
+    RETURNING id
+  `,[ownerA.tenant.id,field,ownerA.user.id,undeliveredTitle])).rows[0].id;
+  const undeliveredReport=(await admin.query(`
+    INSERT INTO work_order_executions
+      (tenant_id,work_order_id,submitted_by,started_at,finished_at,
+       worked_area_hectares,result_summary)
+    VALUES($1,$2,$3,now()-interval '1 hour',now()-interval '30 minutes',
+      1.50,'Informe para revisar sin respaldo documental.')
+    RETURNING id
+  `,[ownerA.tenant.id,undeliveredOrder,extraAuthor])).rows[0].id;
+  await page.getByPlaceholder('Buscar orden o lote').fill(undeliveredTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
+  const undeliveredDrawer=page.getByRole('dialog',{name:undeliveredTitle});
+  const undeliveredChecks=undeliveredDrawer.getByRole('group',{name:/Controles de revisión/});
+  await undeliveredChecks.waitFor();
+  for(let i=0;i<4;i++) await undeliveredChecks.locator('input[type="checkbox"]').nth(i).check();
+  await undeliveredChecks.getByRole('combobox').selectOption('no_files');
+  const undeliveredEndpoint='**/api/v1/work-orders/'+undeliveredOrder+'/executions/'+undeliveredReport+'/review';
+  let undeliveredBody;
+  let undeliveredPostCount=0;
+  page.on('request',request=>{
+    if(request.url().endsWith('/work-orders/'+undeliveredOrder+
+        '/executions/'+undeliveredReport+'/review') && request.method()==='POST') {
+      undeliveredPostCount++;
+    }
+  });
+  await page.route(undeliveredEndpoint,async route=>{
+    undeliveredBody=route.request().postDataJSON();
+    assert.match(undeliveredBody.client_request_id,/^[0-9a-f-]{36}$/);
+    await route.abort('failed'); // No route.fetch: server never receives this POST.
+  },{times:1});
+  page.once('dialog',dialog=>void dialog.accept());
+  await undeliveredDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
+  await undeliveredDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'}).waitFor();
+  assert.equal(undeliveredPostCount,1);
+  const submittedBeforeReload=(await admin.query(`
+    SELECT review_status FROM work_order_executions WHERE tenant_id=$1 AND id=$2
+  `,[ownerA.tenant.id,undeliveredReport])).rows;
+  assert.equal(submittedBeforeReload[0].review_status,'submitted','No client route returned a fake server commit');
+
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByPlaceholder('Buscar orden o lote').fill(undeliveredTitle);
+  await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
+  const retryDrawer=page.getByRole('dialog',{name:undeliveredTitle});
+  const recoveredRetry=retryDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
+  await recoveredRetry.waitFor();
+  assert.equal(undeliveredPostCount,1,'GET after reload must not automatically send an uncommitted POST');
+  const realRetryResponse=page.waitForResponse(response=>
+    response.url().endsWith('/work-orders/'+undeliveredOrder+
+      '/executions/'+undeliveredReport+'/review') &&
+    response.request().method()==='POST' && response.status()===200);
+  await recoveredRetry.click();
+  const realRetry=await realRetryResponse;
+  assert.equal((await realRetry.json()).replayed,false,'The actual FIRST server commit cannot be fabricated');
+  assert.deepEqual(realRetry.request().postDataJSON(),undeliveredBody,
+    'Manual retry after reload must send EXACTLY the original UUID and body');
+  await retryDrawer.getByText('Revisado por coordinación').waitFor();
+  assert.equal(undeliveredPostCount,2,'Exactly one failed transport and one deliberate POST');
+  const undeliveredAudit=(await admin.query(`
+    SELECT count(*)::int AS count FROM audit_events
+    WHERE tenant_id=$1 AND entity_id=$2 AND action='work_order.execution_reviewed'
+  `,[ownerA.tenant.id,undeliveredOrder])).rows[0].count;
+  assert.equal(undeliveredAudit,1);
+  const undeliveredReceipt=(await admin.query(`
+    SELECT count(*)::int AS count FROM work_order_execution_review_requests
+    WHERE tenant_id=$1 AND work_order_id=$2 AND client_request_id=$3
+  `,[ownerA.tenant.id,undeliveredOrder,undeliveredBody.client_request_id])).rows[0].count;
+  assert.equal(undeliveredReceipt,1);
+  await retryDrawer.getByRole('button',{name:'Cerrar '+undeliveredTitle}).click();
+  await page.unroute(undeliveredEndpoint);
+  console.log('PASS: POST never reaches Express, encrypted pending decision survives reload + authenticated GET, and manual same-body POST commits exactly once');
+
   // Final independent API benchmark after all UI scenarios, so adding 5000
   // synthetic orders cannot change the earlier deterministic 50/61 assertions.
   // The browser's REAL HttpOnly cookie is forwarded by Playwright APIContext.
