@@ -247,7 +247,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   };
 
   const review = async (report, decision) => {
-    if (!canReviewExecutionReport(order, report, role, userId, live) || busy || pendingReview || reviewInFlight.current) return;
+    if (!canReviewExecutionReport(order, report, role, userId, live) || !reviewReady || busy || activePendingReview || reviewInFlight.current) return;
     if (decision === 'verified') {
       const readiness = exceptionReadinessForReview(order, report, exceptionReadiness);
       if (!readiness.allowed) {
@@ -279,20 +279,39 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     setBusy(true);
     setError('');
     setNotice('');
+    let pending = null;
     try {
+      // This is a write-ahead recovery journal. No POST before IndexedDB
+      // confirms AES-GCM storage, even when connectivity is perfect.
+      const sealed = await savePendingReview(session, order.id, report.id, body);
+      pending = { ...sealed, identity: reviewIdentity };
+      setPendingReview(pending);
       const response = await api.request(
         `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(report.id)}/review`, {
-          method: 'POST', silent: true, body
+          method: 'POST', silent: true, body: sealed.body
         });
       validatedExecutionResponse(response, order.id, decision, report.id);
+      const discarded = await discardPendingReview(session, order.id,
+        sealed.body.client_request_id);
+      if (!discarded) throw new Error('No se pudo limpiar el recibo cifrado tras confirmar la revisión.');
+      setPendingReview(current => current?.body.client_request_id ===
+        sealed.body.client_request_id ? null : current);
+      setNotice('El servidor registró la revisión y se limpió el intento cifrado.');
       onChanged?.();
     } catch (err) {
-      if (needsReviewReceiptLookup(err)) {
-        const pending = { reportId: report.id, body };
-        setPendingReview(pending);
+      if (pending && needsReviewReceiptLookup(err)) {
         await verifyInterruptedReview(pending);
+      } else if (pending) {
+        setError((err?.message || 'No se confirmó la revisión.') +
+          ' Conservamos el recibo cifrado: no inicies otra decisión sin recuperar esta.');
       } else {
-        setError(err?.message || 'No se confirmó la revisión.');
+        // Even after a race with another tab, never send without a journal.
+        try {
+          const saved = await readPendingReview(session, order.id);
+          if (saved) setPendingReview({ ...saved, identity: reviewIdentity });
+        } catch { /* The original storage error remains authoritative. */ }
+        setError('No se envió ninguna revisión: el almacenamiento cifrado no confirmó el intento. ' +
+          (err?.message || 'Revisá IndexedDB.'));
       }
     } finally {
       reviewInFlight.current = false;
@@ -308,11 +327,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     {error && <div className="order-detail__error" role="alert">
       {error} <button type="button" className="ghost-action"
         onClick={onChanged}>Actualizar datos</button>
-      {pendingReview && <button type="button" className="ghost-action"
+      {activePendingReview && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReview()}>
         {busy ? 'Comprobando…' : 'Comprobar revisión en servidor'}
       </button>}
-      {pendingReview?.body.client_request_id && <button type="button"
+      {activePendingReview?.body.client_request_id && <button type="button"
         className="ghost-action" disabled={busy}
         onClick={() => void retryOriginalReview()}>
         Reintentar revisión con la misma clave
@@ -376,7 +395,11 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
       {report.review_status === 'verified' && !reviewChecklistOutcome(report) &&
         <p className="order-detail__footnote">Revisión histórica, sin checklist estructurado; no se infieren controles retroactivos.</p>}
       {canReviewExecutionReport(order, report, role, userId, live) && <div className="order-detail__execution-review">
-        <fieldset className="order-detail__review-checklist" disabled={busy || Boolean(pendingReview)}>
+        {!reviewReady && <p className="order-detail__footnote" role="status">
+          Preparando recuperación cifrada de revisiones. No se enviará ninguna decisión
+          hasta comprobar el almacenamiento local y la sesión de coordinación.
+        </p>}
+        <fieldset className="order-detail__review-checklist" disabled={busy || !reviewReady || Boolean(activePendingReview)}>
           <legend>Controles de revisión para {order.type} (solo aceptación)</legend>
           {[
             ['time_checked', 'Contrasté las fechas y horas declaradas.'],
@@ -409,7 +432,7 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
         </fieldset>
         <label className="form-field">Motivo de rechazo (obligatorio solo si rechazás)
           <textarea maxLength={500} rows={2} value={reviewReason[report.id] || ''}
-            disabled={busy || Boolean(pendingReview)} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
+            disabled={busy || !reviewReady || Boolean(activePendingReview)} onChange={e => setReviewReason(current => ({ ...current, [report.id]: e.target.value }))} />
         </label>
         {!exceptionReadinessForReview(order, report, exceptionReadiness).allowed &&
           <p className="order-detail__footnote" role="status">
@@ -417,10 +440,10 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
           </p>}
         <div className="order-detail__execution-actions">
           <button className="primary-action" type="button"
-            disabled={busy || Boolean(pendingReview) || hasPlannedInputsWithoutDeclaration(order, report) ||
+            disabled={busy || !reviewReady || Boolean(activePendingReview) || hasPlannedInputsWithoutDeclaration(order, report) ||
               !exceptionReadinessForReview(order, report, exceptionReadiness).allowed}
             onClick={() => void review(report, 'verified')}>Aceptar revisión</button>
-          <button className="ghost-action" type="button" disabled={busy || Boolean(pendingReview)}
+          <button className="ghost-action" type="button" disabled={busy || !reviewReady || Boolean(activePendingReview)}
             onClick={() => void review(report, 'rejected')}>Rechazar parte</button>
         </div>
       </div>}
