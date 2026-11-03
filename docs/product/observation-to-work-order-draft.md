@@ -1,32 +1,28 @@
-# SedeAgro 0.1 · De observación persistida a borrador de orden
+# SedeAgro 0.1 · Observación → orden → ejecución/revisión → reporte verificable
 
-**2026-11-03 · Piloto / bloque 0R.3 · Coordinación #18, aceptación #166, release #130 (NO-GO).**
+**2026-11-03 · Bloques 0R.3 (PR #287) y 0R.4 · coordinación #18, aceptación #166; release #130 NO-GO.**
 
-## Brecha funcional y contrato existente
+## Flujo completo
 
-El piloto requiere conectar **recorrida → observación GPS/foto → orden → ejecución/revisión → reporte**. Hasta este bloque, Monitoreo mostraba observaciones persistidas pero no permitía preparar directamente una orden de inspección desde un hallazgo. La persona debía volver a Órdenes, buscar otra vez el lote y completar manualmente el contexto de campaña, creando riesgos de selección errónea.
+1. Un administrador o coordinador con `scouting`, `gis`, `work_orders` activos abre una observación auténtica de una recorrida de su empresa. La acción de preparar una orden es inexistente en demo, productor, scout y contratista.
+2. Una navegación **solo en memoria React** precompleta lote, lote de campaña, tipo `inspection`, prioridad según severidad y una nota de verificación. No transporta observaciones completas, GPS, EXIF, fotos ni bytes privados. El lote original no puede cambiarse desde ese borrador.
+3. El operador revisa el texto, fecha y prioridad y hace un clic explícito en **Crear orden**; nunca se prescribe una aplicación o dosis automática. El envío incluye `origin_observation_id` además de `field_id`, `campaign_field_id` y `client_request_id`.
+4. El servidor verifica `orders.write`, `scouting.read`, módulos habilitados, tenant y la existencia exacta de esa observación. Compara el lote de la observación con el de la orden y la campaña de su recorrida con `campaign_field_id`. Solo si todo coincide crea la orden **`draft`** y su vinculación en una única transacción de PostgreSQL con FORCE RLS.
+5. El backend conserva las transiciones normales de aprobación, asignación, parte de ejecución, revisión independiente y cierre. La identidad del origen **no otorga permisos** para consultar la recorrida. En el detalle de orden solo admin/coordinador con acceso vigente a scouting ve IDs de observación/recorrida y un botón de navegación que vuelve a consultar al backend.
+6. En el reporte privado por lote para `reports.read`, el mismo snapshot limitado a 200 filas por clase enlaza las órdenes consultadas con su procedencia persistida: columnas `observacion_origen_id`, `recorrida_origen_id` en CSV/XLSX y línea de origen en PDF. Órdenes anteriores sin procedencia tienen celdas vacías, **nunca un origen inventado** por analizar texto.
 
-El backend **ya soporta** `POST /api/v1/work-orders` con `field_id` y `campaign_field_id`: verifica autorización de `orders.write`, entitlement `work_orders`, pertenencia al tenant y, bajo la misma transacción RLS, que el lote de campaña corresponda al lote de la orden. El recibo idempotente por `client_request_id` y la recuperación AES-GCM IndexedDB existentes se conservan sin rediseño.
+## Esquema y pruebas de integridad
 
-## Recorrido entregado
+Migración aditiva `202611030001_work_order_observation_origins.js` crea `work_order_observation_origins` con una relación como máximo por `(tenant_id,work_order_id)`, `scouting_observation_id`, `scouting_run_id`, `field_id`, `campaign_field_id`, `created_by`, fecha y RLS FORCE. **No se agregó una FK directa a `work_orders`**: la relación se materializa en esta nueva tabla. Tres FKs compuestas comprueban simultáneamente `(tenant,orden,lote,campaña)`, `(tenant,observación,recorrida,lote)` y `(tenant,recorrida,campaña)`. No se puede cambiar por SQL el lote/campaña de una orden ya vinculada sin violar la FK. Se prohíbe la eliminación de observaciones/recorridas vinculadas sin intervención de mantenimiento. No se mezclan notas, fotos, geometrías ni contenidos de evidencia.
 
-1. Un administrador de empresa o coordinador autenticado abre una **recorrida y observación existentes** en Monitoreo. Se exige que estén presentes en el detalle devuelto por backend y que el actor tenga entitlements `scouting`, `work_orders` y `gis`; no se muestra la acción en mock, scout, productor ni contratista.
-2. **Preparar orden de inspección** navega a Órdenes con un objeto **solo en memoria React**, acotado a tenant, actor, membresía/rol e IDs de recorrida, observación, lote y lote de campaña. No se copian notas, coordenadas, EXIF ni bytes/nombres de fotografías, ni se escriben datos de navegación en storage o URL.
-3. Se abre **Nueva orden de trabajo** y se precargan lote/campaña (lote bloqueado en ese flujo), tipo `inspection`, título e instrucciones de verificación, y prioridad sugerida por severidad: leve→baja, moderada→normal, alta→alta, crítica→urgente. **No se prescribe** aplicación química, dosis o trabajo automático.
-4. El operador puede corregir título, prioridad, fecha e instrucciones y decide explícitamente si guarda. Una referencia **textual** a ambos UUID se deja en instrucciones. Es contexto humano, **NO una FK directa `work_orders → scouting_observations`**. No decir que el código ha creado asociación relacional o trazabilidad de evidencia automática.
-5. El formulario envía `campaign_field_id` al backend junto con el mismo `field_id` e `client_request_id`. Antes de cada POST, el cuerpo original queda cifrado y duradero en IndexedDB. Tras un ACK ambiguo o recarga, la **recuperación anterior tiene prioridad** sobre cualquier precarga nueva: no se ejecuta otro POST ni se genera otro UUID automáticamente. Si el servidor confirma la creación del mismo cuerpo, el recibo se retira mediante CAS y se muestra la orden auténtica.
+La autorización se verifica **antes incluso del replay idempotente**. `client_request_id` + cuerpo original solo puede reutilizarse bajo el mismo actor y tenant; cambiar el `origin_observation_id` hace variar la huella y termina en conflicto, sin asociar otra observación. **Compatibilidad:** la huella para POST históricos que NO contenían origen conserva el byte-for-byte canónico previo y sus recibos anteriores siguen siendo válidos. La copia AES-GCM del POST original, incluido el origen, se guarda antes de la red, sobrevive recarga y se retira solo después de un 2xx íntegro. Nunca existe reenvío automático ni credenciales en IndexedDB.
 
-## Aceptación automatizada
+## Aceptación y límites
 
-- **Pruebas puras:** alcance estricto de actor/tenant/membresía/entitlement, UUID, observación existente en detalle autorizado, tipo y severidad, ausencia de fotos/GPS/notas en la navegación, sugerencia de prioridad y control anti-invención de tratamiento. Contrato de wiring React y de la recuperación cifrada.
-- **Chromium + Express + PostGIS descartable:** `scripts/acceptance-browser-evidence-history.mjs` utiliza la misma recorrida y observación real que prueba evidencia privada. Con entitlement `work_orders` habilitado en esa base descartable, hace clic en la acción de la observación, confirma lote y prioridad, comprueba que la descripción NO copia notas, envía **un POST real explícito** y exige HTTP 201, `replayed:false`, actor/tenant/lote/campaña/tipo/estado exactos, **una fila real SQL** y retorno a Monitoreo, sin alterar la evidencia privada previa.
-- El gate no sustituye ninguna autorización exitosa con `route.fulfill(200)` y no toca producción o staging. El resto de la aceptación de evidencias/GPS/tenant se ejecuta completo.
-
-## Seguridad, límites y rollback
-
-- Sin migraciones ni cambios de API, roles, FORCE RLS, sesiones, claves AES-GCM, manejo de fotos, JWT, workflows, VMs, DNS ni deploy. Se usan las validaciones originales del backend. La UI nunca es autoridad de permisos.
-- La referencia textual a una observación **no prueba por sí sola** que la orden siga relacionada a su hallazgo si alguien edita instrucciones, ni da acceso a la observación a un contratista. Una relación relacional con visibilidad por rol exigiría otro diseño/migración/revisión.
-- No se realizan inspecciones, aprobaciones ni ejecución automáticamente. La orden comienza en `draft` y respeta sus transiciones/capabilities normales.
-- Si el operador pierde acceso o el lote ya no es consultable, no se podrá crear esa orden. El backend responde 403/404/422 según autorización/pertenencia y el cliente conserva su copia incierta.
-- Rollback de frontend/helper/test/docs; no hay DDL que revertir. Una orden ya creada por una persona no debe borrarse como parte de revertir código.
-- **Aprobar CI exact-head PR y CI independiente `main`** antes de cerrar esta entrega. La CI Linux no representa aceptación física de Android/iOS ni staging HTTPS, y #130 sigue **NO-GO** a falta de pruebas de campo y firmas Product/Security.
+- Backend unitario: huella SHA-256 histórica y nueva, contrato de migración y ausencia de campos privados.
+- PostgreSQL no-owner + Express real: caso completo observación GPS/foto privada → orden con FK → parte, revisión independiente, cierre → CSV/PDF/XLSX; replay misma clave, contrato de detalle por rol y negativa de acceso entre empresas. Negativas por observación extranjera y por lote/campaña incoherente. Verificación SQL de una sola relación y RLS para tenants A/B.
+- Chromium autenticado real: iniciar desde la observación persistida, guardar orden explícita, comprobar `observation_origin` del servidor y la única fila de origen SQL, abrir detalle, navegar de vuelta a recorrida autorizada y continuar todos los tests de evidencia, revocaciones y aislamiento.
+- No cambia autorización del contratista ni se descargan fotos a Reportes. Un UUID de origen en un reporte es una referencia de auditoría, no permiso de lectura.
+- La API de reportes **no** prueba intervención profesional ni eficacia agronómica, solo cadena de IDs, estado y registro. Las órdenes de origen creado antes de 0R.4 **no se backfillean por texto**; su vínculo solo existirá si fueron creadas con `origin_observation_id` bajo la nueva API.
+- **Rollback:** revertir código/frontend no borra órdenes ni recibos; la migración `down` se niega si ya existen vínculos, de manera que un rollback productivo requiere decisión explícita con preservación de datos. Sin acceso a VPS, staging, secretos o producción en este bloque.
+- CI PostgreSQL/Chromium/Linux no sustituye Android Chrome/iOS Safari reales, staging autorizado, firma Product/Security. La decisión del piloto #130 permanece **NO-GO** hasta certificar esos prerrequisitos.
