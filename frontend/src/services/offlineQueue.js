@@ -378,7 +378,13 @@ async function lockAcrossTabs(scope, handler, { waitForBusy = false } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
-    return await navigator.locks.request(name, { signal: controller.signal }, handler);
+    return await navigator.locks.request(name, { signal: controller.signal }, () => {
+      // The deadline applies only to WAITING for another tab's lock.
+      // After acquisition, a slow real HTTP upload must not be misreported
+      // as a harmless skipped request when the 12-second timer expires.
+      clearTimeout(timeout);
+      return handler();
+    });
   } catch (error) {
     if (controller.signal.aborted) {
       return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
