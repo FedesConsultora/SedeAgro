@@ -396,6 +396,12 @@ try {
   await page.bringToFront();
   await page.getByTitle('Cerrar sesión').click();
   await page.getByRole('heading',{name:'Iniciar sesión'}).waitFor();
+  // Authenticate a DIFFERENT real tenant in the active tab. A mere storage
+  // marker cannot identify that tenant; only /auth/me can validate its cookie.
+  await page.locator('#login-email').fill(`other-tab-${suffix}@example.test`);
+  await page.locator('#login-password').fill(password);
+  await page.locator('#login-submit').click();
+  await page.getByTitle('Sesiones').waitFor();
   const witness=await suspendedTab.evaluate(() => {
     const value=localStorage.getItem('sedeagro.auth-transition-witness-v1');
     return value ? JSON.parse(value) : null;
@@ -429,14 +435,21 @@ try {
     'private navigation must disappear while /auth/me is still in flight');
   assert.ok(realProfileRequests>=1);
   releaseRecheck();
-  await suspendedTab.getByRole('heading',{name:'Iniciar sesión'}).waitFor();
+  await suspendedTab.getByTitle('Perfil de usuario').waitFor();
+  await suspendedTab.getByTitle('Perfil de usuario').click();
+  await suspendedTab.locator('.user-menu__tenant-name')
+    .getByText('Other Browser Tenant').waitFor();
+  assert.equal(await sleepingEvidence.count(),0,
+    'the second tenant may never see the first tenant private evidence');
   await suspendedTab.unroute('**/api/v1/auth/me',delayRealAuthority);
   await suspendedTab.close();
-  console.log('PASS: suspended tab misses BroadcastChannel/storage, opaque witness on foreground quarantines private evidence before REAL revoked-cookie /auth/me');
+  console.log('PASS: suspended tab misses BroadcastChannel/storage, opaque witness on foreground quarantines private evidence before REAL cross-tenant /auth/me');
 
-  // Restore a real cookie for the remainder of the unchanged server-revocation
+  // Restore the first actor's cookie for the existing real server-revocation
   // test. Reopening evidence must read it anew under backend permissions.
   await page.bringToFront();
+  await page.getByTitle('Cerrar sesión').click();
+  await page.getByRole('heading',{name:'Iniciar sesión'}).waitFor();
   await page.locator('#login-email').fill(email);
   await page.locator('#login-password').fill(password);
   await page.locator('#login-submit').click();
