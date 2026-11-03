@@ -56,10 +56,10 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated, initialObservat
   const [formSnapshot, setFormSnapshot] = useState(null);
   const form = formSnapshot?.scope === authority && formSnapshot?.api === api
     ? formSnapshot.value : emptyForm();
-  const contextualForm = Boolean(contextPrefill && form.field_id === contextPrefill.field_id &&
-    form.campaign_field_id === contextPrefill.campaign_field_id && submitStatus !== 'uncertain');
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
+  const contextualForm = Boolean(contextPrefill && form.field_id === contextPrefill.field_id &&
+    form.campaign_field_id === contextPrefill.campaign_field_id && submitStatus !== 'uncertain');
   const [error, setError] = useState('');
   const [recoveryState, setRecoveryState] = useState(null);
   const recoveryView = recoveryState?.scope === authority && recoveryState?.api === api
