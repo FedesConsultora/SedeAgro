@@ -158,67 +158,85 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     }
   };
 
-  // A prior review may have COMMITTED before its HTTP ACK was lost.
-  // Never issue another POST as a recovery action: inspect its exact server row.
-  const verifyInterruptedReview = async pending => {
+  // A review may have COMMITTED before the ACK was lost, including before
+  // a browser reload. The authenticated GET is the only automatic recovery.
+  const verifyInterruptedReview = async (pending, isCurrent = () => true) => {
     try {
       const response = await api.request(`/work-orders/${encodeURIComponent(order.id)}`, {
         silent: true
       });
+      if (!isCurrent()) return;
       const receipt = reconcileReviewReceipt(response, {
         orderId: order.id, reportId: pending.reportId, reviewerId: userId,
         ...pending.body
       });
       if (receipt.state === 'recorded') {
-        setPendingReview(null);
+        // Only exact authenticated confirmation may remove the encrypted
+        // receipt. CAS protects a new request from a stale tab's cleanup.
+        const discarded = await discardPendingReview(session, order.id,
+          pending.body.client_request_id);
+        if (!isCurrent()) return;
+        if (!discarded) {
+          throw new Error('No fue posible confirmar la limpieza cifrada del recibo.');
+        }
+        setPendingReview(current => current?.body.client_request_id ===
+          pending.body.client_request_id ? null : current);
         setError('');
-        setNotice('La revisión figura registrada por tu usuario en el servidor. No se volvió a enviar.');
+        setNotice('El servidor confirmó la revisión original y se limpió el registro cifrado. No se volvió a enviar.');
         onChanged?.();
       } else if (receipt.state === 'different') {
-        setError('El servidor registra una revisión distinta. No se volvió a enviar; actualizá la orden y consultá con coordinación.');
+        setError('El servidor registra una revisión distinta. No se volvió a enviar; mantenemos el recibo cifrado para que coordinación investigue.');
         onChanged?.();
       } else {
-        setError('El servidor aún no confirma la revisión. Podés comprobar nuevamente o reintentar explícitamente la misma decisión con su clave original.');
+        setError('El servidor aún no confirma la revisión. El recibo cifrado sigue guardado; comprobá nuevamente o reintentá explícitamente con la misma clave.');
       }
     } catch {
-      setError('No se pudo comprobar la revisión. Podría haberse guardado; no la repitas sin verificar el estado del servidor.');
+      if (!isCurrent()) return;
+      setError('No se pudo comprobar o limpiar la revisión cifrada. Podría haberse guardado; no se hará otra revisión automática.');
     }
   };
 
   const recheckReview = async () => {
-    if (!pendingReview || busy) return;
+    if (!activePendingReview || busy || !reviewReady) return;
     setBusy(true);
     setError('');
     try {
-      await verifyInterruptedReview(pendingReview);
+      await verifyInterruptedReview(activePendingReview);
     } finally {
       setBusy(false);
     }
   };
 
   const retryOriginalReview = async () => {
-    if (!pendingReview || busy || reviewInFlight.current ||
-        !pendingReview.body.client_request_id) return;
-    // The durable key is identical: the server can return the original
-    // receipt after a committed/lost ACK, never create a second audit event.
+    if (!activePendingReview || !reviewReady || busy || reviewInFlight.current) return;
+    // Read the sealed body again, not mutable React state: a different tab
+    // cannot substitute a new decision or order under the same pending UUID.
     reviewInFlight.current = true;
     setBusy(true);
     setError('');
     try {
+      const saved = await readPendingReview(session, order.id);
+      if (!saved || saved.reportId !== activePendingReview.reportId ||
+          saved.body.client_request_id !== activePendingReview.body.client_request_id) {
+        throw new Error('No coincide el intento cifrado original. No se envió nada.');
+      }
       const response = await api.request(
-        `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(pendingReview.reportId)}/review`, {
-          method: 'POST', silent: true, body: pendingReview.body
+        `/work-orders/${encodeURIComponent(order.id)}/executions/${encodeURIComponent(saved.reportId)}/review`, {
+          method: 'POST', silent: true, body: saved.body
         });
-      validatedExecutionResponse(response, order.id,
-        pendingReview.body.decision, pendingReview.reportId);
-      setPendingReview(null);
+      validatedExecutionResponse(response, order.id, saved.body.decision, saved.reportId);
+      const discarded = await discardPendingReview(session, order.id,
+        saved.body.client_request_id);
+      if (!discarded) throw new Error('La revisión se confirmó, pero no se pudo limpiar el recibo cifrado.');
+      setPendingReview(current => current?.body.client_request_id ===
+        saved.body.client_request_id ? null : current);
       setNotice(response.replayed === true
-        ? 'El servidor confirmó la revisión original, sin duplicarla.'
-        : 'El servidor confirmó la revisión. No se generó otra decisión.');
+        ? 'El servidor confirmó la revisión original sin duplicarla; se limpió el registro cifrado.'
+        : 'El servidor recibió la decisión original; se limpió el registro cifrado.');
       onChanged?.();
     } catch (err) {
       if (needsReviewReceiptLookup(err)) {
-        await verifyInterruptedReview(pendingReview);
+        await verifyInterruptedReview(activePendingReview);
       } else {
         setError(err?.message || 'No fue posible recuperar la revisión original.');
       }
