@@ -205,7 +205,7 @@ test('tampered draft run, entity, idempotency and malformed operations block net
   }
 });
 
-test('other concurrent flush within same tab returns skipped; only one selected batch is sent', async () => {
+test('background and manual selected sends are serialized; only one batch is sent', async () => {
   const h = harness(); const item = pending();
   h.records.set(item.id, item);
   let started, release;
@@ -216,16 +216,19 @@ test('other concurrent flush within same tab returns skipped; only one selected 
     calls++; started(); await waiting; return ack(body);
   });
   await begun;
-  const overlapping = await h.queue.flushOne(session(), item.id, async body => {
+  const overlapping = h.queue.flushOne(session(), item.id, async body => {
     calls++; return ack(body);
   });
   const global = await h.queue.flush(session(), async body => {
     calls++; return ack(body);
   }, { force: true });
-  assert.equal(overlapping.skipped, true);
-  assert.equal(global.skipped, true);
+  assert.equal(global.skipped, true, 'background-style force remains non-blocking');
+  assert.equal(calls, 1, 'selected manual send waits; it cannot duplicate in-flight POST');
   release();
   assert.equal((await first).sent, 1);
+  const second = await overlapping;
+  assert.equal(second.missing, true, 're-read after current flight sees consumed encrypted draft');
+  assert.equal(second.sent, 0);
   assert.equal(calls, 1);
 });
 
