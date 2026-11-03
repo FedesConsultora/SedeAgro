@@ -74,6 +74,12 @@ function contentLines(snapshot) {
     lines.push('ID: ' + item.id + ' | ' + new Date(item.created_at).toISOString());
     lines.push('Tipo: ' + item.type + ' | Estado: ' + item.status + ' | Prioridad: ' + item.priority);
     lines.push(...wrapped('Titulo: ' + item.title));
+    if (item.observation_origin) {
+      lines.push('Origen verificado: observacion ' +
+        item.observation_origin.scouting_observation_id);
+      lines.push('Recorrida de origen: ' +
+        item.observation_origin.scouting_run_id);
+    }
     lines.push('');
   }
   return lines.flatMap(line => wrapped(line));
