@@ -8,6 +8,7 @@ import {
   visibleWorkOrderPrivateSnapshot, visibleWorkOrderPrivateSelection
 } from '../services/workOrderPrivateListScope.js';
 import { WorkOrderFormModal } from '../components/WorkOrderFormModal.jsx';
+import { workOrderFormFromObservationDraft } from '../services/observationWorkOrderDraft.js';
 import { WorkOrderDetailDrawer } from '../components/WorkOrderDetailDrawer.jsx';
 import { WorkOrderReviewInbox } from '../components/WorkOrderReviewInbox.jsx';
 import './work-orders-workspace.css';
@@ -28,7 +29,8 @@ const FILTERS = [
   { value: 'pending_approval', label: 'Por aprobar' }, { value: 'completed', label: 'Completadas' }
 ];
 
-export function WorkOrdersPage({ focusOrderId = null }) {
+export function WorkOrdersPage({ focusOrderId = null, observationDraft = null,
+  onClearObservationDraft = null }) {
   const { api, dataMode, session } = useSession();
   const scope = workOrderPrivateListScope(session, dataMode);
   const scopeRef = useRef(scope);
@@ -41,6 +43,18 @@ export function WorkOrdersPage({ focusOrderId = null }) {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const authorizedObservationDraft = observationDraft &&
+    workOrderFormFromObservationDraft(observationDraft, session, dataMode)
+      ? observationDraft : null;
+  // The client-side focus hint never grants permission. The form will also
+  // revalidate this exact actor/role before using any private lot context.
+  useEffect(() => {
+    if (canCreate && authorizedObservationDraft) setShowModal(true);
+  }, [canCreate, authorizedObservationDraft]);
+  const closeCreate = () => {
+    setShowModal(false);
+    onClearObservationDraft?.();
+  };
   const [selectedSnapshot, setSelectedSnapshot] = useState(null);
   const [focusState, setFocusState] = useState(null);
   const [revision, setRevision] = useState(0);
@@ -205,8 +219,9 @@ export function WorkOrdersPage({ focusOrderId = null }) {
         </>
       )}
       {showModal && scope && <WorkOrderFormModal isOpen
-        onClose={() => setShowModal(false)}
-        onCreated={() => { setShowModal(false); reload(); }} />}
+        initialObservationDraft={authorizedObservationDraft}
+        onClose={closeCreate}
+        onCreated={() => { closeCreate(); reload(); }} />}
       {selectedOrder && <WorkOrderDetailDrawer key={`${scope}:${selectedOrder.id}`} isOpen
         order={selectedOrder} onClose={() => setSelectedSnapshot(null)}
         onUpdated={() => { setSelectedSnapshot(null); reload(); }} />}
