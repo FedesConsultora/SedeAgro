@@ -18,7 +18,8 @@ const validUUID = value => typeof value === 'string' && UUID.test(value);
 export function observationWorkOrderDraft(run, observation, session, dataMode) {
   const scope = workOrderCreateScope(session, dataMode);
   if (dataMode !== 'live' || !scope ||
-      !session?.entitlements?.includes('scouting') ||
+      (!session?.entitlements?.includes('scouting') ||
+       !session?.entitlements?.includes('gis')) ||
       !validUUID(session?.tenant?.id) ||
       run?.tenant_id !== session.tenant.id ||
       (observation?.tenant_id != null && observation.tenant_id !== session.tenant.id)) return null;
@@ -34,7 +35,8 @@ export function observationWorkOrderDraft(run, observation, session, dataMode) {
       !Object.hasOwn(SEVERITY_PRIORITIES, observation?.severity) ||
       !run?.ScoutingObservations?.some(item => item?.id === observationId)) return null;
   return Object.freeze({
-    scope, tenantId: session.tenant.id, runId, observationId,
+    scope, tenantId: session.tenant.id, membershipId: session.membership.id,
+    runId, observationId,
     campaignFieldId, fieldId,
     observationType: observation.observation_type,
     severity: observation.severity
@@ -48,6 +50,7 @@ export function workOrderFormFromObservationDraft(draft, session, dataMode) {
   if (dataMode !== 'live' || !draft || typeof draft !== 'object' ||
       draft.scope !== workOrderCreateScope(session, dataMode) ||
       draft.tenantId !== session?.tenant?.id ||
+      !session?.membership?.id || draft.membershipId !== session.membership.id ||
       !session?.entitlements?.includes('scouting') ||
       ![draft.runId, draft.observationId, draft.campaignFieldId, draft.fieldId]
         .every(validUUID) ||
