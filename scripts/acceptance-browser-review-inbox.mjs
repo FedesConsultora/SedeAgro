@@ -1063,6 +1063,11 @@ try {
   page.once('dialog',dialog=>void dialog.accept());
   await undeliveredDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
   await undeliveredDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'}).waitFor();
+  const undeliveredBeforeReload = await reviewJournalMetadata(page);
+  assert.equal(undeliveredBeforeReload.rows.length, 1,
+    'An undelivered review must retain one encrypted pending receipt before reload');
+  assert.equal(undeliveredBeforeReload.rows[0].id, undeliveredBody.client_request_id,
+    'The sealed retry identity must match the original blocked HTTP POST');
   assert.equal(undeliveredPostCount,1);
   const submittedBeforeReload=(await admin.query(`
     SELECT review_status FROM work_order_executions WHERE tenant_id=$1 AND id=$2
@@ -1076,7 +1081,23 @@ try {
   await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
   const retryDrawer=page.getByRole('dialog',{name:undeliveredTitle});
   const recoveredRetry=retryDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
-  await recoveredRetry.waitFor();
+  const undeliveredAfterReload = await reviewJournalMetadata(page);
+  assert.equal(undeliveredAfterReload.rows.length, 1,
+    'Reload must not discard an unconfirmed review receipt');
+  assert.equal(undeliveredAfterReload.rows[0].id, undeliveredBody.client_request_id);
+  try {
+    await recoveredRetry.waitFor();
+  } catch {
+    // Minimal privacy-safe diagnostics: never log report text, user/tenant
+    // identifiers, request UUID, ciphertext, cookies or raw error messages.
+    const executionPanelMounted = await retryDrawer.locator('.order-detail__execution').count();
+    const alerts = await retryDrawer.getByRole('alert').count();
+    const recoveryStatus = await retryDrawer.getByText(
+      'Preparando recuperación cifrada de revisiones.', { exact: false }).count();
+    throw new Error('Sealed review retry control absent after reload; pendingRows=' +
+      undeliveredAfterReload.rows.length + ', panelMounted=' + executionPanelMounted +
+      ', alerts=' + alerts + ', preparing=' + recoveryStatus);
+  }
   assert.equal(undeliveredPostCount,1,'GET after reload must not automatically send an uncommitted POST');
   const realRetryResponse=page.waitForResponse(response=>
     response.url().endsWith('/work-orders/'+undeliveredOrder+
