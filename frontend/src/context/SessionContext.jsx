@@ -191,7 +191,19 @@ export function SessionProvider({ children }) {
         }
         return { profile };
       }).then((result) => {
+        // A suspended tab may miss both ephemeral events while /auth/me is
+        // in flight. Catch up BEFORE applying even a 200 response: a newer
+        // login/logout invalidates this request's authority and fences it.
+        tabSyncRef.current?.catchUp();
         if (!isCurrent()) return;
+        // Another tab may already have replaced the shared tenant hint,
+        // even if its BroadcastChannel/storage events were not delivered.
+        // Never let an old 401 remove a newer tenant's hint, nor adopt an
+        // old 200 profile after the cookie/tenant has changed.
+        if ((localStorage.getItem('sedeagro.tenantHint') || '') !== hint) {
+          void revalidate({ quarantine: true });
+          return;
+        }
         retryOnOnline = false;
         if (result.unauthorized) {
           lockOfflineFieldVault();
@@ -225,9 +237,20 @@ export function SessionProvider({ children }) {
     // A suspended/background tab may miss a browser event. Adopt TOP's
     // bounded foreground revalidation; never interrupt active offline work.
     const onForeground = () => {
-      if (!localStorage.getItem('sedeagro.tenantHint')) return;
+      if (document.visibilityState !== 'visible') return;
+      // An opaque witness is checked BEFORE the 60s rate limit: the old
+      // private React view must not linger after a missed logout/login.
+      // This quarantines even offline, without authenticating from storage.
+      if (sync.catchUp()) return;
+      const hint = localStorage.getItem('sedeagro.tenantHint') || '';
+      if (sessionRef.current?.authenticated &&
+          hint !== sessionRef.current?.tenant?.id) {
+        void revalidate({ quarantine: true });
+        return;
+      }
+      if (!hint) return;
       if (shouldRecheckOnForeground(lastAttemptAt, Date.now(),
-        document.visibilityState === 'visible', navigator.onLine !== false)) {
+        true, navigator.onLine !== false)) {
         void revalidate({ quarantine: true });
       }
     };
