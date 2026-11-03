@@ -954,8 +954,8 @@ try {
   },null,{timeout:15000});
   await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
   assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
-  assert.equal(await recoveredReviewDrawer.getByRole('button',
-    {name:'Reintentar revisión con la misma clave'}).count(),0);
+  await recoveredReviewDrawer.getByRole('button',
+    {name:'Reintentar revisión con la misma clave'}).waitFor({state:'detached'});
   const sealedAfterReload = await page.evaluate(async () => {
     const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
     const db=await new Promise((resolve,reject)=>{
