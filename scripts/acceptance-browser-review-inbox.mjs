@@ -85,6 +85,45 @@ async function headingFocused(page, region) {
   assert.equal(await region.getByRole('heading', { name: 'Pendientes de coordinación' })
     .evaluate(el => el === document.activeElement), true);
 }
+// Read both stores only after IndexedDB's read transaction commits. A single
+// IDBRequest onsuccess is not a completed snapshot and can race concurrent
+// recovery cleanup. The probe reports metadata only; never decrypts field data.
+async function reviewJournalMetadata(page) {
+  return page.evaluate(async () => {
+    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1', 1);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('Review journal is blocked'));
+    });
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(['pending-creates', 'scope-keys'], 'readonly');
+        let rows = [];
+        let keys = [];
+        const pending = tx.objectStore('pending-creates').getAll();
+        const scopeKeys = tx.objectStore('scope-keys').getAll();
+        pending.onsuccess = () => { rows = pending.result; };
+        scopeKeys.onsuccess = () => { keys = scopeKeys.result; };
+        tx.oncomplete = () => resolve({
+          rows: rows.map(row => ({
+            id: row.id, scope: row.scope, iv: row.iv,
+            sealed: row.ciphertext instanceof ArrayBuffer,
+            bytes: row.ciphertext?.byteLength,
+            fields: Object.keys(row).sort()
+          })),
+          keys: keys.map(row => ({
+            scope: row.scope, type: row.key?.type,
+            extractable: row.key?.extractable
+          }))
+        });
+        tx.onerror = () => reject(tx.error || new Error('Review journal read failed'));
+        tx.onabort = () => reject(tx.error || new Error('Review journal read aborted'));
+      });
+    } finally { db.close(); }
+  });
+}
+
 try {
   await admin.connect();
   const { rows: [{ database }] } = await admin.query('SELECT current_database() AS database');
@@ -880,33 +919,7 @@ try {
   assert.equal(reviewPostCount,1,'A lost ACK must not automatically repeat the POST');
 
   // Inspect the browser's REAL IndexedDB, before reload, not a mocked store.
-  const sealedBeforeReload = await page.evaluate(async () => {
-    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db = await new Promise((resolve,reject) => {
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      const tx=db.transaction(['pending-creates','scope-keys'],'readonly');
-      const rows = await new Promise((resolve,reject)=>{
-        const op=tx.objectStore('pending-creates').getAll();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      const keys = await new Promise((resolve,reject)=>{
-        const op=tx.objectStore('scope-keys').getAll();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      return { rows: rows.map(row=>({
-        id:row.id,scope:row.scope,iv:row.iv,
-        sealed:row.ciphertext instanceof ArrayBuffer,
-        bytes:row.ciphertext.byteLength,fields:Object.keys(row).sort()
-      })), keys:keys.map(row=>({
-        scope:row.scope,type:row.key?.type,extractable:row.key?.extractable
-      })) };
-    } finally { db.close(); }
-  });
+  const sealedBeforeReload = await reviewJournalMetadata(page);
   assert.equal(sealedBeforeReload.rows.length,1,'Committed but unacknowledged review remains locally encrypted');
   const sealedRow=sealedBeforeReload.rows[0];
   assert.equal(sealedRow.id,originalReviewBody.client_request_id);
