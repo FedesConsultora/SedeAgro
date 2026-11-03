@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { WorkOrderExecutionEvidence } from './WorkOrderExecutionEvidence.jsx';
 import { WorkOrderExecutionInputs } from './WorkOrderExecutionInputs.jsx';
@@ -7,6 +7,7 @@ import { exceptionReadinessForReview } from '../services/executionReviewReadines
 import { hasPlannedInputsWithoutDeclaration } from '../services/inputDeclaration.js';
 import { needsExecutionReceiptLookup, reconcileExecutionReceipt } from '../services/workOrderExecutionReceipt.js';
 import { needsReviewReceiptLookup, reconcileReviewReceipt } from '../services/workOrderReviewReceipt.js';
+import { readPendingReview, savePendingReview, discardPendingReview } from '../services/workOrderReviewRecoveryJournal.js';
 import { buildVerifiedReviewChecklist, operationReviewLabel, reviewChecklistOutcome,
   ORDER_TYPES_WITH_REQUIRED_EVIDENCE } from '../services/reviewChecklist.js';
 import {
@@ -43,7 +44,45 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
   const [notice, setNotice] = useState('');
   const [pendingPayload, setPendingPayload] = useState(null);
   const [pendingReview, setPendingReview] = useState(null);
+  const [reviewJournal, setReviewJournal] = useState(null);
   const reviewInFlight = useRef(false);
+  const reviewIdentity = live && ['tenant_admin', 'agronomic_coordinator'].includes(role) &&
+    session?.membership?.status === 'active' && session?.tenant?.id && userId && order?.id
+    ? `${session.tenant.id}:${userId}:${order.id}` : null;
+  const reviewReady = Boolean(reviewIdentity && reviewJournal?.identity === reviewIdentity &&
+    reviewJournal.ready === true);
+  const activePendingReview = pendingReview?.identity === reviewIdentity ? pendingReview : null;
+
+  // An authenticated session is mandatory before reading the encrypted slot.
+  // On reload the exact pending decision is recovered and only GET is automatic.
+  // Never enable the first POST until local recovery completes successfully.
+  useEffect(() => {
+    if (!reviewIdentity) return;
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const recovered = await readPendingReview(session, order.id);
+        if (cancelled) return;
+        setReviewJournal({ identity: reviewIdentity, ready: true });
+        if (recovered) {
+          const pending = { ...recovered, identity: reviewIdentity };
+          setPendingReview(pending);
+          setError('Se recuperó una revisión cifrada pendiente. Comprobando el servidor antes de permitir otra decisión.');
+          await verifyInterruptedReview(pending, () => !cancelled);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setReviewJournal({ identity: reviewIdentity, ready: false });
+        setError('No se pudo recuperar el registro cifrado de revisión. No se enviará ninguna nueva decisión. ' +
+          (err?.message || 'Revisá el almacenamiento local.'));
+      }
+    };
+    void restore();
+    return () => { cancelled = true; };
+  // React identity includes tenant, actor and order; refreshes of this detail
+  // are not supposed to reopen IndexedDB or reissue an automatic GET.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewIdentity]);
 
   if (!live) return null;
 
