@@ -19,7 +19,7 @@ test('cross-tenant outage gate foregrounds the stale tab before waiting for 503'
     'the foreground event must precede the awaited real 503 HTTP');
   assert.match(scenario, /await page\.getByRole\('alert'\)\.getByText\('No se pudo verificar tu sesión'\)\.waitFor\(\)/);
   assert.match(scenario, /assert\.equal\(await panel\.count\(\), 0/);
-  assert.match(scenario, /assert\.equal\(await page\.getByTitle\('Monitoreo'\)\.count\(\), 0/);
+  assert.match(scenario, /assert\.equal\(await page\.getByTitle\('Monitoreo'\)\.count\(\),\s*0/);
   assert.match(scenario, /await page\.unroute\('\*\*\/api\/v1\/auth\/me', blockedProfileRoute\)/);
 });
 
