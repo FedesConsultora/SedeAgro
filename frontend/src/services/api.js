@@ -1,4 +1,7 @@
 import { sessionScope } from './offlineSyncModel.js';
+import {
+  withOfflineTransportDeadline, OFFLINE_BATCH_DEADLINE_MS, OFFLINE_PHOTO_DEADLINE_MS
+} from './offlineTransportDeadline.js';
 
 export const API_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -164,9 +167,14 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     advanceScoutingRun: (id, status) => request(`/scouting/runs/${id}/status`, { method: 'PATCH', body: { status } }),
     createObservation: (runId, body) => request(`/scouting/runs/${runId}/observations`, { method: 'POST', body }),
     createEvidence: (observationId, body) => request(`/scouting/observations/${observationId}/evidence`, { method: 'POST', body }),
-    submitOfflineEvidence: (observationId, body, options = {}) => request(`/scouting/observations/${observationId}/evidence`, {
-      method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
-    }),
+    submitOfflineEvidence: (observationId, body, options = {}) =>
+      withOfflineTransportDeadline(
+        signal => request(`/scouting/observations/${observationId}/evidence`, {
+          method: 'POST', body, silent: true, preserveSessionOnAuthError: true,
+          ...options, signal
+        }),
+        { signal: options.signal, timeoutMs: OFFLINE_PHOTO_DEADLINE_MS }
+      ),
     getEvidenceContent: (evidenceId) => request(`/scouting/evidence/${evidenceId}/content`),
     getEvidenceIntegrity: (id) => request(`/scouting/evidence/${id}/integrity`),
     workOrders: () => request('/work-orders'),
@@ -212,9 +220,14 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     createSatelliteLayer: (body) => request('/imagery/layers', { method: 'POST', body }),
     syncBatches: () => request('/sync/batches'),
     mySyncBatches: () => request('/sync/my-batches'),
-    submitSyncBatch: (body, options = {}) => request('/sync/batches', {
-      method: 'POST', body, silent: true, preserveSessionOnAuthError: true, ...options
-    }),
+    submitSyncBatch: (body, options = {}) =>
+      withOfflineTransportDeadline(
+        signal => request('/sync/batches', {
+          method: 'POST', body, silent: true, preserveSessionOnAuthError: true,
+          ...options, signal
+        }),
+        { signal: options.signal, timeoutMs: OFFLINE_BATCH_DEADLINE_MS }
+      ),
     notifications: () => request('/notifications', { silent: true }),
     markNotificationRead: (notificationId) => request(`/notifications/${encodeURIComponent(notificationId)}/read`, {
       method: 'PATCH', silent: true
