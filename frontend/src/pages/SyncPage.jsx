@@ -63,6 +63,16 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   const [storageInfo, setStorageInfo] = useState(null);
   const [requestingPersistence, setRequestingPersistence] = useState(false);
 
+  // A new tenant/actor must not inherit a pending click or its UI feedback.
+  // The old network operation is still scoped and may settle later; it
+  // cannot publish its result into this new authenticated session.
+  useEffect(() => {
+    setSending(false);
+    setSendingOne(null);
+    setNotice('');
+    setLocalError('');
+  }, [activeScope]);
+
   const loadData = useCallback(async () => {
     const requestId = ++serverRequest.current;
     setLoadedServerScope(serverScope);
