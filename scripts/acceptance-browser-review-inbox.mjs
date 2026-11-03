@@ -85,6 +85,63 @@ async function headingFocused(page, region) {
   assert.equal(await region.getByRole('heading', { name: 'Pendientes de coordinación' })
     .evaluate(el => el === document.activeElement), true);
 }
+// Read both stores only after IndexedDB's read transaction commits. A single
+// IDBRequest onsuccess is not a completed snapshot and can race concurrent
+// recovery cleanup. The probe reports metadata only; never decrypts field data.
+async function reviewJournalMetadata(page) {
+  return page.evaluate(async () => {
+    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1', 1);
+    const db = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('Review journal is blocked'));
+    });
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(['pending-creates', 'scope-keys'], 'readonly');
+        let rows = [];
+        let keys = [];
+        const pending = tx.objectStore('pending-creates').getAll();
+        const scopeKeys = tx.objectStore('scope-keys').getAll();
+        pending.onsuccess = () => { rows = pending.result; };
+        scopeKeys.onsuccess = () => { keys = scopeKeys.result; };
+        tx.oncomplete = () => resolve({
+          rows: rows.map(row => ({
+            id: row.id, scope: row.scope, iv: row.iv,
+            sealed: row.ciphertext instanceof ArrayBuffer,
+            bytes: row.ciphertext?.byteLength,
+            fields: Object.keys(row).sort()
+          })),
+          keys: keys.map(row => ({
+            scope: row.scope, type: row.key?.type,
+            extractable: row.key?.extractable
+          }))
+        });
+        tx.onerror = () => reject(tx.error || new Error('Review journal read failed'));
+        tx.onabort = () => reject(tx.error || new Error('Review journal read aborted'));
+      });
+    } finally { db.close(); }
+  });
+}
+
+// A single momentary zero is not durable retirement. Wait for several
+// independent committed transactions; if ciphertext persists, fail this gate.
+// Never discard or modify rows from the probe, and never log their contents.
+async function waitForReviewJournalRetirement(page, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let consecutiveEmpty = 0;
+  let remaining = null;
+  while (Date.now() < deadline) {
+    const snapshot = await reviewJournalMetadata(page);
+    remaining = snapshot.rows.length;
+    consecutiveEmpty = remaining === 0 ? consecutiveEmpty + 1 : 0;
+    if (consecutiveEmpty >= 4) return snapshot;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  assert.fail('Encrypted review receipt did not stay retired after authenticated reconciliation (remaining=' +
+    remaining + ')');
+}
+
 try {
   await admin.connect();
   const { rows: [{ database }] } = await admin.query('SELECT current_database() AS database');
@@ -880,33 +937,7 @@ try {
   assert.equal(reviewPostCount,1,'A lost ACK must not automatically repeat the POST');
 
   // Inspect the browser's REAL IndexedDB, before reload, not a mocked store.
-  const sealedBeforeReload = await page.evaluate(async () => {
-    const request = indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db = await new Promise((resolve,reject) => {
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      const tx=db.transaction(['pending-creates','scope-keys'],'readonly');
-      const rows = await new Promise((resolve,reject)=>{
-        const op=tx.objectStore('pending-creates').getAll();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      const keys = await new Promise((resolve,reject)=>{
-        const op=tx.objectStore('scope-keys').getAll();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      return { rows: rows.map(row=>({
-        id:row.id,scope:row.scope,iv:row.iv,
-        sealed:row.ciphertext instanceof ArrayBuffer,
-        bytes:row.ciphertext.byteLength,fields:Object.keys(row).sort()
-      })), keys:keys.map(row=>({
-        scope:row.scope,type:row.key?.type,extractable:row.key?.extractable
-      })) };
-    } finally { db.close(); }
-  });
+  const sealedBeforeReload = await reviewJournalMetadata(page);
   assert.equal(sealedBeforeReload.rows.length,1,'Committed but unacknowledged review remains locally encrypted');
   const sealedRow=sealedBeforeReload.rows[0];
   assert.equal(sealedRow.id,originalReviewBody.client_request_id);
@@ -928,50 +959,39 @@ try {
   // browser mount reads AES-GCM data *after* server cookie revalidation;
   // it performs ONLY a real GET, never a second POST.
   await page.unroute(detailEndpoint);
+  // Observe genuine HTTP from Express on this browser session, without
+  // stubbing success. Detail mount and pending-journal recovery each do a GET.
+  const realReviewGets = [];
+  const collectReviewGet = response => {
+    if (response.request().method() === 'GET' && response.status() === 200 &&
+        new URL(response.url()).pathname === '/api/v1/work-orders/' + reviewOrder) {
+      realReviewGets.push(response);
+    }
+  };
+  page.on('response', collectReviewGet);
   await page.reload();
   await page.getByTitle('Órdenes').click();
   await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
   await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
   await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
   const recoveredReviewDrawer=page.getByRole('dialog',{name:reviewTitle});
-  // The drawer refresh can unmount its transient notice, so assert the
-  // actual CAS deletion in IndexedDB, not a short-lived React message.
-  await page.waitForFunction(async () => {
-    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db=await new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      const count=await new Promise((resolve,reject)=>{
-        const tx=db.transaction('pending-creates','readonly');
-        const op=tx.objectStore('pending-creates').count();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      return count===0;
-    } finally { db.close(); }
-  },null,{timeout:15000});
+  // A stale UI badge cannot prove the lost-ACK recovery. The real server
+  // must be read again after reload, and the encrypted receipt must remain
+  // absent across multiple committed IndexedDB transactions.
   await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
-  assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
+  await waitForReviewJournalRetirement(page);
+  assert.equal(reviewPostCount, 1, 'Reload recovery GET may not resend the review POST');
   await recoveredReviewDrawer.getByRole('button',
-    {name:'Reintentar revisión con la misma clave'}).waitFor({state:'detached'});
-  const sealedAfterReload = await page.evaluate(async () => {
-    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db=await new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      return await new Promise((resolve,reject)=>{
-        const tx=db.transaction('pending-creates','readonly');
-        const req=tx.objectStore('pending-creates').count();
-        req.onsuccess=()=>resolve(req.result);
-        req.onerror=()=>reject(req.error);
-      });
-    } finally {db.close();}
-  });
-  assert.equal(sealedAfterReload,0,'Only an authorized exact matching GET may clear ciphertext');
+    { name: 'Reintentar revisión con la misma clave' }).waitFor({ state: 'detached' });
+  assert.ok(realReviewGets.length >= 2,
+    'Detail and encrypted-journal recovery must each use an actual authorized GET');
+  const realBodies = await Promise.all(realReviewGets.map(response => response.json()));
+  assert.ok(realBodies.some(body => body?.data?.WorkOrderExecutions?.some(report =>
+    report.id === reviewReport && report.review_status === 'verified' &&
+    report.reviewed_by === ownerA.user.id &&
+    report.review_checklist?.evidence_basis === 'no_files')),
+  'A genuine authorized GET must contain the exact committed review');
+  page.off('response', collectReviewGet);
 
   const reviewRows=(await admin.query(`
     SELECT review_status,reviewed_by,review_checklist
@@ -1043,6 +1063,11 @@ try {
   page.once('dialog',dialog=>void dialog.accept());
   await undeliveredDrawer.getByRole('button',{name:'Aceptar revisión'}).click();
   await undeliveredDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'}).waitFor();
+  const undeliveredBeforeReload = await reviewJournalMetadata(page);
+  assert.equal(undeliveredBeforeReload.rows.length, 1,
+    'An undelivered review must retain one encrypted pending receipt before reload');
+  assert.equal(undeliveredBeforeReload.rows[0].id, undeliveredBody.client_request_id,
+    'The sealed retry identity must match the original blocked HTTP POST');
   assert.equal(undeliveredPostCount,1);
   const submittedBeforeReload=(await admin.query(`
     SELECT review_status FROM work_order_executions WHERE tenant_id=$1 AND id=$2
@@ -1056,7 +1081,23 @@ try {
   await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
   const retryDrawer=page.getByRole('dialog',{name:undeliveredTitle});
   const recoveredRetry=retryDrawer.getByRole('button',{name:'Reintentar revisión con la misma clave'});
-  await recoveredRetry.waitFor();
+  const undeliveredAfterReload = await reviewJournalMetadata(page);
+  assert.equal(undeliveredAfterReload.rows.length, 1,
+    'Reload must not discard an unconfirmed review receipt');
+  assert.equal(undeliveredAfterReload.rows[0].id, undeliveredBody.client_request_id);
+  try {
+    await recoveredRetry.waitFor();
+  } catch {
+    // Minimal privacy-safe diagnostics: never log report text, user/tenant
+    // identifiers, request UUID, ciphertext, cookies or raw error messages.
+    const executionPanelMounted = await retryDrawer.locator('.order-detail__execution').count();
+    const alerts = await retryDrawer.getByRole('alert').count();
+    const recoveryStatus = await retryDrawer.getByText(
+      'Preparando recuperación cifrada de revisiones.', { exact: false }).count();
+    throw new Error('Sealed review retry control absent after reload; pendingRows=' +
+      undeliveredAfterReload.rows.length + ', panelMounted=' + executionPanelMounted +
+      ', alerts=' + alerts + ', preparing=' + recoveryStatus);
+  }
   assert.equal(undeliveredPostCount,1,'GET after reload must not automatically send an uncommitted POST');
   const realRetryResponse=page.waitForResponse(response=>
     response.url().endsWith('/work-orders/'+undeliveredOrder+
