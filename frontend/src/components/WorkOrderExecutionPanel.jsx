@@ -324,8 +324,12 @@ export function WorkOrderExecutionPanel({ order, onChanged }) {
     <p>Los datos son <strong>declarados por el responsable</strong>. Una revisión independiente
       permite cerrar administrativamente la orden; no constituye una medición automática.</p>
     {notice && <p className="order-detail__notice" role="status">{notice}</p>}
-    {error && <div className="order-detail__error" role="alert">
-      {error} <button type="button" className="ghost-action"
+    {(error || activePendingReview || pendingPayload) && <div
+      className="order-detail__error" role={error ? 'alert' : 'status'}>
+      {error || (activePendingReview
+        ? 'Hay una revisión cifrada pendiente de confirmación. Comprobá el servidor o reintentá la decisión original.'
+        : 'Hay un parte pendiente de comprobar en el servidor. No lo vuelvas a presentar sin verificar.')}
+      {' '}<button type="button" className="ghost-action"
         onClick={onChanged}>Actualizar datos</button>
       {activePendingReview && <button type="button" className="ghost-action"
         disabled={busy} onClick={() => void recheckReview()}>
