@@ -369,6 +369,82 @@ try {
   await panel.getByRole('button',{name:'Reiniciar historial'}).click();
   await panel.getByText('Archivos registrados · página 1').waitFor();
 
+  // Simulate an OS-suspended tab missing BOTH advisory notification
+  // transports. Auth is still a genuine HttpOnly browser cookie; the extra
+  // persistent storage witness contains only a random transition nonce.
+  const suspendedTab = await context.newPage();
+  await suspendedTab.addInitScript(() => {
+    Object.defineProperty(window, 'BroadcastChannel', {
+      configurable: true, value: undefined
+    });
+    const listen = window.addEventListener.bind(window);
+    window.addEventListener = (type, fn, options) => {
+      if (type === 'storage') return; // emulate a missed suspended-tab event
+      return listen(type, fn, options);
+    };
+  });
+  await suspendedTab.goto('http://127.0.0.1:4177/');
+  await suspendedTab.getByTitle('Monitoreo').waitFor();
+  await suspendedTab.getByTitle('Monitoreo').click();
+  await suspendedTab.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  const sleepingEvidence=suspendedTab.getByRole('region',{
+    name:'Verificación de evidencias de la recorrida'
+  });
+  await sleepingEvidence.getByText('Archivos registrados · página 1').waitFor();
+  // Keep the suspended tab in the background. The operator's logout is REAL;
+  // no fabricated 401 is ever returned to the sleeping tab.
+  await page.bringToFront();
+  await page.getByTitle('Cerrar sesión').click();
+  await page.getByRole('heading',{name:'Iniciar sesión'}).waitFor();
+  const witness=await suspendedTab.evaluate(() => {
+    const value=localStorage.getItem('sedeagro.auth-transition-witness-v1');
+    return value ? JSON.parse(value) : null;
+  });
+  assert.deepEqual(Object.keys(witness).sort(),['kind','nonce','source'],
+    'the durable marker must not contain auth/tenant data');
+  assert.match(witness.nonce,/^[0-9a-f-]{36}$/i);
+  assert.equal(JSON.stringify(witness).includes(tenantId),false);
+  assert.equal(JSON.stringify(witness).includes(userId),false);
+
+  let releaseRecheck;
+  let startRecheck;
+  const recheckStarted=new Promise(resolve=>{startRecheck=resolve;});
+  const recheckGate=new Promise(resolve=>{releaseRecheck=resolve;});
+  let realProfileRequests=0;
+  const delayRealAuthority=async route=>{
+    realProfileRequests++;
+    startRecheck();
+    await recheckGate;
+    await route.continue(); // Real Express cookie check, not a synthetic ACK.
+  };
+  await suspendedTab.route('**/api/v1/auth/me',delayRealAuthority);
+  // Regain foreground within the 60s polling window. The witness must force
+  // revalidation now even if the shared tenant hint was removed at logout.
+  await suspendedTab.bringToFront();
+  await suspendedTab.evaluate(()=>window.dispatchEvent(new Event('focus')));
+  await recheckStarted;
+  assert.equal(await sleepingEvidence.count(),0,
+    'lost notification must quarantine private evidence BEFORE HTTP authority');
+  assert.equal(await suspendedTab.getByTitle('Monitoreo').count(),0,
+    'private navigation must disappear while /auth/me is still in flight');
+  assert.ok(realProfileRequests>=1);
+  releaseRecheck();
+  await suspendedTab.getByRole('heading',{name:'Iniciar sesión'}).waitFor();
+  await suspendedTab.unroute('**/api/v1/auth/me',delayRealAuthority);
+  await suspendedTab.close();
+  console.log('PASS: suspended tab misses BroadcastChannel/storage, opaque witness on foreground quarantines private evidence before REAL revoked-cookie /auth/me');
+
+  // Restore a real cookie for the remainder of the unchanged server-revocation
+  // test. Reopening evidence must read it anew under backend permissions.
+  await page.bringToFront();
+  await page.locator('#login-email').fill(email);
+  await page.locator('#login-password').fill(password);
+  await page.locator('#login-submit').click();
+  await page.getByTitle('Monitoreo').waitFor();
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+
   // End the cookie session server-side (not clearing JS state manually).
   const sessionRows=(await admin.query(`
     UPDATE auth_sessions SET revoked_at=now()
