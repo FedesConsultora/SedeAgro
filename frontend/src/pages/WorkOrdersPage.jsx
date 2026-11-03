@@ -30,7 +30,7 @@ const FILTERS = [
 ];
 
 export function WorkOrdersPage({ focusOrderId = null, observationDraft = null,
-  onClearObservationDraft = null }) {
+  onClearObservationDraft = null, onNavigate = null }) {
   const { api, dataMode, session } = useSession();
   const scope = workOrderPrivateListScope(session, dataMode);
   const scopeRef = useRef(scope);
