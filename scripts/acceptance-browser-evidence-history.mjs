@@ -145,6 +145,10 @@ try {
   const originDialog=page.getByRole('dialog',{name:'Nueva orden de trabajo'});
   await originDialog.getByText('Buscando órdenes pendientes cifradas…').waitFor({state:'hidden'});
   await originDialog.getByText(/Propuesta desde una observación confirmada/).waitFor();
+  // The encrypted-journal check and authorized GET /fields are independent.
+  // React may render the contextual note before the real lot <option>
+  // exists; wait for the server-backed selector, not a transient empty DOM.
+  await originDialog.locator('#wo-field option[value="' + field + '"]').waitFor();
   assert.equal(await originDialog.locator('#wo-field').inputValue(),field);
   assert.equal(await originDialog.locator('#wo-field').isDisabled(),true,
     'an observation-origin order must not silently point at another lot');
