@@ -29,7 +29,7 @@ function InfoRow({ label, value, icon: Icon }) {
   </div>;
 }
 
-export function WorkOrderDetailDrawer({ isOpen, onClose, order, onUpdated }) {
+export function WorkOrderDetailDrawer({ isOpen, onClose, order, onUpdated, onOpenScouting }) {
   const { api, dataMode, session } = useSession();
   const [detail, setDetail] = useState(dataMode === 'mock' ? order : null);
   const [loading, setLoading] = useState(dataMode === 'live');
@@ -65,6 +65,8 @@ export function WorkOrderDetailDrawer({ isOpen, onClose, order, onUpdated }) {
 
   const live = dataMode === 'live' && session?.authenticated === true;
   const roleCode = session?.membership?.roleCode;
+  const origin = live && ['tenant_admin', 'agronomic_coordinator'].includes(roleCode) &&
+    session?.entitlements?.includes('scouting') ? detail?.observation_origin : null;
   const transitions = !loading && !loadError
     ? availableWorkOrderTransitions(detail, roleCode, session?.user?.id, live)
     : [];
@@ -154,6 +156,20 @@ export function WorkOrderDetailDrawer({ isOpen, onClose, order, onUpdated }) {
             {detail.completed_at && <InfoRow icon={Calendar} label="Completada"
               value={dateLabel(detail.completed_at)} />}
           </section>
+          {origin && <section className="detail-section" aria-label="Origen verificado de la orden">
+            <h3>Origen de monitoreo verificado</h3>
+            <p className="order-detail__notice">
+              Esta orden está vinculada en PostgreSQL a una observación real.
+              La recorrida requiere autorización independiente para consultar sus notas,
+              ubicación o fotografías.
+            </p>
+            <InfoRow icon={Tag} label="Observación" value={origin.scouting_observation_id} />
+            <InfoRow icon={MapPin} label="Recorrida" value={origin.scouting_run_id} />
+            {onOpenScouting && <button type="button" className="ghost-action"
+              onClick={() => onOpenScouting(origin.scouting_run_id)}>
+              <ArrowRight size={14} aria-hidden="true" /> Abrir recorrida de origen
+            </button>}
+          </section>}
           {detail.instructions && <section className="detail-section">
             <h3>Instrucciones</h3>
             <p className="order-detail__instructions">{detail.instructions}</p>
