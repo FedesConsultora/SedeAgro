@@ -122,6 +122,7 @@ function Shell() {
         {currentView === 'scouting'   && <ScoutingPage focusRunId={focused?.view === 'scouting' ? focused.id : null}
           onNavigate={handleViewChange} />}
         {currentView === 'orders'     && <WorkOrdersPage
+          onNavigate={handleViewChange}
           focusOrderId={focused?.view === 'orders' ? focused.id : null}
           observationDraft={focused?.view === 'orders' ? focused.orderDraft : null}
           onClearObservationDraft={() => setFocused(null)} />}
