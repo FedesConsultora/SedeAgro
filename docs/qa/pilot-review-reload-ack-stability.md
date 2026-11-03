@@ -25,3 +25,12 @@ En la CI independiente de `main@319c624fbbbe3dbb1706fdaba8c12f90df67e84b`, prime
 
 - Revisar diff y parseo ESM, después ejecutar `browser-postgis` con Chromium + Express + PostgreSQL/PostGIS descartable; exigir CI exacta del HEAD de PR (**5/5**). Confirmar ejecución independiente de `main` (**7/7**) luego del merge, sin atribuir al nuevo código los controles de SHAs anteriores.
 - Si el gate revela que el journal efectivamente reaparece bajo el mismo scope, detener la integración e investigar una escritura tardía real del cliente; un cambio de prueba no reemplaza una corrección de producto.
+
+
+## Ampliación tras CI de PR: caso POST no entregado
+
+La [primera corrida exact-head de PR #285](https://github.com/FedesConsultora/SedeAgro/actions/runs/41655104206) aprobó dependency-security, tenant-rls (PostGIS/restauración), browser-offline y production-images. Chromium aprobó **el nuevo escenario de COMMIT con ACK perdido**, pero falló más adelante (timeout 15 s esperando el botón de reintento explícito tras recargar el caso POST **no entregado a Express**). No se contabiliza como 5/5.
+
+La UI anterior anidaba los controles de recuperación de un recibo cifrado exclusivamente bajo `error && ...`. Si el aviso temporal se limpia por un refresh/race, el recibo puede seguir pendiente pero los botones para **comprobar servidor** y **reintentar el mismo UUID** desaparecen. El cambio acotado los mantiene visibles si existe `activePendingReview`, incluso sin mensaje de error; no inicia POST automático, no altera los controles de rol y nunca considera el recibo local una prueba de entrega. Se añade contrato de regresión en `frontend/test/workOrderReviewReceipt.test.js`.
+
+El E2E además exige que el segundo caso conserve **exactamente una fila cifrada del UUID original antes y después de recargar**. Si falta el botón, el diagnóstico registra solo número de filas pendientes, presencia de panel y contadores de alerta/estado; nunca revela notas, coordenadas, datos de cliente, UUID o ciphertext. Conservar los fallos reales y exigir nueva CI del SHA exacto.
