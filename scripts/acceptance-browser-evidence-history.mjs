@@ -293,6 +293,13 @@ try {
   secondTenantId = otherProfile.tenant.id;
   secondUserId = otherProfile.user.id;
 
+  // The first tab was in the background while the other real tenant logged
+  // in. Browser focus delivery is not guaranteed for background tabs, so
+  // explicitly return to the operator tab: this is the genuine foreground
+  // transition that triggers witness catchUp + a fresh cookie /auth/me.
+  // The 503 interceptor stays active for EVERY overlapping validation.
+  await page.bringToFront();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await firstUnavailableProfile;
   await page.getByRole('alert').getByText('No se pudo verificar tu sesión').waitFor();
   assert.ok(blockedProfileRechecks >= 1,
