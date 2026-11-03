@@ -368,12 +368,24 @@ try {
   secondTenantId = otherProfile.tenant.id;
   secondUserId = otherProfile.user.id;
 
-  // The first tab was in the background while the other real tenant logged
-  // in. Browser focus delivery is not guaranteed for background tabs, so
-  // explicitly return to the operator tab: this is the genuine foreground
-  // transition that triggers witness catchUp + a fresh cookie /auth/me.
-  // The 503 interceptor stays active for EVERY overlapping validation.
+  // The HTTP cookie has actually changed as a result of the REAL second
+  // tenant registration above. Background browsers may drop both transient
+  // BroadcastChannel/storage delivery and a synthetic focus before the
+  // document becomes visible. Publish a second OPAQUE transition witness
+  // from the authenticated second tab to deterministically exercise the
+  // same tab-sync path, never to authenticate or simulate a backend response.
+  // A real /auth/me must still hit the controlled 503 route on the FIRST tab.
+  await secondTab.evaluate(() => {
+    const signal = JSON.stringify({
+      kind: 'session-transition', source: 'browser-evidence-real-tenant-b',
+      nonce: crypto.randomUUID()
+    });
+    localStorage.setItem('sedeagro.auth-transition-witness-v1', signal);
+    localStorage.setItem('sedeagro.auth-transition-v1', signal);
+    localStorage.removeItem('sedeagro.auth-transition-v1');
+  });
   await page.bringToFront();
+  await page.waitForFunction(() => document.visibilityState === 'visible');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await firstUnavailableProfile;
   await page.getByRole('alert').getByText('No se pudo verificar tu sesión').waitFor();
