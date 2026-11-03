@@ -30,7 +30,7 @@ const FILTERS = [
 ];
 
 export function WorkOrdersPage({ focusOrderId = null, observationDraft = null,
-  onClearObservationDraft = null }) {
+  onClearObservationDraft = null, onNavigate = null }) {
   const { api, dataMode, session } = useSession();
   const scope = workOrderPrivateListScope(session, dataMode);
   const scopeRef = useRef(scope);
@@ -224,7 +224,8 @@ export function WorkOrdersPage({ focusOrderId = null, observationDraft = null,
         onCreated={() => { closeCreate(); reload(); }} />}
       {selectedOrder && <WorkOrderDetailDrawer key={`${scope}:${selectedOrder.id}`} isOpen
         order={selectedOrder} onClose={() => setSelectedSnapshot(null)}
-        onUpdated={() => { setSelectedSnapshot(null); reload(); }} />}
+        onUpdated={() => { setSelectedSnapshot(null); reload(); }}
+        onOpenScouting={runId => onNavigate?.('scouting', { id: runId })} />}
     </div>
   );
 }

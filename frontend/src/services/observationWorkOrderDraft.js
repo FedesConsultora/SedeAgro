@@ -60,6 +60,7 @@ export function workOrderFormFromObservationDraft(draft, session, dataMode) {
   return Object.freeze({
     field_id: draft.fieldId,
     campaign_field_id: draft.campaignFieldId,
+    origin_observation_id: draft.observationId,
     type: 'inspection', // Never prescribe pesticide, irrigation or other action.
     priority: SEVERITY_PRIORITIES[draft.severity],
     title: 'Verificar hallazgo de ' + OBSERVATION_TYPES[draft.observationType],

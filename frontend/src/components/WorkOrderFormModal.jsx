@@ -14,6 +14,7 @@ import {
 const emptyForm = () => ({
   field_id: '',
   campaign_field_id: null,
+  origin_observation_id: undefined,
   type: 'application',
   priority: 'normal',
   title: '',
@@ -59,7 +60,9 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated, initialObservat
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const contextualForm = Boolean(contextPrefill && form.field_id === contextPrefill.field_id &&
-    form.campaign_field_id === contextPrefill.campaign_field_id && submitStatus !== 'uncertain');
+    form.campaign_field_id === contextPrefill.campaign_field_id &&
+    form.origin_observation_id === contextPrefill.origin_observation_id &&
+    submitStatus !== 'uncertain');
   const [error, setError] = useState('');
   const [recoveryState, setRecoveryState] = useState(null);
   const recoveryView = recoveryState?.scope === authority && recoveryState?.api === api
@@ -94,6 +97,7 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated, initialObservat
           setFormSnapshot({ scope: authority, api, value: {
             field_id: saved.body.field_id,
             campaign_field_id: saved.body.campaign_field_id ?? null,
+            origin_observation_id: saved.body.origin_observation_id,
             type: saved.body.type,
             priority: saved.body.priority,
             title: saved.body.title,
@@ -303,8 +307,8 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated, initialObservat
         {contextualForm && <p role="status" className="resource-demo-note">
           Propuesta desde una observación confirmada: lote y campaña precargados,
           prioridad sugerida e inspección inicial. Revisá título e instrucciones;
-          la orden se creará solo cuando pulses «Crear orden». El origen se anota
-          en instrucciones, sin afirmar un vínculo directo con la observación.
+          la orden se creará solo cuando pulses «Crear orden». El servidor
+          comprobará el vínculo con la observación y lo guardará en PostgreSQL.
         </p>}
         {contextualForm && !fieldsLoading && !fieldsError &&
           !fields.some(field => field.id === form.field_id) &&

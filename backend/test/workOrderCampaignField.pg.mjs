@@ -107,7 +107,8 @@ test('work orders cannot combine different fields or tenants with a campaign-fie
 
     await owner.query(
       "INSERT INTO tenant_modules(tenant_id,module_code,is_enabled,source) VALUES" +
-      "($1,'work_orders',true,'plan'),($2,'work_orders',true,'plan')", [a, b]);
+      "($1,'work_orders',true,'plan'),($2,'work_orders',true,'plan')," +
+      "($1,'scouting',true,'plan'),($2,'scouting',true,'plan')", [a, b]);
 
     async function makeField(tenantId, label) {
       const farmId = await insert(
@@ -173,6 +174,45 @@ test('work orders cannot combine different fields or tenants with a campaign-fie
     assert.equal((await owner.query(
       'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1', [b])).rows[0].n,
     1);
+    // Real tenant-local origin check and independent composite-key FK gate.
+    const makeSource=async(tid,cf,fid,tag)=>{
+      const runId=await insert("INSERT INTO scouting_runs(tenant_id,campaign_field_id) VALUES($1,$2) RETURNING id",[tid,cf]);
+      const observationId=await insert("INSERT INTO scouting_observations(tenant_id,scouting_run_id,field_id,observation_type,notes) VALUES($1,$2,$3,'weed',$4) RETURNING id",[tid,runId,fid,tag]);
+      return {runId,observationId};
+    };
+    const own=await makeSource(a,cfA1,fieldA1,'Actual observation');
+    const other=await makeSource(a,cfA2,fieldA2,'Different lot');
+    const foreign=await makeSource(b,cfB,fieldB,'Foreign observation');
+    const linkedBody={...order(fieldA1,cfA1,'Order from observation'),
+      origin_observation_id:own.observationId,client_request_id:randomUUID()};
+    const first=await request(adminA,a,linkedBody);
+    assert.equal(first.status,201,JSON.stringify(first.json));
+    assert.deepEqual(first.json.data.observation_origin,
+      {scouting_observation_id:own.observationId,scouting_run_id:own.runId});
+    const replay=await request(adminA,a,linkedBody);
+    assert.equal(replay.status,200,JSON.stringify(replay.json));
+    assert.equal(replay.json.data.id,first.json.data.id);
+    assert.equal(replay.json.replayed,true);
+    for(const [patch,status,code] of [
+      [{origin_observation_id:other.observationId},422,'ORDER_ORIGIN_FIELD_CAMPAIGN_MISMATCH'],
+      [{origin_observation_id:foreign.observationId},404,'ORDER_ORIGIN_OBSERVATION_NOT_FOUND'],
+      [{campaign_field_id:null},422,'ORDER_ORIGIN_CAMPAIGN_REQUIRED']
+    ]) {
+      const invalid=await request(adminA,a,{...linkedBody,...patch,client_request_id:randomUUID()});
+      assert.equal(invalid.status,status,JSON.stringify(invalid.json));
+      assert.equal(invalid.json.error.code,code);
+    }
+    const noRole=await request(scoutA,a,linkedBody);
+    assert.equal(noRole.status,403);
+    await assert.rejects(owner.query(`
+      INSERT INTO work_order_observation_origins
+      (tenant_id,work_order_id,scouting_observation_id,scouting_run_id,
+       field_id,campaign_field_id,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `,[a,valid.json.data.id,foreign.observationId,foreign.runId,fieldA1,cfA1,randomUUID()]),
+    error=>error.code==='23503');
+    assert.equal((await owner.query(
+      'SELECT count(*)::int AS n FROM work_order_observation_origins WHERE tenant_id=$1',
+      [a])).rows[0].n,1);
   } finally {
     if (ownerConnected) {
       try {

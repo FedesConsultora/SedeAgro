@@ -26,6 +26,10 @@ export function verifyCreatedWorkOrder(response, body, actorId, tenantId = undef
         !UUID.test(body.client_request_id) || !tenantId ||
         data.tenant_id !== tenantId || typeof response.replayed !== 'boolean' ||
         (data.campaign_field_id ?? null) !== (body.campaign_field_id ?? null) ||
+        (data.observation_origin?.scouting_observation_id ?? null) !==
+          (body.origin_observation_id ?? null) ||
+        (data.observation_origin &&
+          !UUID.test(data.observation_origin.scouting_run_id || '')) ||
         (data.instructions ?? null) !== (body.instructions ?? null) ||
         (data.due_at ?? null) !== (body.due_at ?? null)
       )) ||

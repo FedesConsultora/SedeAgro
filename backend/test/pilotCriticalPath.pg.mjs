@@ -163,12 +163,29 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
       scout, 'GET', undefined, 200);
     assert.equal(privatePhoto.data.content_base64, evidencePayload.content_base64);
 
-    // Work order is operationally linked by exact field+campaign, not a fake
-    // observation FK (the current schema does not have such a relationship).
-    const order = (await expectStatus('/work-orders', admin, 'POST', {
+    // One real observation → one immutable, transactionally persisted order
+    // origin. No GPS, notes or photo bytes cross the order API boundary.
+    const orderRequestId = randomUUID();
+    const orderRequest = {
+      client_request_id: orderRequestId,
       field_id: field, campaign_field_id: campaignField,
+      origin_observation_id: observationId,
       type: 'inspection', title: 'Review the same observed lot'
-    }, 201)).data.id;
+    };
+    const firstOrder = await expectStatus('/work-orders', admin, 'POST', orderRequest, 201);
+    assert.equal(firstOrder.replayed, false);
+    assert.deepEqual(firstOrder.data.observation_origin, {
+      scouting_observation_id: observationId, scouting_run_id: run
+    });
+    const order = firstOrder.data.id;
+    const sameOrder = await expectStatus('/work-orders', admin, 'POST', orderRequest, 200);
+    assert.equal(sameOrder.replayed, true);
+    assert.equal(sameOrder.data.id, order);
+    assert.deepEqual(sameOrder.data.observation_origin, firstOrder.data.observation_origin);
+    const authoritativeDetail = await expectStatus(`/work-orders/${order}`,
+      admin, 'GET', undefined, 200);
+    assert.deepEqual(authoritativeDetail.data.observation_origin,
+      firstOrder.data.observation_origin);
     await expectStatus(`/work-orders/${order}`, foreignAdmin, 'GET', undefined, 404);
     await expectStatus(`/work-orders/${order}`, contractor, 'GET', undefined, 404);
     await expectStatus(`/work-orders/${order}/assignees`, admin, 'POST',
@@ -178,6 +195,8 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
     }
     const assigned = await expectStatus(`/work-orders/${order}`, contractor, 'GET', undefined, 200);
     assert.equal(assigned.data.field_id, field);
+    assert.equal(assigned.data.observation_origin, undefined,
+      'contractor must not receive the scouting origin identifier');
     const approvedAt = Date.parse(assigned.data.approved_at);
     assert.ok(Number.isFinite(approvedAt));
     await expectStatus(`/work-orders/${order}/status`, contractor, 'PATCH',
@@ -210,11 +229,18 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
       if (format === 'csv') {
         assert.ok(output.data.csv.includes('Pilot observation created once'));
         assert.ok(output.data.csv.includes('Review the same observed lot'));
+        assert.ok(output.data.csv.includes('observacion_origen_id'));
+        assert.ok(output.data.csv.includes(observationId));
+        assert.ok(output.data.csv.includes(run));
       } else {
         const bytes = Buffer.from(output.data.content_base64, 'base64');
         assert.equal(bytes.length, output.data.size_bytes);
         assert.deepEqual([...bytes.subarray(0, 4)],
           format === 'pdf' ? [37, 80, 68, 70] : [80, 75, 3, 4]);
+        assert.ok(bytes.includes(Buffer.from(observationId, 'utf8')),
+          format + ' must include verified order-origin ID in the final export');
+        assert.ok(bytes.includes(Buffer.from(run, 'utf8')),
+          format + ' must include the originating scouting run ID');
       }
       await expectStatus(endpoint, scout, 'GET', undefined, 403);
       await expectStatus(endpoint, foreignAdmin, 'GET', undefined, 404);
@@ -228,12 +254,19 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
     assert.equal((await count('SELECT count(*)::int AS n FROM evidence_assets WHERE id=$1',
       [evidenceId])).n, 1);
     const linked = await count(`SELECT o.field_id AS order_field, s.field_id AS observed_field,
-      e.review_status FROM work_orders o CROSS JOIN scouting_observations s
+      e.review_status, v.scouting_run_id AS linked_run, v.campaign_field_id AS linked_campaign
+      FROM work_order_observation_origins v
+      JOIN work_orders o ON o.tenant_id=v.tenant_id AND o.id=v.work_order_id
+      JOIN scouting_observations s ON s.tenant_id=v.tenant_id AND s.id=v.scouting_observation_id
       JOIN work_order_executions e ON e.work_order_id=o.id
       WHERE o.id=$1 AND s.id=$2`, [order, observationId]);
     assert.equal(linked.order_field, field);
     assert.equal(linked.observed_field, field);
+    assert.equal(linked.linked_run, run);
+    assert.equal(linked.linked_campaign, campaignField);
     assert.equal(linked.review_status, 'verified');
+    assert.equal((await count(`SELECT count(*)::int AS n
+      FROM work_order_observation_origins WHERE work_order_id=$1`, [order])).n, 1);
     const point = await count('SELECT ST_X(point) AS lon, ST_Y(point) AS lat FROM scouting_observations WHERE id=$1',
       [observationId]);
     assert.equal(point.lon, gps.coordinates[0]);
@@ -247,6 +280,11 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
         const result = await runtime.query(
           'SELECT count(*)::int AS n FROM scouting_observations WHERE id=$1', [observationId]);
         assert.equal(result.rows[0].n, expected);
+        const originRows = await runtime.query(
+          'SELECT count(*)::int AS n FROM work_order_observation_origins WHERE work_order_id=$1',
+          [order]);
+        assert.equal(originRows.rows[0].n, expected,
+          'non-owner FORCE RLS must conceal cross-tenant provenance');
       } finally {
         await runtime.query('ROLLBACK');
       }

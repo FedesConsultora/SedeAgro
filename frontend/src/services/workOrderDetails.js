@@ -20,11 +20,19 @@ const EDGES = Object.freeze({
   cancelled: []
 });
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function validateWorkOrderDetail(response, expectedId) {
   const order = response?.data;
   if (!order || typeof order !== 'object' || Array.isArray(order) ||
       order.id !== expectedId || !Object.hasOwn(EDGES, order.status) ||
-      !Array.isArray(order.WorkOrderAssignees)) {
+      !Array.isArray(order.WorkOrderAssignees) ||
+      (order.observation_origin != null && (
+        typeof order.observation_origin !== 'object' ||
+        Array.isArray(order.observation_origin) ||
+        !UUID.test(order.observation_origin.scouting_observation_id || '') ||
+        !UUID.test(order.observation_origin.scouting_run_id || '')
+      ))) {
     throw new Error('El servidor devolvió un detalle de orden inválido.');
   }
   return order;

@@ -1,8 +1,9 @@
 // A single authoritative RLS-bounded snapshot shared by CSV, PDF and XLSX.
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { z } from 'zod';
 import { Field, Farm, ScoutingObservation, WorkOrder } from '../../models/index.js';
 import { HttpError } from '../../utils/http.js';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import { fieldCsvPeriod, FIELD_CSV_MAX_ROWS_PER_KIND } from './fieldCsv.js';
 
 const querySchema = z.object({
@@ -60,10 +61,29 @@ export async function loadFieldReportSnapshot(req) {
     throw new HttpError(413, 'Demasiados registros para exportar. Elegí un período más corto.',
       undefined, 'REPORT_EXPORT_TOO_LARGE');
   }
+  // Read only provenance belonging to the SAME bounded work-order snapshot.
+  // The reporting role is admin/coordinator and reports.read is already
+  // server-checked. No scouting notes/GPS/evidence are joined or exposed.
+  const orderIds = workOrders.map(item => item.id);
+  const linked = orderIds.length ? await queryTenantTransaction(`
+    SELECT work_order_id, scouting_observation_id, scouting_run_id
+    FROM work_order_observation_origins
+    WHERE tenant_id = :tenant AND field_id = :field
+      AND work_order_id IN (:orderIds)
+  `, { transaction: tx, type: QueryTypes.SELECT, replacements: {
+    tenant: req.tenantId, field: field.id, orderIds
+  } }) : [];
+  const origins = new Map(linked.map(item => [item.work_order_id, {
+    scouting_observation_id: item.scouting_observation_id,
+    scouting_run_id: item.scouting_run_id
+  }]));
   return {
     field: field.get({ plain: true }),
     observations: observations.map(item => item.get({ plain: true })),
-    workOrders: workOrders.map(item => item.get({ plain: true })),
+    workOrders: workOrders.map(item => ({
+      ...item.get({ plain: true }),
+      ...(origins.has(item.id) ? { observation_origin: origins.get(item.id) } : {})
+    })),
     period
   };
 }

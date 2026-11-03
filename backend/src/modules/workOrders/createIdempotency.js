@@ -8,6 +8,11 @@ export function workOrderCreateFingerprint(input) {
   // Canonical authored values after Zod coercions/defaults.
   const canonical = {
     campaign_field_id: input.campaign_field_id ?? null,
+    // Preserve the exact pre-migration hash for all historical requests
+    // without an origin, so their existing durable ACKs still replay.
+    ...(input.origin_observation_id
+      ? { origin_observation_id: input.origin_observation_id }
+      : {}),
     field_id: input.field_id,
     type: input.type,
     priority: input.priority,

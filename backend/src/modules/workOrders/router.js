@@ -24,6 +24,9 @@ import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
 import { reserveWorkOrderCreate, completeWorkOrderCreate } from './createIdempotency.js';
+import {
+  prepareObservationOrigin, persistObservationOrigin, readObservationOrigin, withObservationOrigin
+} from './observationOrigin.js';
 import { canSubmitExecution, canReviewExecution, canCloseReviewedOrder, validExecutionWindow, MAX_EXECUTION_REPORTS } from './executionPolicy.js';
 import { canAddWorkOrderAssignee, hasActiveWorkOrderExecutor, safeAuditRequestId } from './assignmentPolicy.js';
 import { createAssignmentNotification } from '../notifications/assignmentNotifications.js';
@@ -58,6 +61,7 @@ workOrdersRouter.use(requireEntitlement('work_orders'));
 const workOrderSchema = z.object({
   client_request_id: z.string().uuid().optional(),
   campaign_field_id: z.string().uuid().optional().nullable(),
+  origin_observation_id: z.string().uuid().optional(),
   field_id: z.string().uuid(),
   type: z.enum(['application', 'sowing', 'fertilization', 'harvest', 'irrigation', 'inspection', 'other']),
   status: z.literal('draft').optional(),
@@ -222,10 +226,16 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
 }));
 
 workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
+  // A replay never bypasses current scouting permission/entitlement. The
+  // receipt is actor-scoped but is NOT a read capability for its origin.
+  const origin = await prepareObservationOrigin(req, req.body);
   const reservation = await reserveWorkOrderCreate(req, req.body);
   res.set('Cache-Control', 'private, no-store');
   if (reservation.kind === 'replay') {
-    return res.status(200).json({ data: reservation.order, replayed: true });
+    const previousOrigin = await readObservationOrigin(req, reservation.order.id);
+    return res.status(200).json({
+      data: withObservationOrigin(reservation.order, previousOrigin), replayed: true
+    });
   }
   // Two independent tenant-scoped FKs do not prove that this campaign-field
   // actually belongs to the field on the order. Resolve both under the
@@ -254,15 +264,19 @@ workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrder
         undefined, 'WORK_ORDER_CAMPAIGN_FIELD_MISMATCH');
     }
   }
-  const { client_request_id: _clientRequestId, ...orderInput } = req.body;
+  const { client_request_id: _clientRequestId,
+    origin_observation_id: _originObservationId, ...orderInput } = req.body;
   const order = await WorkOrder.create({
     ...orderInput,
     status: 'draft',
     requested_by: req.auth.user.id
   }, { transaction: req.dbTransaction });
+  await persistObservationOrigin(req, order.id, origin);
   await completeWorkOrderCreate(req, reservation, order.id);
-  res.status(201).json({ data: order,
-    ...(reservation.kind === 'new' ? { replayed: false } : {}) });
+  res.status(201).json({ data: withObservationOrigin(order, origin && {
+    scouting_observation_id: origin.scouting_observation_id,
+    scouting_run_id: origin.scouting_run_id
+  }), ...(reservation.kind === 'new' ? { replayed: false } : {}) });
 }));
 
 // Bounded, tenant-isolated advisory queue for coordinators. Do not use this
@@ -701,7 +715,12 @@ workOrdersRouter.get('/:id', requireCapability('orders.read'), asyncHandler(asyn
     limit: MAX_EXECUTION_REPORTS,
     transaction: req.dbTransaction
   });
-  res.json({ data: { ...order.toJSON(), WorkOrderExecutions: executions } });
+  // Only scouting-capable authors/coordinators see provenance. Contractors
+  // receive their order/execution data but not the scouting source identity.
+  const observationOrigin = await readObservationOrigin(req, order.id);
+  res.set('Cache-Control', 'private, no-store');
+  res.json({ data: { ...withObservationOrigin(order, observationOrigin),
+    WorkOrderExecutions: executions } });
 }));
 
 workOrdersRouter.patch('/:id/status', requireCapability('orders.execute'), validate(statusSchema), asyncHandler(async (req, res) => {

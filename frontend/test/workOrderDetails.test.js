@@ -44,3 +44,20 @@ test('non-operators, demo mode and missing identities cannot mutate work orders'
   assert.deepEqual(availableWorkOrderTransitions(order('assigned', assigned), 'contractor', '', true), []);
   assert.deepEqual(availableWorkOrderTransitions(order('unknown'), 'tenant_admin', 'admin', true), []);
 });
+
+test('server-verified order provenance must contain exact UUIDs and never authorize itself', () => {
+  const id='9d941d8a-9a66-4c6d-8469-54c37596e3a9';
+  const origin={
+    scouting_observation_id:'b6a4534c-6e82-4f4e-b0a2-35b6d4f9317d',
+    scouting_run_id:'ce2405b5-2d3e-48b0-905f-b294e90df64f'
+  };
+  const detailed={...order('draft'),observation_origin:origin};
+  assert.deepEqual(validateWorkOrderDetail({data:detailed},ID),detailed);
+  for(const wrong of [[],{},{
+    ...origin,scouting_run_id:'bad'
+  },{
+    ...origin,scouting_observation_id:'wrong'
+  }]) assert.throws(()=>validateWorkOrderDetail({data:{
+    ...detailed,observation_origin:wrong
+  }},ID),/detalle de orden inválido/i);
+});
