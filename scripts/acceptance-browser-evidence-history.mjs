@@ -178,24 +178,34 @@ try {
   assert.equal(creation.data.tenant_id,tenantId);
   assert.equal(creation.data.field_id,field);
   assert.equal(creation.data.campaign_field_id,campaignField);
+  assert.deepEqual(creation.data.observation_origin,{
+    scouting_observation_id: observation, scouting_run_id: run
+  },'server must confirm real persisted observation provenance');
   assert.equal(creation.data.type,'inspection');
   assert.equal(creation.data.priority,'high');
   assert.equal(creation.data.status,'draft');
   assert.equal(creation.data.requested_by,userId);
   assert.equal(workOrderPostCount,1,'the contextual draft needs one explicit user submission');
   const sqlOrder=(await admin.query(`
-    SELECT count(*)::int AS n FROM work_orders
-    WHERE tenant_id=$1 AND id=$2 AND field_id=$3 AND campaign_field_id=$4
-      AND type='inspection' AND priority='high' AND status='draft'
-  `,[tenantId,creation.data.id,field,campaignField])).rows[0].n;
+    SELECT count(*)::int AS n FROM work_orders o
+    JOIN work_order_observation_origins v ON v.tenant_id=o.tenant_id
+      AND v.work_order_id=o.id
+    WHERE o.tenant_id=$1 AND o.id=$2 AND o.field_id=$3
+      AND o.campaign_field_id=$4 AND o.type='inspection'
+      AND o.priority='high' AND o.status='draft'
+      AND v.scouting_observation_id=$5 AND v.scouting_run_id=$6
+      AND v.field_id=$3 AND v.campaign_field_id=$4
+  `,[tenantId,creation.data.id,field,campaignField,observation,run])).rows[0].n;
   assert.equal(sqlOrder,1,'PostGIS must contain exactly the contextual order under the correct campaign/lot');
   await originDialog.waitFor({state:'detached'});
   page.off('request',countOrderRequest);
-  await page.getByRole('button',{name:'Abrir orden: Verificar hallazgo de malezas'}).waitFor();
-  await page.getByTitle('Monitoreo').click();
-  await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  await page.getByRole('button',{name:'Abrir orden: Verificar hallazgo de malezas'}).click();
+  await page.getByText('Origen de monitoreo verificado').waitFor();
+  await page.getByText(observation,{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Abrir recorrida de origen'}).click();
+  await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
   await panel.getByText('Archivos registrados · página 1').waitFor();
-  console.log('PASS: persisted observation -> real authenticated inspection draft -> exact campaign/lot and one work-order PostgreSQL COMMIT');
+  console.log('PASS: persisted observation -> authenticated inspection draft -> exact PostgreSQL provenance FK + authorized scouting navigation');
 
   await page.evaluate(() => {
     const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
