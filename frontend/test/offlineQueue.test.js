@@ -231,3 +231,140 @@ test('discard during an in-flight network failure cannot resurrect a removed dra
   await sending;
   assert.equal((await h.queue.list(session())).length, 0);
 });
+
+test('operator sends once after an automatic in-flight COMMIT, without a duplicate POST', async () => {
+  const h = harness();
+  const original = await h.queue.queueObservation(session(), RUN, values);
+  let started, release;
+  const begun = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  const sent = [];
+  const auto = h.queue.flush(session(), async body => {
+    sent.push(JSON.stringify(body));
+    started();
+    await hold;
+    return receipt(body);
+  });
+  await begun;
+  const manual = h.queue.flush(session(), async body => {
+    sent.push(JSON.stringify(body));
+    return receipt(body);
+  }, { force: true, waitForBusy: true });
+  assert.equal(sent.length, 1, 'manual click must not race the existing HTTP request');
+  release();
+  const first = await auto;
+  const second = await manual;
+  assert.equal(first.sent, 1);
+  assert.equal(second.attempted, 0, 'manual rescan sees no sealed rows after first ACK');
+  assert.equal(second.sent, 0);
+  assert.equal(second.skipped, false);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0], JSON.stringify(original.body));
+  assert.equal(h.records.size, 0);
+});
+
+test('operator retry after lost automatic ACK preserves the original UUID and never invents a draft', async () => {
+  const h = harness();
+  const original = await h.queue.queueObservation(session(), RUN, values);
+  let started, release;
+  const begun = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  const bodies = [];
+  const committedServerKeys = new Set();
+  const automatic = h.queue.flush(session(), async body => {
+    started();
+    bodies.push(JSON.stringify(body));
+    committedServerKeys.add(body.idempotency_key);
+    await hold;
+    throw new TypeError('Transport lost the server COMMIT ACK');
+  });
+  await begun;
+  const manual = h.queue.flush(session(), async body => {
+    bodies.push(JSON.stringify(body));
+    committedServerKeys.add(body.idempotency_key);
+    return { ...receipt(body), replayed: true };
+  }, { force: true, waitForBusy: true });
+  assert.equal(bodies.length, 1, 'manual must join instead of sending concurrently');
+  release();
+  const first = await automatic;
+  const second = await manual;
+  assert.equal(first.sent, 0);
+  assert.equal(second.sent, 1);
+  assert.equal(second.attempted, 1);
+  assert.equal(committedServerKeys.size, 1, 'same server idempotency receipt, never a second observation');
+  assert.deepEqual(bodies, [JSON.stringify(original.body), JSON.stringify(original.body)]);
+  assert.equal(h.records.size, 0);
+});
+
+test('manual wait is tenant+actor scoped, not a global pause or cross-account send', async () => {
+  const h = harness();
+  await h.queue.queueObservation(session(), RUN, values);
+  await h.queue.queueObservation(session(U2, T2), RUN, values);
+  let started, release;
+  const begun = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  const sendingA = h.queue.flush(session(), async body => {
+    started();
+    await hold;
+    return receipt(body);
+  });
+  await begun;
+  let otherActorSent = 0;
+  const sendingB = await h.queue.flush(session(U2, T2), async body => {
+    otherActorSent++;
+    return receipt(body);
+  }, { force: true, waitForBusy: true });
+  assert.equal(sendingB.sent, 1, 'another tenant must never wait for this account');
+  assert.equal(otherActorSent, 1);
+  release();
+  assert.equal((await sendingA).sent, 1);
+  assert.equal(h.records.size, 0);
+});
+
+test('while another flight owns the scope, automatic retries remain non-blocking', async () => {
+  const h = harness();
+  await h.queue.queueObservation(session(), RUN, values);
+  let started, release;
+  const begun = new Promise(resolve => { started = resolve; });
+  const hold = new Promise(resolve => { release = resolve; });
+  const first = h.queue.flush(session(), async body => {
+    started();
+    await hold;
+    return receipt(body);
+  });
+  await begun;
+  let posted = 0;
+  const background = await h.queue.flush(session(), async () => {
+    posted++;
+    throw new Error('No queued background follow-up should start.');
+  }, { force: true });
+  assert.equal(background.skipped, true);
+  assert.equal(posted, 0);
+  release();
+  assert.equal((await first).sent, 1);
+});
+
+test('manual delivery passes a lock-wait hint only for deliberate human submissions', async () => {
+  const existing = harness();
+  const item = await existing.queue.queueObservation(session(), RUN, values);
+  const flags = [];
+  const fake = createOfflineQueue({
+    store: {
+      get: async id => existing.records.get(id),
+      list: async scope => [...existing.records.values()].filter(row => row.scope === scope),
+      put: async row => { existing.records.set(row.id, structuredClone(row)); return true; },
+      delete: async id => { existing.records.delete(id); return true; }
+    },
+    withLock: async (_scope, perform, options) => {
+      flags.push(options.waitForBusy);
+      return perform();
+    }
+  });
+  assert.equal((await fake.flush(session(), async body => ({
+    ...receipt(body), replayed: true
+  }), { force: true })).sent, 1);
+  assert.deepEqual(flags, [false], 'automatic transport never queues behind another tab');
+  existing.records.set(item.id, structuredClone(item));
+  assert.equal((await fake.flushOne(session(), item.id, async body => receipt(body))).sent, 1);
+  assert.deepEqual(flags, [false, true], 'selected manual send waits for the cross-tab lock');
+});
