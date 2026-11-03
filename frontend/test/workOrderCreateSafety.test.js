@@ -174,3 +174,30 @@ test('keyed work order form never silently regenerates body on retry', () => {
   assert.match(jsx, /verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
   assert.doesNotMatch(jsx, /localStorage|sessionStorage/);
 });
+
+test('observation-bound keyed ACK requires the exact stored source and an authentic run UUID', () => {
+  const observationId='b6a4534c-6e82-4f4e-b0a2-35b6d4f9317d';
+  const runId='ce2405b5-2d3e-48b0-905f-b294e90df64f';
+  const campaignId='de16b90c-4b72-4490-9f5f-b20fe3c804be';
+  const requestBody={...request,client_request_id:orderId,
+    campaign_field_id:campaignId,origin_observation_id:observationId};
+  const good={...reply,replayed:false,data:{...reply.data,tenant_id:tenant,
+    campaign_field_id:campaignId,observation_origin:{
+      scouting_observation_id:observationId,scouting_run_id:runId
+    }}};
+  assert.equal(verifyCreatedWorkOrder(good,requestBody,actor,tenant),good.data);
+  assert.equal(verifyCreatedWorkOrder({...good,replayed:true},requestBody,actor,tenant),good.data);
+  for(const origin of [undefined,null,{},{
+    scouting_observation_id:field,scouting_run_id:runId
+  },{
+    scouting_observation_id:observationId,scouting_run_id:'invalid'
+  }]) assert.throws(()=>verifyCreatedWorkOrder({...good,data:{
+    ...good.data,observation_origin:origin
+  }},requestBody,actor,tenant),/no confirmó/i);
+  assert.throws(()=>verifyCreatedWorkOrder(good,{
+    ...requestBody,origin_observation_id:field
+  },actor,tenant),/no confirmó/i);
+  assert.throws(()=>verifyCreatedWorkOrder(good,{
+    ...requestBody,origin_observation_id:undefined
+  },actor,tenant),/no confirmó/i);
+});
