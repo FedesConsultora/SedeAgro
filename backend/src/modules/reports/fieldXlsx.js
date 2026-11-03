@@ -85,8 +85,9 @@ export function buildFieldXlsx(snapshot) {
 <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
 <cols><col min="1" max="1" width="18" customWidth="1"/><col min="2" max="3" width="39" customWidth="1"/>
 <col min="4" max="5" width="27" customWidth="1"/><col min="6" max="8" width="21" customWidth="1"/>
-<col min="9" max="9" width="64" customWidth="1"/></cols>
-<sheetData>${lines.join('')}</sheetData><autoFilter ref="A1:I${rows.length}"/>
+<col min="9" max="9" width="64" customWidth="1"/>
+<col min="10" max="11" width="39" customWidth="1"/></cols>
+<sheetData>${lines.join('')}</sheetData><autoFilter ref="A1:K${rows.length}"/>
 </worksheet>`;
   const types = `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
