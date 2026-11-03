@@ -28,7 +28,7 @@ test('persisted private observation yields only an authorized inspection draft w
   const draft = observationWorkOrderDraft(run,obs,session,'live');
   assert.ok(draft);
   assert.deepEqual(Object.keys(draft).sort(),[
-    'campaignFieldId','fieldId','observationId','observationType','runId',
+    'campaignFieldId','fieldId','membershipId','observationId','observationType','runId',
     'scope','severity','tenantId'
   ].sort());
   assert.equal(draft.fieldId,fieldId);
@@ -69,6 +69,7 @@ test('tenant/actor/role/capability changes deny or fence a stale navigation draf
     {membership:{...session.membership,id:fieldId}},
     {entitlements:['work_orders','gis']},
     {entitlements:['scouting','gis']},
+    {entitlements:['scouting','work_orders']},
     {authenticated:false}
   ]) {
     assert.equal(workOrderFormFromObservationDraft(draft,{...session,...patch},'live'),null);
@@ -94,11 +95,10 @@ test('foreign/unverified/partial source observations cannot become an order', ()
   ]) assert.equal(observationWorkOrderDraft(badRun,badObs,session,'live'),null);
   const draft=observationWorkOrderDraft(run,obs,session,'live');
   for(const patch of [
-    {campaignFieldId:fieldId},{fieldId:'not-uuid'},
+    {campaignFieldId:'not-uuid'},{fieldId:'not-uuid'},
     {observationType:'application'},{severity:'other'},
-    {tenantId:fieldId},{scope:'forged'}
-  ]) assert.equal(workOrderFormFromObservationDraft({...draft,...patch},session,'live'),
-    patch.campaignFieldId === fieldId ? null : null);
+    {tenantId:fieldId},{membershipId:fieldId},{scope:'forged'}
+  ]) assert.equal(workOrderFormFromObservationDraft({...draft,...patch},session,'live'),null);
 });
 
 test('wiring preserves operator approval, scope, campaign FK, encrypted request and recovery priority', () => {
