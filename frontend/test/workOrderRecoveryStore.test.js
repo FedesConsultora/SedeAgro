@@ -38,7 +38,8 @@ test('invalid work order is rejected before accessing browser IndexedDB or dispa
   for (const patch of [
     { field_id: 'foreign id' }, { type: 'delete' }, { priority: 'critical' },
     { title: 'x' }, { due_at: '2026-11-01T09:00:00-03:00' },
-    { campaign_field_id: 'not-uuid' }, { status: 'approved' },
+    { campaign_field_id: 'not-uuid' }, { origin_observation_id: 'not-uuid' },
+    { origin_observation_id: good.field_id }, { status: 'approved' },
     { client_request_id: 'not-uuid' }
   ]) {
     await assert.rejects(
@@ -62,6 +63,7 @@ test('modal saves original UUID/body before POST and never auto-replays on resto
   assert.match(modal, /if \(dataMode === 'mock'\) \{[\s\S]*?void sendCreate\(ticket, body, api\)/);
   assert.match(modal,/await discardWorkOrderRecovery\(authority, body.client_request_id\)/);
   assert.match(modal,/requestRef\.current = \{ scope: authority, api, body: saved\.body \}/);
+  assert.match(modal,/origin_observation_id: saved\.body\.origin_observation_id/);
   assert.match(modal,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
   assert.match(modal,/scopeRef\.current !== authority/);
   assert.match(modal,/apiRef\.current !== api/);
