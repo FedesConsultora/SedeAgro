@@ -740,6 +740,23 @@ try {
   // Subscribe BEFORE releasing the network fault: the authenticated app is
   // allowed to auto-reconcile as soon as the queue scope lock becomes free.
   // A pending draft can leave the DOM before Playwright can click a row.
+  // Transport counters contain no IDs, notes, GPS, photo bytes or headers.
+  // They distinguish a missing HTTP request from a failed authenticated one.
+  const observedDelivery = { requests: 0, failed: 0, statuses: [] };
+  page1.on('request', request => {
+    if (request.url().endsWith('/api/v1/sync/batches') &&
+        request.method() === 'POST') observedDelivery.requests++;
+  });
+  page1.on('requestfailed', request => {
+    if (request.url().endsWith('/api/v1/sync/batches') &&
+        request.method() === 'POST') observedDelivery.failed++;
+  });
+  page1.on('response', response => {
+    if (response.url().endsWith('/api/v1/sync/batches') &&
+        response.request().method() === 'POST') {
+      observedDelivery.statuses.push(response.status());
+    }
+  });
   const batchPredicate = response =>
     response.url().endsWith('/api/v1/sync/batches') &&
     response.request().method() === 'POST';
@@ -754,13 +771,10 @@ try {
 
   await page1.getByRole('button', { name: 'Sync', exact: true }).click();
   await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
-  const waitForDelivery = millis => Promise.race([
-    batchReply, new Promise(resolve => setTimeout(() => resolve(null), millis))
-  ]);
-  // React may mount SyncPage before its asynchronous IndexedDB decrypt has
-  // populated pendingCount. A visible but DISABLED header button is not ready
-  // for user interaction; checking it three times without awaiting loading
-  // incorrectly reports a lost POST in the 12-cycle stress run.
+  // The automatic flush may be in-flight when the operator opens SyncPage.
+  // A deliberate click now JOINS that flight, then rescans the real sealed
+  // queue; it does not silently skip or generate another idempotency key.
+  // Allow either the genuine automatic ACK or ONE manual click to win.
   const visibleDraft = page1.getByText(
     'Foto local: campo-ubicacion-privada-reducida.jpg', { exact: false });
   const rowReady = visibleDraft.waitFor({ state: 'visible', timeout: 18000 })
@@ -769,21 +783,51 @@ try {
   const sendButton = page1.getByRole('button', {
     name: /^(Enviar pendientes|Enviar todos mis pendientes)$/
   });
-  if (!batchResponse && await rowReady) {
-    for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
-      // The latest row must still belong to the active UI. If auto-flush
-      // removes it concurrently, observe its genuine network receipt instead.
-      const ready = await sendButton.isEnabled().catch(() => false);
-      if (ready) {
-        await sendButton.click({ timeout: 2500 }).catch(() => {
-          // React may legitimately remove a row while its auto-flush commits.
-          // Do not treat a disappearing button as evidence of successful HTTP.
-        });
-      }
-      batchResponse = await waitForDelivery(5000);
+  if (!batchResponse) {
+    // A slow/missing metadata row must NOT veto a user-requested send. A
+    // single manual click waits for the enabled button and joins any active
+    // automatic flight; if the server already committed, the genuine HTTP
+    // receipt wins instead. No extra POST loops.
+    // Check immediate readiness independently from the eventual click. The
+    // async IndexedDB decrypt may finish after the row first becomes visible.
+    // Playwright still waits for the same button to become enabled; false is
+    // not a server acknowledgment and does not suppress the single click.
+    const wasEnabled = await sendButton.isEnabled().catch(() => false);
+    if (!wasEnabled) {
+      console.log('SyncPage: awaiting encrypted-queue hydration before the single manual click');
     }
+    const oneManualClick = sendButton.click({ timeout: 18000 })
+      .then(() => true, () => false);
+    batchResponse = await Promise.race([batchReply, oneManualClick.then(() => null)]);
   }
   if (!batchResponse) batchResponse = await batchReply;
+  if (!batchResponse?.ok()) {
+    let sealedQueue = [];
+    try {
+      sealedQueue = await page1.evaluate(async ({ tenantId, userId }) => {
+        const { offlineQueue } = await import('/src/services/offlineQueue.js');
+        const rows = await offlineQueue.list({
+          authenticated: true, tenant: { id: tenantId }, user: { id: userId }
+        });
+        return rows.map(row => ({
+          state: row.state, attempts: row.attempts,
+          pendingPhoto: Boolean(row.evidence),
+          observationAlreadyApplied: Boolean(row.syncedObservationId),
+          retryDue: row.nextRetryAt ? Date.parse(row.nextRetryAt) <= Date.now() : null,
+          errorCode: row.errorCode || null
+        }));
+      }, { tenantId, userId });
+    } catch (error) {
+      sealedQueue = [{ storageError: String(error?.message || 'unavailable').slice(0, 90) }];
+    }
+    const appliedCount = (await admin.query(
+      'SELECT count(*)::int AS n FROM scouting_observations WHERE tenant_id=$1 AND scouting_run_id=$2 AND notes=$3',
+      [tenantId, committedRunId, fieldObservationNote])).rows[0].n;
+    const buttonEnabled = await sendButton.isEnabled().catch(() => false);
+    const browserOnline = await page1.evaluate(() => navigator.onLine);
+    console.error('Offline delivery diagnostic (no private content): ' +
+      JSON.stringify({ observedDelivery, appliedCount, browserOnline, buttonEnabled, sealedQueue }));
+  }
   assert.ok(batchResponse?.ok(),
     'real authenticated PostGIS batch must commit after SyncPage loads its local queue');
   const batchResult = await batchResponse.json();

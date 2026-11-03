@@ -63,6 +63,16 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   const [storageInfo, setStorageInfo] = useState(null);
   const [requestingPersistence, setRequestingPersistence] = useState(false);
 
+  // A new tenant/actor must not inherit a pending click or its UI feedback.
+  // The old network operation is still scoped and may settle later; it
+  // cannot publish its result into this new authenticated session.
+  useEffect(() => {
+    setSending(false);
+    setSendingOne(null);
+    setNotice('');
+    setLocalError('');
+  }, [activeScope]);
+
   const loadData = useCallback(async () => {
     const requestId = ++serverRequest.current;
     setLoadedServerScope(serverScope);
@@ -138,7 +148,9 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
   }, [loadLocal]);
 
   const sendPending = async () => {
-    if (dataMode !== 'live' || !online || sending || sendingOne || focus.mode === 'invalid') return;
+    const scope = activeScope;
+    if (dataMode !== 'live' || !scope || !online || sending || sendingOne ||
+        focus.mode === 'invalid') return;
     // Background queue flush has scope-level semantics. A screen filter never
     // silently narrows transmission and must not imply selective delivery.
     if (focus.mode === 'run' && !window.confirm(
@@ -150,21 +162,26 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
     try {
       const result = await offlineQueue.flush(session,
         (body) => api.submitSyncBatch(body), {
-          force: true,
+          force: true, waitForBusy: true,
           sendEvidence: (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence)
         });
+      if (scopeRef.current !== scope) return; // Never report another actor's result.
       await Promise.all([loadData(), loadLocal()]);
+      if (scopeRef.current !== scope) return;
       const photoOnlyCount = Number.isSafeInteger(result.photoRecoveryRequired)
         ? result.photoRecoveryRequired : 0;
-      setNotice(result.skipped ? 'La cola ya está siendo procesada en otra pestaña.'
+      setNotice(result.skipped
+        ? 'No se confirmó un envío nuevo: otra sincronización sigue en curso o agotó la espera. Actualizá la cola antes de reintentar.'
         : `Envíos aplicados: ${result.sent}. Conflictos detectados: ${result.conflicts}.` +
           (photoOnlyCount > 0
             ? ` ${photoOnlyCount} fotografía(s) requieren conciliación: no reenviamos sus observaciones. En «Conciliar observaciones», verificá el recibo personal y recuperá solo la foto.`
             : ''));
     } catch (err) {
-      setLocalError(err?.message || 'No se pudo procesar la cola.');
+      if (scopeRef.current === scope) {
+        setLocalError(err?.message || 'No se pudo procesar la cola.');
+      }
     } finally {
-      setSending(false);
+      if (scopeRef.current === scope) setSending(false);
     }
   };
 
@@ -191,7 +208,9 @@ export function SyncPage({ focusRunId = null, onClearFocus }) {
           sendEvidence: (observationId, evidence) => api.submitOfflineEvidence(observationId, evidence)
         });
       if (scopeRef.current !== scope) return;
-      if (result.skipped) setNotice('Otra pestaña está procesando esta cuenta. Probá nuevamente.');
+      if (result.skipped) setNotice(
+        'No se confirmó un envío de esta captura: otra sincronización sigue activa o agotó la espera. Actualizá y comprobá antes de reintentar.'
+      );
       else if (result.photoRecoveryRequired) setNotice(
         'Esta observación está aplicada: usá la recuperación de fotografía con recibo verificado.'
       );

@@ -22,6 +22,22 @@ export function createOfflineQueue({
   withLock = async (_scope, handler) => handler()
 }) {
   const inFlightScopes = new Set();
+  // A manual operator action should not be dropped just because this SAME
+  // actor/tenant's automatic dispatch is still finishing. Never share a flight
+  // between tenants or turn a background retry into a foreground POST.
+  const inFlightFlushes = new Map();
+  const MANUAL_WAIT_MS = 12_000;
+  const waitForFlight = async (flight) => {
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve(flight).then(() => true, () => true),
+        new Promise(resolve => { timer = setTimeout(() => resolve(false), MANUAL_WAIT_MS); })
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   async function list(session) {
     const scope = sessionScope(session);
@@ -165,7 +181,8 @@ export function createOfflineQueue({
   }
 
   async function flush(session, send, {
-    force = false, sendEvidence = null, onlyId = null, manualReview = false
+    force = false, sendEvidence = null, onlyId = null, manualReview = false,
+    waitForBusy = false
   } = {}) {
     const scope = sessionScope(session);
     const single = onlyId !== null;
@@ -176,11 +193,19 @@ export function createOfflineQueue({
         onlyId.slice(scope.length + 1)))) {
       throw new Error('Esta captura pertenece a otra cuenta o no tiene un ID válido.');
     }
-    if (!scope || !isOnline()) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
-    if (inFlightScopes.has(scope)) return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
+    const skipped = { attempted: 0, sent: 0, conflicts: 0, skipped: true };
+    if (!scope || !isOnline()) return skipped;
+    if (inFlightScopes.has(scope)) {
+      // Only a deliberate manual click may join a running background batch.
+      // A previous flight can have changed/deleted the encrypted row, so
+      // ALWAYS start with a new scoped store read after it settles. This
+      // prevents stale-idempotency retries and double photo uploads.
+      const flight = inFlightFlushes.get(scope);
+      if (!waitForBusy || !flight || !(await waitForFlight(flight))) return skipped;
+      if (inFlightScopes.has(scope) || !isOnline()) return skipped;
+    }
     inFlightScopes.add(scope);
-    try {
-      return await withLock(scope, async () => {
+    const operation = Promise.resolve().then(() => withLock(scope, async () => {
         // A selected retry reads ONLY that encrypted draft. The global path
         // keeps its existing FIFO scan, eligibility and retry behavior.
         const items = single
@@ -316,8 +341,12 @@ export function createOfflineQueue({
           }
         }
         return summary;
-      });
+      }, { waitForBusy }));
+    inFlightFlushes.set(scope, operation);
+    try {
+      return await operation;
     } finally {
+      if (inFlightFlushes.get(scope) === operation) inFlightFlushes.delete(scope);
       inFlightScopes.delete(scope);
     }
   }
@@ -326,7 +355,7 @@ export function createOfflineQueue({
   // or preemptively rewriting conflict/auth records before the network call.
   async function flushOne(session, id, send, { sendEvidence = null } = {}) {
     return flush(session, send, {
-      onlyId: id, force: true, manualReview: true, sendEvidence
+      onlyId: id, force: true, manualReview: true, waitForBusy: true, sendEvidence
     });
   }
 
@@ -336,10 +365,34 @@ export function createOfflineQueue({
   };
 }
 
-async function lockAcrossTabs(scope, handler) {
+async function lockAcrossTabs(scope, handler, { waitForBusy = false } = {}) {
   if (typeof navigator === 'undefined' || !navigator.locks?.request) return handler();
-  return navigator.locks.request(`sedeagro:sync:${scope}`, { ifAvailable: true },
-    (lock) => lock ? handler() : ({ attempted: 0, sent: 0, conflicts: 0, skipped: true }));
+  const name = `sedeagro:sync:${scope}`;
+  if (!waitForBusy) {
+    // Automatic dispatch stays non-blocking; no background backlog is built.
+    return navigator.locks.request(name, { ifAvailable: true },
+      lock => lock ? handler() : ({ attempted: 0, sent: 0, conflicts: 0, skipped: true }));
+  }
+  // A click may wait for the OTHER tab's current POST, but not indefinitely.
+  // On abort, do not claim success or mutate/decrypt any stale draft.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    return await navigator.locks.request(name, { signal: controller.signal }, () => {
+      // The deadline applies only to WAITING for another tab's lock.
+      // After acquisition, a slow real HTTP upload must not be misreported
+      // as a harmless skipped request when the 12-second timer expires.
+      clearTimeout(timeout);
+      return handler();
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return { attempted: 0, sent: 0, conflicts: 0, skipped: true };
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export const offlineQueue = createOfflineQueue({
