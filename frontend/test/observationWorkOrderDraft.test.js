@@ -40,6 +40,7 @@ test('persisted private observation yields only an authorized inspection draft w
   assert.equal(form.priority,'urgent');
   assert.equal(form.field_id,fieldId);
   assert.equal(form.campaign_field_id,campaignFieldId);
+  assert.equal(form.origin_observation_id,observationId);
   assert.match(form.instructions,new RegExp(runId));
   assert.match(form.instructions,new RegExp(observationId));
   assert.equal(form.due_at,'');
@@ -113,10 +114,30 @@ test('wiring preserves operator approval, scope, campaign FK, encrypted request 
   assert.match(app,/orderDraft: focus\.orderDraft/);
   assert.match(modal,/initialObservationDraft/);
   assert.match(modal,/campaign_field_id: saved\.body\.campaign_field_id \?\? null/);
+  assert.match(modal,/origin_observation_id: saved\.body\.origin_observation_id/);
   assert.match(modal,/campaign_field_id: null/);
   assert.match(modal,/contextualForm/);
   assert.match(modal,/await saveWorkOrderRecovery\(authority, body\)/);
   assert.match(modal,/requestApi\.createWorkOrder\(body\)/);
   assert.match(modal,/verifyCreatedWorkOrder\(response, body, session\?\.user\?\.id, session\?\.tenant\?\.id\)/);
   assert.doesNotMatch(modal,/source_observation_id|localStorage|sessionStorage/);
+});
+
+test('authoritative persistence is not inferred from textual references or a navigation-only token', () => {
+  const router=source('../../backend/src/modules/workOrders/router.js');
+  const helper=source('../../backend/src/modules/workOrders/observationOrigin.js');
+  const migration=source('../../backend/db/migrations/202611030001_work_order_observation_origins.js');
+  const recovery=source('../src/services/workOrderRecoveryStore.js');
+  assert.match(router,/origin_observation_id: z\.string\(\)\.uuid\(\)\.optional\(\)/);
+  assert.match(router,/await persistObservationOrigin\(req, order\.id, origin\)/);
+  assert.match(router,/await readObservationOrigin\(req, order\.id\)/);
+  assert.match(helper,/scouting_observation_id: observation\.id/);
+  assert.match(helper,/run\.campaign_field_id !== input\.campaign_field_id/);
+  assert.match(helper,/hasCapability\(req\.auth, req\.tenantId, 'scouting\.read'\)/);
+  assert.match(migration,/FORCE ROW LEVEL SECURITY/);
+  assert.match(migration,/FOREIGN KEY \(tenant_id, work_order_id, field_id, campaign_field_id\)/);
+  assert.match(migration,/FOREIGN KEY \(tenant_id, scouting_observation_id, scouting_run_id, field_id\)/);
+  assert.match(migration,/FOREIGN KEY \(tenant_id, scouting_run_id, campaign_field_id\)/);
+  assert.match(recovery,/body\.origin_observation_id/);
+  assert.doesNotMatch(helper,/\.notes|\.point|content_base64|storage_key/);
 });
