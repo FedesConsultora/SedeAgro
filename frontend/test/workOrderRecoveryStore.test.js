@@ -73,9 +73,18 @@ test('modal saves original UUID/body before POST and never auto-replays on resto
   assert.match(modal,/dataMode === 'live'/);
   assert.doesNotMatch(modal,/localStorage|sessionStorage/);
 
-  const restored = modal.slice(modal.indexOf('void readWorkOrderRecovery(authority)'),
-    modal.indexOf('  }, [isOpen, authority, api, dataMode]);'));
-  assert.doesNotMatch(restored, /sendCreate\(/, 'restoring may never dispatch a POST automatically');
+  // Scope strictly to the restore effect even when a new in-memory context
+  // adds a dependency. Never scan the subsequent explicit submit handler.
+  const restoreStart = modal.indexOf('void readWorkOrderRecovery(authority)');
+  const restoreEnd = modal.indexOf(
+    '  }, [isOpen, authority, api, dataMode, initialObservationDraft]);', restoreStart);
+  assert.ok(restoreStart >= 0 && restoreEnd > restoreStart,
+    'the restore effect must still depend on the exact scoped context');
+  const restored = modal.slice(restoreStart, restoreEnd);
+  assert.doesNotMatch(restored, /sendCreate\(/,
+    'restoring may never dispatch a POST automatically');
+  assert.match(restored, /campaign_field_id: saved\.body\.campaign_field_id \?\? null/,
+    'recover the original campaign association, never the new navigation hint');
 });
 
 test('new work order and previous authority cannot render each other private forms', () => {
