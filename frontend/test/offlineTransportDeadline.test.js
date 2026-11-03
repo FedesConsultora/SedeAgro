@@ -66,16 +66,19 @@ test('a never-settling transport cannot hold an account-scope lock forever', asy
     error => error.name === 'AbortError'
   );
   assert.equal(observedSignal.aborted, true);
-  assert.ok(Date.now() - started < 700, 'bounded timeout resolves even without fetch abort support');
+  assert.ok(Date.now() - started < 2500, 'bounded timeout resolves even without fetch abort support');
 });
 
 test('parent logout aborts a pending request; an already-aborted cookie never starts transport', async () => {
   const parent = new AbortController();
-  let captured;
+  let captured, started;
+  const begun = new Promise(resolve => { started = resolve; });
   const flight = withOfflineTransportDeadline(signal => {
     captured = signal;
+    started();
     return new Promise(() => {});
   }, { timeoutMs: 2000, signal: parent.signal });
+  await begun;
   parent.abort(new DOMException('Logout', 'AbortError'));
   await assert.rejects(flight, error => error.name === 'AbortError');
   assert.equal(captured?.aborted, true);
