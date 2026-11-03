@@ -124,6 +124,24 @@ async function reviewJournalMetadata(page) {
   });
 }
 
+// A single momentary zero is not durable retirement. Wait for several
+// independent committed transactions; if ciphertext persists, fail this gate.
+// Never discard or modify rows from the probe, and never log their contents.
+async function waitForReviewJournalRetirement(page, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  let consecutiveEmpty = 0;
+  let remaining = null;
+  while (Date.now() < deadline) {
+    const snapshot = await reviewJournalMetadata(page);
+    remaining = snapshot.rows.length;
+    consecutiveEmpty = remaining === 0 ? consecutiveEmpty + 1 : 0;
+    if (consecutiveEmpty >= 4) return snapshot;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  assert.fail('Encrypted review receipt did not stay retired after authenticated reconciliation (remaining=' +
+    remaining + ')');
+}
+
 try {
   await admin.connect();
   const { rows: [{ database }] } = await admin.query('SELECT current_database() AS database');
@@ -941,50 +959,39 @@ try {
   // browser mount reads AES-GCM data *after* server cookie revalidation;
   // it performs ONLY a real GET, never a second POST.
   await page.unroute(detailEndpoint);
+  // Observe genuine HTTP from Express on this browser session, without
+  // stubbing success. Detail mount and pending-journal recovery each do a GET.
+  const realReviewGets = [];
+  const collectReviewGet = response => {
+    if (response.request().method() === 'GET' && response.status() === 200 &&
+        new URL(response.url()).pathname === '/api/v1/work-orders/' + reviewOrder) {
+      realReviewGets.push(response);
+    }
+  };
+  page.on('response', collectReviewGet);
   await page.reload();
   await page.getByTitle('Órdenes').click();
   await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
   await page.getByPlaceholder('Buscar orden o lote').fill(reviewTitle);
   await page.getByRole('button',{name:'Abrir orden: '+reviewTitle}).click();
   const recoveredReviewDrawer=page.getByRole('dialog',{name:reviewTitle});
-  // The drawer refresh can unmount its transient notice, so assert the
-  // actual CAS deletion in IndexedDB, not a short-lived React message.
-  await page.waitForFunction(async () => {
-    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db=await new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      const count=await new Promise((resolve,reject)=>{
-        const tx=db.transaction('pending-creates','readonly');
-        const op=tx.objectStore('pending-creates').count();
-        op.onsuccess=()=>resolve(op.result);
-        op.onerror=()=>reject(op.error);
-      });
-      return count===0;
-    } finally { db.close(); }
-  },null,{timeout:15000});
+  // A stale UI badge cannot prove the lost-ACK recovery. The real server
+  // must be read again after reload, and the encrypted receipt must remain
+  // absent across multiple committed IndexedDB transactions.
   await recoveredReviewDrawer.getByText('Revisado por coordinación').waitFor();
-  assert.equal(reviewPostCount,1,'Reload recovery GET may not resend the review POST');
+  await waitForReviewJournalRetirement(page);
+  assert.equal(reviewPostCount, 1, 'Reload recovery GET may not resend the review POST');
   await recoveredReviewDrawer.getByRole('button',
-    {name:'Reintentar revisión con la misma clave'}).waitFor({state:'detached'});
-  const sealedAfterReload = await page.evaluate(async () => {
-    const request=indexedDB.open('sedeagro-work-order-review-recovery-v1',1);
-    const db=await new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result);
-      request.onerror=()=>reject(request.error);
-    });
-    try {
-      return await new Promise((resolve,reject)=>{
-        const tx=db.transaction('pending-creates','readonly');
-        const req=tx.objectStore('pending-creates').count();
-        req.onsuccess=()=>resolve(req.result);
-        req.onerror=()=>reject(req.error);
-      });
-    } finally {db.close();}
-  });
-  assert.equal(sealedAfterReload,0,'Only an authorized exact matching GET may clear ciphertext');
+    { name: 'Reintentar revisión con la misma clave' }).waitFor({ state: 'detached' });
+  assert.ok(realReviewGets.length >= 2,
+    'Detail and encrypted-journal recovery must each use an actual authorized GET');
+  const realBodies = await Promise.all(realReviewGets.map(response => response.json()));
+  assert.ok(realBodies.some(body => body?.data?.WorkOrderExecutions?.some(report =>
+    report.id === reviewReport && report.review_status === 'verified' &&
+    report.reviewed_by === ownerA.user.id &&
+    report.review_checklist?.evidence_basis === 'no_files')),
+  'A genuine authorized GET must contain the exact committed review');
+  page.off('response', collectReviewGet);
 
   const reviewRows=(await admin.query(`
     SELECT review_status,reviewed_by,review_checklist
