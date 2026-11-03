@@ -1,5 +1,5 @@
 // A single authoritative RLS-bounded snapshot shared by CSV, PDF and XLSX.
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { z } from 'zod';
 import { Field, Farm, ScoutingObservation, WorkOrder } from '../../models/index.js';
 import { HttpError } from '../../utils/http.js';
@@ -70,7 +70,7 @@ export async function loadFieldReportSnapshot(req) {
     FROM work_order_observation_origins
     WHERE tenant_id = :tenant AND field_id = :field
       AND work_order_id IN (:orderIds)
-  `, { transaction: tx, replacements: {
+  `, { transaction: tx, type: QueryTypes.SELECT, replacements: {
     tenant: req.tenantId, field: field.id, orderIds
   } }) : [];
   const origins = new Map(linked.map(item => [item.work_order_id, {
