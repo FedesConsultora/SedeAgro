@@ -754,13 +754,10 @@ try {
 
   await page1.getByRole('button', { name: 'Sync', exact: true }).click();
   await page1.getByRole('heading', { name: 'Sincronizaciones' }).waitFor();
-  const waitForDelivery = millis => Promise.race([
-    batchReply, new Promise(resolve => setTimeout(() => resolve(null), millis))
-  ]);
-  // React may mount SyncPage before its asynchronous IndexedDB decrypt has
-  // populated pendingCount. A visible but DISABLED header button is not ready
-  // for user interaction; checking it three times without awaiting loading
-  // incorrectly reports a lost POST in the 12-cycle stress run.
+  // The automatic flush may be in-flight when the operator opens SyncPage.
+  // A deliberate click now JOINS that flight, then rescans the real sealed
+  // queue; it does not silently skip or generate another idempotency key.
+  // Allow either the genuine automatic ACK or ONE manual click to win.
   const visibleDraft = page1.getByText(
     'Foto local: campo-ubicacion-privada-reducida.jpg', { exact: false });
   const rowReady = visibleDraft.waitFor({ state: 'visible', timeout: 18000 })
@@ -770,18 +767,12 @@ try {
     name: /^(Enviar pendientes|Enviar todos mis pendientes)$/
   });
   if (!batchResponse && await rowReady) {
-    for (let attempt = 0; attempt < 3 && !batchResponse; attempt++) {
-      // The latest row must still belong to the active UI. If auto-flush
-      // removes it concurrently, observe its genuine network receipt instead.
-      const ready = await sendButton.isEnabled().catch(() => false);
-      if (ready) {
-        await sendButton.click({ timeout: 2500 }).catch(() => {
-          // React may legitimately remove a row while its auto-flush commits.
-          // Do not treat a disappearing button as evidence of successful HTTP.
-        });
-      }
-      batchResponse = await waitForDelivery(5000);
-    }
+    // Playwright's click waits until the button is enabled (after encrypted
+    // IndexedDB hydration); if auto-flush already consumed the draft, there
+    // is nothing left to click. Do not issue three artificial POST retries.
+    const oneManualClick = sendButton.click({ timeout: 18000 })
+      .then(() => true, () => false);
+    batchResponse = await Promise.race([batchReply, oneManualClick.then(() => null)]);
   }
   if (!batchResponse) batchResponse = await batchReply;
   assert.ok(batchResponse?.ok(),
