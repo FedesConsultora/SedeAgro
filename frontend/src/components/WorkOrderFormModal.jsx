@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from '../context/SessionContext.jsx';
 import { Modal } from './Modal.jsx';
+import { workOrderFormFromObservationDraft } from '../services/observationWorkOrderDraft.js';
 import { ResourceLoadNotice } from './ResourceLoadNotice.jsx';
 import { mockData } from '../services/mockData.js';
 import {
@@ -12,6 +13,7 @@ import {
 
 const emptyForm = () => ({
   field_id: '',
+  campaign_field_id: null,
   type: 'application',
   priority: 'normal',
   title: '',
@@ -26,9 +28,10 @@ function localDatetime(instant) {
     .toISOString().slice(0, 16);
 }
 
-export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
+export function WorkOrderFormModal({ isOpen, onClose, onCreated, initialObservationDraft = null }) {
   const { api, dataMode, session } = useSession();
   const authority = workOrderCreateScope(session, dataMode);
+  const contextPrefill = workOrderFormFromObservationDraft(initialObservationDraft, session, dataMode);
   // Render-time fences matter: a fresh tenant/role render may happen before
   // effects clear the previous private list of farm/field names.
   const scopeRef = useRef(authority);
@@ -55,6 +58,8 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     ? formSnapshot.value : emptyForm();
   const [saving, setSaving] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
+  const contextualForm = Boolean(contextPrefill && form.field_id === contextPrefill.field_id &&
+    form.campaign_field_id === contextPrefill.campaign_field_id && submitStatus !== 'uncertain');
   const [error, setError] = useState('');
   const [recoveryState, setRecoveryState] = useState(null);
   const recoveryView = recoveryState?.scope === authority && recoveryState?.api === api
@@ -68,7 +73,9 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
     let active = true;
     submitGate.current.reset();
     requestRef.current = null;
-    setFormSnapshot({ scope: authority, api, value: emptyForm() });
+    const preparedContext = workOrderFormFromObservationDraft(initialObservationDraft, session, dataMode);
+    setFormSnapshot({ scope: authority, api,
+      value: preparedContext ? { ...emptyForm(), ...preparedContext } : emptyForm() });
     setSaving(false);
     setSubmitStatus('');
     setError('');
@@ -86,6 +93,7 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
           requestRef.current = { scope: authority, api, body: saved.body };
           setFormSnapshot({ scope: authority, api, value: {
             field_id: saved.body.field_id,
+            campaign_field_id: saved.body.campaign_field_id ?? null,
             type: saved.body.type,
             priority: saved.body.priority,
             title: saved.body.title,
@@ -105,7 +113,7 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
       });
     }
     return () => { active = false; submitGate.current.reset(); requestRef.current = null; };
-  }, [isOpen, authority, api, dataMode]);
+  }, [isOpen, authority, api, dataMode, initialObservationDraft]);
 
   useEffect(() => {
     if (!isOpen || !authority) return undefined;
@@ -292,6 +300,15 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
         {!authority && dataMode === 'live' &&
           <div className="auth-error" role="alert">Tu sesión no permite crear órdenes de trabajo.</div>}
         {fieldsLoading && <p role="status">Cargando lotes autorizados…</p>}
+        {contextualForm && <p role="status" className="resource-demo-note">
+          Propuesta desde una observación confirmada: lote y campaña precargados,
+          prioridad sugerida e inspección inicial. Revisá título e instrucciones;
+          la orden se creará solo cuando pulses «Crear orden». El origen se anota
+          en instrucciones, sin afirmar un vínculo directo con la observación.
+        </p>}
+        {contextualForm && !fieldsLoading && !fieldsError &&
+          !fields.some(field => field.id === form.field_id) &&
+          <p role="alert" className="auth-error">El lote original no está disponible para esta cuenta. No se puede crear la orden.</p>}
         {recoveryLoading && <p role="status">Buscando órdenes pendientes cifradas…</p>}
         {recoveryBlocked && <p role="alert">La recuperación de órdenes no está disponible. No se enviarán nuevas órdenes.</p>}
         {fieldsError && <ResourceLoadNotice title="lotes de la orden" error={fieldsError}
@@ -321,7 +338,7 @@ export function WorkOrderFormModal({ isOpen, onClose, onCreated }) {
         <label className="form-field">
           <span>Lote *</span>
           <select id="wo-field" value={form.field_id} onChange={set('field_id')}
-            disabled={!editable || fieldsLoading || Boolean(fieldsError)} required>
+            disabled={!editable || fieldsLoading || Boolean(fieldsError) || contextualForm} required>
             <option value="">Seleccioná un lote</option>
             {fields.map((field) => (
               <option key={field.id} value={field.id}>

@@ -85,7 +85,7 @@ try {
   await admin.query(`
     INSERT INTO tenant_modules (tenant_id,module_code,is_enabled,source)
     VALUES ($1,'scouting',true,'override'),($1,'campaigns',true,'override'),
-      ($1,'gis',true,'override')
+      ($1,'gis',true,'override'),($1,'work_orders',true,'override')
     ON CONFLICT (tenant_id,module_code) DO UPDATE SET is_enabled=true,source='override'
   `,[tenantId]);
   const planFarm = async (sql, values) =>
@@ -110,8 +110,8 @@ try {
   `,[tenantId,campaignField,userId]);
   const observation = await planFarm(`
     INSERT INTO scouting_observations
-      (tenant_id,scouting_run_id,field_id,observed_by,observation_type,notes)
-    VALUES ($1,$2,$3,$4,'weed','Evidence browser fixture') RETURNING id
+      (tenant_id,scouting_run_id,field_id,observed_by,observation_type,severity,notes)
+    VALUES ($1,$2,$3,$4,'weed','high','Evidence browser fixture') RETURNING id
   `,[tenantId,run,field,userId]);
   await admin.query(`
     INSERT INTO evidence_assets
@@ -132,6 +132,71 @@ try {
   assert.equal(await panel.getByRole('button',{name:'Verificar SHA-256'}).count(),10);
   await panel.getByText('Página 1 · 10 archivos en esta página').waitFor();
   console.log('PASS: real cookie/tenant run returns ten live evidence rows, no blob downloads');
+
+  // The pilot flow must not force an agronomic coordinator to retype the lot
+  // after a real persisted field observation. This is an explicit DRAFT:
+  // the operator reviews it before a single real POST under tenant RLS.
+  const fromObservation = page.getByRole('button',{
+    name:'Preparar orden desde observación ' + observation.slice(0,8)
+  });
+  await fromObservation.waitFor();
+  await fromObservation.click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  const originDialog=page.getByRole('dialog',{name:'Nueva orden de trabajo'});
+  await originDialog.getByText('Buscando órdenes pendientes cifradas…').waitFor({state:'hidden'});
+  await originDialog.getByText(/Propuesta desde una observación confirmada/).waitFor();
+  // The encrypted-journal check and authorized GET /fields are independent.
+  // React may render the contextual note before the real lot <option>
+  // exists; wait for the server-backed selector, not a transient empty DOM.
+  await originDialog.locator('#wo-field option[value="' + field + '"]')
+    .waitFor({ state: 'attached' });
+  assert.equal(await originDialog.locator('#wo-field').inputValue(),field);
+  assert.equal(await originDialog.locator('#wo-field').isDisabled(),true,
+    'an observation-origin order must not silently point at another lot');
+  assert.equal(await originDialog.locator('#wo-type').inputValue(),'inspection',
+    'severity must never prescribe pesticide/application automatically');
+  assert.equal(await originDialog.locator('#wo-priority').inputValue(),'high');
+  assert.equal(await originDialog.locator('#wo-title').inputValue(),'Verificar hallazgo de malezas');
+  const instructions=await originDialog.locator('#wo-instructions').inputValue();
+  assert.ok(instructions.includes(run) && instructions.includes(observation));
+  assert.equal(instructions.includes('Evidence browser fixture'),false,
+    'private scouting notes cannot be copied to the order');
+  let workOrderPostCount=0;
+  const countOrderRequest=request => {
+    if (request.method()==='POST' &&
+        new URL(request.url()).pathname==='/api/v1/work-orders') workOrderPostCount++;
+  };
+  page.on('request',countOrderRequest);
+  const creationResponse=page.waitForResponse(res =>
+    new URL(res.url()).pathname==='/api/v1/work-orders' &&
+    res.request().method()==='POST');
+  await originDialog.getByRole('button',{name:'Crear orden'}).click();
+  const createdResponse=await creationResponse;
+  assert.equal(createdResponse.status(),201,await createdResponse.text());
+  const creation=await createdResponse.json();
+  assert.equal(creation.replayed,false);
+  assert.equal(creation.data.tenant_id,tenantId);
+  assert.equal(creation.data.field_id,field);
+  assert.equal(creation.data.campaign_field_id,campaignField);
+  assert.equal(creation.data.type,'inspection');
+  assert.equal(creation.data.priority,'high');
+  assert.equal(creation.data.status,'draft');
+  assert.equal(creation.data.requested_by,userId);
+  assert.equal(workOrderPostCount,1,'the contextual draft needs one explicit user submission');
+  const sqlOrder=(await admin.query(`
+    SELECT count(*)::int AS n FROM work_orders
+    WHERE tenant_id=$1 AND id=$2 AND field_id=$3 AND campaign_field_id=$4
+      AND type='inspection' AND priority='high' AND status='draft'
+  `,[tenantId,creation.data.id,field,campaignField])).rows[0].n;
+  assert.equal(sqlOrder,1,'PostGIS must contain exactly the contextual order under the correct campaign/lot');
+  await originDialog.waitFor({state:'detached'});
+  page.off('request',countOrderRequest);
+  await page.getByRole('button',{name:'Abrir orden: Verificar hallazgo de malezas'}).waitFor();
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  console.log('PASS: persisted observation -> real authenticated inspection draft -> exact campaign/lot and one work-order PostgreSQL COMMIT');
+
   await page.evaluate(() => {
     const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
     window.__gpsDescriptor = original ?? null;
