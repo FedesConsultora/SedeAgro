@@ -997,6 +997,11 @@ try {
       1.50,'Informe para revisar sin respaldo documental.')
     RETURNING id
   `,[ownerA.tenant.id,undeliveredOrder,extraAuthor])).rows[0].id;
+  // Fixture was inserted directly in PostGIS; the page's prior authorized
+  // work-order snapshot cannot contain it until a fresh real API load.
+  await page.reload();
+  await page.getByTitle('Órdenes').click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
   await page.getByPlaceholder('Buscar orden o lote').fill(undeliveredTitle);
   await page.getByRole('button',{name:'Abrir orden: '+undeliveredTitle}).click();
   const undeliveredDrawer=page.getByRole('dialog',{name:undeliveredTitle});
