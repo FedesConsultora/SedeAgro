@@ -13,8 +13,9 @@ test('CSV downloads only from actual cookie-authenticated reports client, never 
   assert.match(card, /dataMode !== 'live'/);
   assert.match(card, /dataMode === 'live' &&/);
   assert.match(card, /scope !== currentScope\.current/);
-  assert.match(card, /Blob\(\[response\.data\.csv\]/);
+  assert.match(card, /decodeFieldCsv\(response\?\.data, fieldId\)/);
   assert.match(card, /URL\.revokeObjectURL\(url\)/);
+  assert.match(card, /decodeFieldDocument\(response\?\.data, format, fieldId\)/);
   assert.match(reports, /FieldReportCard/);
 });
 
