@@ -23,6 +23,7 @@ import { requireEntitlement } from '../../infra/http/middlewares/entitlementGuar
 import { asyncHandler, validate, HttpError } from '../../utils/http.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 import { canTransitionWorkOrder } from './workOrderPolicy.js';
+import { readObservationWorkOrderLinks } from './observationLinks.js';
 import { reserveWorkOrderCreate, completeWorkOrderCreate } from './createIdempotency.js';
 import {
   prepareObservationOrigin, persistObservationOrigin, readObservationOrigin, withObservationOrigin
@@ -224,6 +225,23 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
   });
   res.json({ data: orders });
 }));
+
+// Private, read-only return path: authenticated coordinators can discover
+// which real orders originated in a run's observations. No notes, coordinates,
+// photos, or contractor-readable provenance are included in this response.
+workOrdersRouter.get('/observation-links/runs/:runId',
+  requireCapability('orders.read'),
+  asyncHandler(async (req, res) => {
+    const parsed = z.string().uuid().safeParse(req.params.runId);
+    if (!parsed.success) {
+      throw new HttpError(404, 'Recorrida no encontrada.',
+        undefined, 'ORDER_OBSERVATION_LINKS_RUN_NOT_FOUND');
+    }
+    const rows = await readObservationWorkOrderLinks(req, parsed.data);
+    res.set('Cache-Control', 'private, no-store');
+    res.json({ data: { scoutingRunId: parsed.data, rows } });
+  })
+);
 
 workOrdersRouter.post('/', requireCapability('orders.write'), validate(workOrderSchema), asyncHandler(async (req, res) => {
   // A replay never bypasses current scouting permission/entitlement. The
