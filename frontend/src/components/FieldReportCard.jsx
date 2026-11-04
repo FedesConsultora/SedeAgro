@@ -74,7 +74,10 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
             !response.data.csv.startsWith('\uFEFF') ||
             response.data.mimeType !== 'text/csv;charset=utf-8' ||
             !Number.isSafeInteger(response.data.counts?.observations) ||
-            !Number.isSafeInteger(response.data.counts?.workOrders)) {
+            !Number.isSafeInteger(response.data.counts?.workOrders) ||
+            !Number.isSafeInteger(response.data.counts?.executions) ||
+            response.data.counts.executions < 0 ||
+            response.data.counts.executions > 200) {
           throw new Error('El servidor devolvió un CSV inválido. No se descargó ningún archivo.');
         }
         blob = new Blob([response.data.csv], { type: response.data.mimeType });
@@ -94,7 +97,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
       } finally {
         setTimeout(() => URL.revokeObjectURL(url), 0);
       }
-      setExportStatus(`Reporte ${format.toUpperCase()} descargado: ${counts.observations} observaciones y ${counts.workOrders} órdenes.`);
+      setExportStatus(`Reporte ${format.toUpperCase()} descargado: ${counts.observations} observaciones, ${counts.workOrders} órdenes y ${counts.executions} ejecuciones declaradas (con estado de revisión).`);
     } catch (error) {
       if (scope === currentScope.current && requestApi === currentApiRef.current) {
         setExportError(error?.message || 'No se pudo generar el reporte.');
@@ -204,7 +207,7 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
                   </button>
                 ))}
               </div>
-              <small>Datos actuales del servidor; fechas UTC, máximo 200 registros por tipo.</small>
+              <small>Datos reales del servidor: observaciones, órdenes y ejecuciones con revisión independiente. Las fechas son UTC, máximo 200 registros por tipo. Las ejecuciones se filtran por su fecha de finalización.</small>
               {exportError && <p role="alert" style={{ width: '100%', margin: 0 }}>{exportError}</p>}
               {exportStatus && <p role="status" style={{ width: '100%', margin: 0 }}>{exportStatus}</p>}
             </section>
