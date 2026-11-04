@@ -48,6 +48,8 @@ export function invitationPublicShape(invitation) {
     roleCode: invitation.role_code,
     status: invitation.status,
     expiresAt: invitation.expires_at,
-    createdAt: invitation.created_at
+    createdAt: invitation.created_at,
+    // Optimistic lock witness: no token, membership or credential is disclosed.
+    updatedAt: invitation.updated_at
   };
 }
