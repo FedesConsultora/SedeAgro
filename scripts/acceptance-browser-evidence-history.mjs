@@ -276,11 +276,13 @@ try {
     SELECT count(*)::int AS n FROM work_order_executions
     WHERE tenant_id=$1 AND id=$2 AND work_order_id=$3 AND review_status='submitted'
   `,[tenantId,pendingExecution,creation.data.id])).rows[0].n,1);
+  page.on('request',countOrderRequest);
   await pendingButton.click();
   await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
   await page.getByText('Origen de monitoreo verificado').waitFor();
   assert.equal(workOrderPostCount,1,
     'navigating from a report must never create a second work order');
+  page.off('request',countOrderRequest);
   await page.getByTitle('Monitoreo').click();
   await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
   await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
