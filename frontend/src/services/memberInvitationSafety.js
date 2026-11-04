@@ -50,6 +50,7 @@ export function checkedMemberInvitations(response) {
     !MEMBER_INVITE_ROLES.includes(row.roleCode) ||
     !['pending', 'accepted', 'revoked'].includes(row.status) ||
     !Number.isFinite(Date.parse(row.expiresAt)) ||
+    !Number.isFinite(Date.parse(row.updatedAt)) ||
     Object.hasOwn(row, 'token') || Object.hasOwn(row, 'tokenHash'))) {
     throw new Error('El servidor devolvió invitaciones inválidas o con datos secretos.');
   }
@@ -77,4 +78,38 @@ export function confirmMemberActivation(response, submittedToken) {
     throw new Error('El servidor no confirmó la activación para esta empresa.');
   }
   return { tenantName: data.tenant.name, role: data.roleCode };
+}
+
+
+// Lost manual codes cannot be recovered. An explicit rotation invalidates
+// the old token. The revision protects against another administrator having
+// already renewed it; client state never grants a membership.
+export function prepareMemberInviteRotation(row, session, dataMode) {
+  const scope = memberInviteAuthority(session, dataMode);
+  if (!scope) throw new Error('Solo la administración de empresa puede renovar invitaciones.');
+  if (!row || !UUID.test(row.id || '') || row.status !== 'pending' ||
+      !MEMBER_INVITE_ROLES.includes(row.roleCode) ||
+      typeof row.email !== 'string' || !EMAIL.test(row.email) ||
+      !Number.isFinite(Date.parse(row.expiresAt)) ||
+      Date.parse(row.expiresAt) <= Date.now() ||
+      typeof row.updatedAt !== 'string' ||
+      !Number.isFinite(Date.parse(row.updatedAt))) {
+    throw new Error('La invitación ya no está pendiente o no puede renovarse.');
+  }
+  return Object.freeze({ scope, tenantId: session.tenant.id, id: row.id,
+    email: row.email, roleCode: row.roleCode,
+    expectedUpdatedAt: row.updatedAt });
+}
+
+export function confirmMemberInviteRotation(response, prepared) {
+  const confirmed = confirmMemberInvitation(response, {
+    tenantId: prepared.tenantId,
+    body: { email: prepared.email, roleCode: prepared.roleCode }
+  });
+  if (confirmed.invitation.id !== prepared.id ||
+      !Number.isFinite(Date.parse(confirmed.invitation.updatedAt)) ||
+      Date.parse(confirmed.invitation.updatedAt) <= Date.parse(prepared.expectedUpdatedAt)) {
+    throw new Error('El servidor no confirmó la renovación exacta. No compartas el código.');
+  }
+  return confirmed;
 }
