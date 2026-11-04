@@ -421,13 +421,13 @@ jobs:
             --connect-timeout 15 --max-time 180 \
             "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" \
             --output "$archive"
-          printf '%s  %s\\n' \
+          printf '%s  %s\n' \
             'c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0' \
             "$archive" | sha256sum --check --status
           tar -xzf "$archive" -C "$RUNNER_TEMP/sedeagro-trivy" trivy
           chmod 755 "$RUNNER_TEMP/sedeagro-trivy/trivy"
           "$RUNNER_TEMP/sedeagro-trivy/trivy" --version | grep -Fx 'Version: 0.76.1'
-          printf '%s\\n' "$RUNNER_TEMP/sedeagro-trivy" >> "$GITHUB_PATH"
+          printf '%s\n' "$RUNNER_TEMP/sedeagro-trivy" >> "$GITHUB_PATH"
       - name: Scan built backend OS and libraries with Trivy v0.76.1
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # pinned v0.36.0
         with:
