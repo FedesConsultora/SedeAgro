@@ -89,8 +89,8 @@ function contentLines(snapshot) {
     lines.push('Ejecucion: ' + item.id + ' | Orden: ' + item.work_order_id);
     lines.push('Tipo: ' + item.work_order_type + ' | Prioridad: ' + item.work_order_priority);
     lines.push('Inicio UTC: ' + new Date(item.started_at).toISOString());
-    lines.push('Fin UTC: ' + new Date(item.finished_at).toISOString() +
-      ' | Area declarada (ha): ' + item.worked_area_hectares);
+    lines.push('Fin UTC: ' + new Date(item.finished_at).toISOString());
+    lines.push('Area declarada (ha): ' + item.worked_area_hectares);
     lines.push('Revision independiente: ' + item.review_status +
       (item.reviewed_at ? ' | Revisado UTC: ' + new Date(item.reviewed_at).toISOString() :
         ' | Aun sin revision'));
