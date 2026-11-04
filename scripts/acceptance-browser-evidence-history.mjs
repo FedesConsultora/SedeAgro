@@ -41,6 +41,7 @@ let tenantId;
 let userId;
 let secondTenantId;
 let secondUserId;
+let reviewSubmitterId;
 let backend;
 let vite;
 let browser;
@@ -85,7 +86,8 @@ try {
   await admin.query(`
     INSERT INTO tenant_modules (tenant_id,module_code,is_enabled,source)
     VALUES ($1,'scouting',true,'override'),($1,'campaigns',true,'override'),
-      ($1,'gis',true,'override'),($1,'work_orders',true,'override')
+      ($1,'gis',true,'override'),($1,'work_orders',true,'override'),
+      ($1,'reports',true,'override')
     ON CONFLICT (tenant_id,module_code) DO UPDATE SET is_enabled=true,source='override'
   `,[tenantId]);
   const planFarm = async (sql, values) =>
@@ -235,6 +237,55 @@ try {
     name:'Abrir orden vinculada '+creation.data.id
   }).waitFor();
   console.log('PASS: persisted observation -> one authenticated work order -> reverse SQL link -> authorized order detail and back');
+
+  // The operational field report is a new way back to real pending reviews.
+  // Create an attributable contractor declaration in the DISPOSABLE test DB:
+  // use a second user because the logged-in admin cannot review their own work.
+  reviewSubmitterId=(await admin.query(`
+    INSERT INTO users(full_name,email,password_hash)
+    VALUES('Review Browser Contractor',$1,'fixture') RETURNING id
+  `,['review-contractor-'+suffix+'@example.test'])).rows[0].id;
+  await admin.query(`
+    INSERT INTO memberships(tenant_id,user_id,role_code,status)
+    VALUES($1,$2,'contractor','active')
+  `,[tenantId,reviewSubmitterId]);
+  await admin.query(`
+    UPDATE work_orders SET status='in_progress',updated_at=now()
+    WHERE tenant_id=$1 AND id=$2
+  `,[tenantId,creation.data.id]);
+  const pendingExecution=(await admin.query(`
+    INSERT INTO work_order_executions
+      (tenant_id,work_order_id,submitted_by,started_at,finished_at,
+       worked_area_hectares,result_summary,review_status)
+    VALUES ($1,$2,$3,now()-interval '12 minutes',now()-interval '2 minutes',
+      1.25,'Verified database fixture for pending field review','submitted')
+    RETURNING id
+  `,[tenantId,creation.data.id,reviewSubmitterId])).rows[0].id;
+  await page.getByTitle('Reportes').click();
+  await page.getByRole('heading',{name:'Reportes'}).waitFor();
+  await page.getByRole('button',{name:'Ver reporte'}).click();
+  const reviewCard=page.getByRole('region',{
+    name:'Revisiones de ejecuciones del lote Evidence Browser Lote'
+  });
+  const pendingButton=reviewCard.getByRole('button',{
+    name:'Abrir orden pendiente de revisión '+creation.data.id
+  });
+  await pendingButton.waitFor();
+  assert.ok(await reviewCard.getByText('pendientes de revisión').count());
+  assert.equal((await admin.query(`
+    SELECT count(*)::int AS n FROM work_order_executions
+    WHERE tenant_id=$1 AND id=$2 AND work_order_id=$3 AND review_status='submitted'
+  `,[tenantId,pendingExecution,creation.data.id])).rows[0].n,1);
+  await pendingButton.click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByText('Origen de monitoreo verificado').waitFor();
+  assert.equal(workOrderPostCount,1,
+    'navigating from a report must never create a second work order');
+  await page.getByTitle('Monitoreo').click();
+  await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
+  await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
+  await panel.getByText('Archivos registrados · página 1').waitFor();
+  console.log('PASS: real report count and bounded pending review -> authorized existing order detail -> scouting; no extra POST');
 
   await page.evaluate(() => {
     const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');
@@ -602,6 +653,7 @@ try {
   if(backend)backend.kill();
   if(secondTenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[secondTenantId]).catch(()=>{});
   if(secondUserId)await admin.query('DELETE FROM users WHERE id=$1',[secondUserId]).catch(()=>{});
+  if(reviewSubmitterId)await admin.query('DELETE FROM users WHERE id=$1',[reviewSubmitterId]).catch(()=>{});
   if(tenantId)await admin.query('DELETE FROM tenants WHERE id=$1',[tenantId]).catch(()=>{});
   if(userId)await admin.query('DELETE FROM users WHERE id=$1',[userId]).catch(()=>{});
   await admin.end().catch(()=>{});
