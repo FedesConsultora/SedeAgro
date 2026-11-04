@@ -3,7 +3,7 @@ import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } fro
 import { useSession } from '../context/SessionContext.jsx';
 import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport,
   canOpenFieldReviewOrders } from '../services/reportAccessContext.js';
-import { decodeFieldDocument } from '../services/reportDownload.js';
+import { decodeFieldCsv, decodeFieldDocument } from '../services/reportDownload.js';
 
 const STATUS_ES = {
   planned: 'Planificado', active: 'Activo', closed: 'Cerrado',
@@ -71,23 +71,9 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares, on
         ? await api.exportFieldCsv(fieldId, { from, to })
         : await api.exportFieldDocument(fieldId, format, { from, to });
       if (scope !== currentScope.current || requestApi !== currentApiRef.current) return;
-      let blob, counts;
-      if (format === 'csv') {
-        if (typeof response?.data?.csv !== 'string' ||
-            !response.data.csv.startsWith('\uFEFF') ||
-            response.data.mimeType !== 'text/csv;charset=utf-8' ||
-            !Number.isSafeInteger(response.data.counts?.observations) ||
-            !Number.isSafeInteger(response.data.counts?.workOrders) ||
-            !Number.isSafeInteger(response.data.counts?.executions) ||
-            response.data.counts.executions < 0 ||
-            response.data.counts.executions > 200) {
-          throw new Error('El servidor devolvió un CSV inválido. No se descargó ningún archivo.');
-        }
-        blob = new Blob([response.data.csv], { type: response.data.mimeType });
-        counts = response.data.counts;
-      } else {
-        ({ blob, counts } = decodeFieldDocument(response?.data, format));
-      }
+      const { blob, counts } = format === 'csv'
+        ? decodeFieldCsv(response?.data, fieldId)
+        : decodeFieldDocument(response?.data, format, fieldId);
       if (scope !== currentScope.current || requestApi !== currentApiRef.current) return;
       const url = URL.createObjectURL(blob);
       try {
