@@ -20,6 +20,12 @@ const inviteSchema = z.object({
   roleCode: z.enum(['scout', 'contractor', 'agronomic_coordinator', 'producer_viewer'])
 }).strict();
 
+// The known revision is not authorization. It only protects an administrator
+// from invalidating a newly generated code with a stale parallel request.
+const rotateSchema = z.object({
+  expectedUpdatedAt: z.iso.datetime({ offset: true })
+}).strict();
+
 const acceptSchema = z.object({
   token: z.string().min(1).max(110),
   password: z.string().min(1).max(512),
@@ -162,6 +168,58 @@ invitationScopedRouter.delete('/:invitationId',
     await recordInvitationAudit({ transaction, tenantId: req.tenantId,
       actorId: req.auth.user.id, invitation, action: 'member_invitation.revoked' });
     res.status(204).end();
+  })
+);
+
+// A lost manual code cannot be retrieved from SHA-256 storage. An admin can
+// instead explicitly invalidate it and generate exactly one NEW secret while
+// retaining the intended recipient, role and reserved seat.
+invitationScopedRouter.post('/:invitationId/rotate',
+  requireCapability('members.invite'),
+  rateLimit({ windowMs: 10 * 60 * 1000, max: 6, keyPrefix: 'member-invite-rotate' }),
+  validate(rotateSchema),
+  asyncHandler(async (req, res) => {
+    const parsed = z.string().uuid().safeParse(req.params.invitationId);
+    if (!parsed.success) throw opaqueTokenError();
+    const transaction = req.dbTransaction;
+    const tenant = await lockActiveTenant(req.tenantId, transaction);
+    const invitation = await MemberInvitation.findOne({
+      where: { id: parsed.data, tenant_id: tenant.id },
+      transaction, lock: transaction.LOCK.UPDATE
+    });
+    if (!invitation) throw opaqueTokenError();
+    const now = new Date();
+    if (invitation.status !== 'pending' || invitation.expires_at <= now) {
+      throw new HttpError(410, 'La invitación ya no está pendiente y vigente.',
+        undefined, 'INVITATION_UNAVAILABLE');
+    }
+    if (!isInvitableRole(invitation.role_code)) {
+      throw new HttpError(422, 'Rol de invitación no permitido.',
+        undefined, 'INVITATION_ROLE_INVALID');
+    }
+    const previousTime = new Date(invitation.updated_at).getTime();
+    if (!Number.isFinite(previousTime) ||
+        new Date(req.body.expectedUpdatedAt).getTime() !== previousTime) {
+      throw new HttpError(409, 'La invitación cambió. Actualizá la lista antes de emitir otro código.',
+        undefined, 'INVITATION_ROTATION_STALE');
+    }
+    const token = newInvitationToken(tenant.id);
+    const identity = invitationTokenIdentity(token);
+    // Monotonic millisecond revision: two concurrent admins cannot both
+    // receive seemingly valid codes for the same prior revision.
+    const updatedAt = new Date(Math.max(now.getTime(), previousTime + 1));
+    await invitation.update({
+      token_hash: identity.tokenHash,
+      expires_at: new Date(now.getTime() + INVITATION_TTL_MS),
+      updated_at: updatedAt
+    }, { transaction, silent: true });
+    await recordInvitationAudit({ transaction, tenantId: tenant.id,
+      actorId: req.auth.user.id, invitation, action: 'member_invitation.rotated' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(200).json({
+      data: invitationPublicShape(invitation),
+      delivery: { channel: 'manual', delivered: false, token }
+    });
   })
 );
 
