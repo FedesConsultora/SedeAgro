@@ -177,7 +177,7 @@ invitationScopedRouter.delete('/:invitationId',
 // retaining the intended recipient, role and reserved seat.
 invitationScopedRouter.post('/:invitationId/rotate',
   requireCapability('members.invite'),
-  rateLimit({ windowMs: 10 * 60 * 1000, max: 6, keyPrefix: 'member-invite-rotate' }),
+  rateLimit({ windowMs: 10 * 60 * 1000, max: 8, keyPrefix: 'member-invite-rotate' }),
   validate(rotateSchema),
   asyncHandler(async (req, res) => {
     const parsed = z.string().uuid().safeParse(req.params.invitationId);
