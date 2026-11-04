@@ -31,7 +31,8 @@ test('PDF and XLSX response decoder validates signatures and bytes', async () =>
 });
 test('mismatched MIME, damaged files and too-large payloads block downloads', () => {
   assert.throws(() => decodeFieldDocument(payload('pdf', Buffer.from([80,75,3,4])), 'pdf', FIELD), /firma inválida/);
-  assert.throws(() => decodeFieldDocument(payload('pdf', Buffer.from('%PDF-1.4')), 'xlsx', FIELD), /inválida/);
+  assert.throws(() => decodeFieldDocument({ ...payload('pdf', Buffer.from('%PDF-1.4')),
+    filename: `reporte-lote-${FIELD}.xlsx` }, 'xlsx', FIELD), /inválida/);
   assert.throws(() => decodeFieldDocument({ ...payload('pdf', Buffer.from('%PDF-1.4')),
     size_bytes: 100 }, 'pdf', FIELD), /tamaño inesperado/);
   assert.throws(() => decodeFieldDocument({ ...payload('pdf', Buffer.from('%PDF-1.4')),
@@ -60,7 +61,7 @@ test('execution counts are mandatory truthful download metadata, not silently tr
     {...good.counts,executions:2.5},
     {...good.counts,executions:'3'}
   ]){
-    assert.throws(()=>decodeFieldDocument({...good,counts},'pdf'),/reporte inválida/);
+    assert.throws(()=>decodeFieldDocument({...good,counts},'pdf',FIELD),/reporte inválida/);
   }
   assert.match(reportCard,/counts\.executions/);
   assert.match(reportCard,/ejecuciones declaradas/);
