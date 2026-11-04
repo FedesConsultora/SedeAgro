@@ -53,13 +53,14 @@ function wrapped(text, max = 92) {
     });
 }
 function contentLines(snapshot) {
-  const { field, observations, workOrders, period } = snapshot;
+  const { field, observations, workOrders, executions = [], period } = snapshot;
   const lines = [
     'SEDEAGRO | REPORTE DE LOTE',
     'Lote: ' + (field.name || '-') + ' | Establecimiento: ' + (field.Farm?.name || '-'),
     'ID: ' + field.id + ' | Hectareas: ' + (field.area_hectares ?? '-'),
     'Periodo UTC: ' + (period.from || 'inicio') + ' a ' + (period.to || 'actualidad'),
-    'Observaciones: ' + observations.length + ' | Ordenes: ' + workOrders.length,
+    'Observaciones: ' + observations.length + ' | Ordenes: ' + workOrders.length +
+      ' | Ejecuciones: ' + executions.length,
     '------------------------------------------------------------',
     'OBSERVACIONES'
   ];
@@ -80,6 +81,25 @@ function contentLines(snapshot) {
       lines.push('Recorrida de origen: ' +
         item.observation_origin.scouting_run_id);
     }
+    lines.push('');
+  }
+  lines.push('------------------------------------------------------------',
+    'EJECUCIONES DECLARADAS Y REVISIONES');
+  for (const item of executions) {
+    lines.push('Ejecucion: ' + item.id + ' | Orden: ' + item.work_order_id);
+    lines.push('Tipo: ' + item.work_order_type + ' | Prioridad: ' + item.work_order_priority);
+    lines.push('Inicio UTC: ' + new Date(item.started_at).toISOString());
+    lines.push('Fin UTC: ' + new Date(item.finished_at).toISOString() +
+      ' | Area declarada (ha): ' + item.worked_area_hectares);
+    lines.push('Revision independiente: ' + item.review_status +
+      (item.reviewed_at ? ' | Revisado UTC: ' + new Date(item.reviewed_at).toISOString() :
+        ' | Aun sin revision'));
+    lines.push(...wrapped('Resultado declarado: ' + item.result_summary));
+    if (item.scouting_observation_id) {
+      lines.push('Origen verificado: observacion ' + item.scouting_observation_id);
+      lines.push('Recorrida de origen: ' + item.scouting_run_id);
+    }
+    // Never emit the sensitive reviewer note/checklist, evidence or GPS.
     lines.push('');
   }
   return lines.flatMap(line => wrapped(line));
