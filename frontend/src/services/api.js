@@ -138,6 +138,10 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     revokeMemberInvitation: (id) => request(`/auth/invitations/${encodeURIComponent(id)}`, {
       method: 'DELETE', silent: true
     }),
+    rotateMemberInvitation: (id, expectedUpdatedAt) =>
+      request(`/auth/invitations/${encodeURIComponent(id)}/rotate`, {
+        method: 'POST', body: { expectedUpdatedAt }, silent: true
+      }),
     bootstrap: () => request('/catalogs/bootstrap'),
     producers: () => request('/farms/producers'),
     createProducer: (body) => request('/farms/producers', { method: 'POST', body }),
