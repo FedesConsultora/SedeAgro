@@ -126,7 +126,7 @@ function Shell() {
           focusOrderId={focused?.view === 'orders' ? focused.id : null}
           observationDraft={focused?.view === 'orders' ? focused.orderDraft : null}
           onClearObservationDraft={() => setFocused(null)} />}
-        {currentView === 'reports'    && <ReportsPage />}
+        {currentView === 'reports'    && <ReportsPage onNavigate={handleViewChange} />}
         {currentView === 'teams'      && <TeamPage />}
         {currentView === 'admin'      && <TenantAdminPage />}
         {currentView === 'platform'   && <PlatformAdminPage />}

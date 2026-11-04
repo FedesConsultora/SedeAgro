@@ -476,6 +476,24 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
     }), 201, 'contractor submits real execution report').data;
     assert.equal(execution.submitted_by, contractor.user);
     assert.equal(execution.review_status, 'submitted');
+    const reviewSummaryPath = '/reports/field/' + field.id;
+    const beforeReview = check(await request(reviewSummaryPath, {
+      actor: coordinator
+    }), 200, 'coordinator sees execution backlog without private evidence').data;
+    assert.equal(beforeReview.reviewSummary.submitted, 1);
+    assert.equal(beforeReview.reviewSummary.verified, 0);
+    assert.equal(beforeReview.reviewSummary.rejected, 0);
+    assert.equal(beforeReview.reviewSummary.recentPending.length, 1);
+    assert.equal(beforeReview.reviewSummary.recentPending[0].execution_id, execution.id);
+    assert.equal(beforeReview.reviewSummary.recentPending[0].work_order_id, order.id);
+    assert.equal(beforeReview.reviewSummary.recentPending[0].field_id, field.id);
+    assert.equal(beforeReview.reviewSummary.recentPending[0].title, order.title);
+    assert.equal(JSON.stringify(beforeReview.reviewSummary).includes('result_summary'),false);
+    assert.equal(JSON.stringify(beforeReview.reviewSummary).includes('review_note'),false);
+    check(await request(reviewSummaryPath, { actor: contractor }), 403,
+      'contractor may not read pending reviews by report');
+    check(await request(reviewSummaryPath, { actor: outsider }), 404,
+      'foreign company may not enumerate pending review queue');
     check(await request('/work-orders/' + order.id + '/executions', {
       actor: contractor, method: 'POST', body: executionBody
     }), 409, 'duplicate execution submission cannot create second pending report');
@@ -543,6 +561,13 @@ test('0U full HTTP actor chain: founder -> invitations -> GPS evidence -> contra
     }), 200, 'different active actor verifies work with private evidence').data;
     assert.equal(verified.review_status, 'verified');
     assert.equal(verified.reviewed_by, coordinator.user);
+    const afterReview = check(await request(reviewSummaryPath, {
+      actor: coordinator
+    }), 200, 'review backlog refreshes after independent review').data.reviewSummary;
+    assert.equal(afterReview.submitted, 0);
+    assert.equal(afterReview.verified, 1);
+    assert.equal(afterReview.rejected, 0);
+    assert.deepEqual(afterReview.recentPending, []);
     check(await request(reviewPath, {
       actor: admin, method: 'POST', body: review
     }), 409, 'execution cannot be reviewed twice');

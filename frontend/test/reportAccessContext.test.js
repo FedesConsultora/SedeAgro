@@ -58,7 +58,10 @@ test('render-time masking hides the old summary BEFORE effects clear state', () 
 });
 
 test('field summary only accepts the selected ID, not another field in the same tenant', () => {
-  const payload = { data: { field: { id: 'field-1' }, workOrdersSummary: { open: 3 } } };
+  const payload = { data: { field: { id: 'field-1' },
+    workOrdersSummary: { open: 3 },
+    reviewSummary: { submitted: 0, verified: 0, rejected: 0, recentPending: [] }
+  } };
   assert.equal(confirmFieldReportResponse(payload, 'field-1'), payload.data);
   for (const invalid of [
     null, {}, { data: null }, { data: {} }, { data: { field: { id: 'field-2' } } }

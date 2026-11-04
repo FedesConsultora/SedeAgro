@@ -269,7 +269,70 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     assert.equal(summary.workOrdersSummary.recent.length, 5);
     assert.ok(summary.workOrdersSummary.recent.every(order =>
       typeof order.id === 'string' && typeof order.title === 'string'));
+    assert.deepEqual(summary.reviewSummary,
+      { submitted: 0, verified: 0, rejected: 0, recentPending: [] },
+      'old work orders without execution cannot become fictional pending reviews');
+
+    // Real disposable database: 7 independent execution declarations in ONE
+    // field, with a distinct coordinator acting as reviewer. The HTTP
+    // response must count ALL states but never return more than five actions.
+    const inserted = (await owner.query(`
+      INSERT INTO work_order_executions
+        (tenant_id, work_order_id, submitted_by, started_at, finished_at,
+         worked_area_hectares, result_summary, review_status)
+      SELECT $1, id, $2, now() - interval '15 minutes',
+             now() - interval '10 minutes', 1.25,
+             'Private execution declaration should never appear in summary',
+             'submitted'
+      FROM work_orders
+      WHERE tenant_id=$1 AND field_id=$3 AND title LIKE 'bulk order %'
+      ORDER BY id LIMIT 7
+      RETURNING id
+    `, [tenantA,scout,a.fieldId])).rows;
+    assert.equal(inserted.length,7);
+    const pendingResponse = await get(summaryUrl);
+    assert.equal(pendingResponse.status,200,await pendingResponse.clone().text());
+    const pendingJson=await pendingResponse.text();
+    const pendingSummary=JSON.parse(pendingJson).data.reviewSummary;
+    assert.equal(pendingSummary.submitted,7);
+    assert.equal(pendingSummary.verified,0);
+    assert.equal(pendingSummary.rejected,0);
+    assert.equal(pendingSummary.recentPending.length,5);
+    assert.ok(pendingSummary.recentPending.every(item =>
+      item.field_id===a.fieldId && item.work_order_id &&
+      item.execution_id && item.title.startsWith('bulk order ') &&
+      item.finished_at));
+    assert.equal(new Set(pendingSummary.recentPending.map(x=>x.work_order_id)).size,5);
+    assert.ok(!pendingJson.includes('Private execution declaration'));
+    assert.ok(!pendingJson.includes('submitted_by'));
+    assert.ok(!pendingJson.includes('review_note'));
+    assert.ok(pendingJson.length<15000);
+
+    const first=inserted[0].id, second=inserted[1].id;
+    await owner.query(`
+      UPDATE work_order_executions
+      SET review_status='verified',reviewed_by=$1,reviewed_at=now()
+      WHERE tenant_id=$2 AND id=$3
+    `,[coordinator,tenantA,first]);
+    await owner.query(`
+      UPDATE work_order_executions
+      SET review_status='rejected',reviewed_by=$1,reviewed_at=now(),
+          review_note='Private rejection reason must never leave PostgreSQL'
+      WHERE tenant_id=$2 AND id=$3
+    `,[coordinator,tenantA,second]);
+    const reviewed=await get(summaryUrl);
+    assert.equal(reviewed.status,200,await reviewed.clone().text());
+    const reviewedBody=await reviewed.text();
+    const finalReview=JSON.parse(reviewedBody).data.reviewSummary;
+    assert.equal(finalReview.submitted,5);
+    assert.equal(finalReview.verified,1);
+    assert.equal(finalReview.rejected,1);
+    assert.equal(finalReview.recentPending.length,5);
+    assert.ok(!finalReview.recentPending.some(item =>
+      item.execution_id===first || item.execution_id===second));
+    assert.ok(!reviewedBody.includes('Private rejection reason'));
     assert.equal((await get(summaryUrl, restricted)).status, 403);
+    assert.equal((await get(summaryUrl.replace(a.fieldId, b.fieldId))).status, 404);
     assert.equal((await get(summaryUrl.replace(a.fieldId, b.fieldId))).status, 404);
     const malformedField = await get(summaryUrl.replace(a.fieldId, 'invalid-field'));
     assert.equal(malformedField.status, 422);

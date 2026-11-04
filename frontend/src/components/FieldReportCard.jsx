@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, ClipboardList, MapPin, Sprout } from 'lucide-react';
 import { useSession } from '../context/SessionContext.jsx';
-import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport } from '../services/reportAccessContext.js';
+import { reportAccessContext, confirmFieldReportResponse, visibleFieldReport,
+  canOpenFieldReviewOrders } from '../services/reportAccessContext.js';
 import { decodeFieldDocument } from '../services/reportDownload.js';
 
 const STATUS_ES = {
@@ -9,13 +10,15 @@ const STATUS_ES = {
   completed: 'Completado', in_progress: 'En curso', archived: 'Archivado'
 };
 
-export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) {
+export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares, onOpenWorkOrder }) {
   const { api, dataMode, session } = useSession();
   const [reportState, setReportState] = useState(null);
   const reportContext = reportAccessContext(session, dataMode, fieldId);
   // Never render a previous actor/role/field's report even during the render
   // before React runs an effect that clears stale component state.
   const report = visibleFieldReport(reportState, reportContext, api);
+  const canOpenReviewOrders = canOpenFieldReviewOrders(session, dataMode) &&
+    typeof onOpenWorkOrder === 'function';
   const loadSequence = useRef(0);
   const loadInFlight = useRef(false);
   const [loading, setLoading] = useState(false);
@@ -264,6 +267,50 @@ export function FieldReportCard({ fieldId, fieldName, farmName, areaHectares }) 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#94a3b8' }}>
               <Activity size={14} /> Sin recorridas de monitoreo registradas
             </div>
+          )}
+
+          {/* These are actual persisted declarations, not order status guesses.
+              Review still happens only in authorized Orders, never here. */}
+          {dataMode === 'live' && report.reviewSummary && (
+            <section aria-label={`Revisiones de ejecuciones del lote ${fieldName}`}
+              style={{ padding: '14px', border: '1px solid rgba(15,23,42,0.12)',
+                borderRadius: 10, display: 'grid', gap: 10 }}>
+              <h4 style={{ margin: 0 }}>Ejecuciones y revisión independiente</h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 13 }}>
+                <span><strong>{report.reviewSummary.submitted}</strong> pendientes de revisión</span>
+                <span><strong>{report.reviewSummary.verified}</strong> verificadas</span>
+                <span><strong>{report.reviewSummary.rejected}</strong> rechazadas</span>
+              </div>
+              <small>Conteos de ejecuciones declaradas en el servidor, sin período de exportación.
+                No equivalen a trabajo certificado físicamente.</small>
+              {report.reviewSummary.submitted === 0
+                ? <p style={{ margin: 0, fontSize: 13 }}>No hay ejecuciones esperando revisión independiente.</p>
+                : <div style={{ display: 'grid', gap: 8 }}>
+                    <strong style={{ fontSize: 12 }}>Últimas ejecuciones pendientes</strong>
+                    {report.reviewSummary.recentPending.map(item => (
+                      <div key={item.execution_id}
+                        style={{ display: 'flex', flexWrap: 'wrap',
+                          gap: 8, justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: 13 }}>{item.title}
+                          <small style={{ display: 'block' }}>
+                            Fin: {new Date(item.finished_at).toLocaleString('es-AR', { timeZone: 'UTC' })} UTC
+                          </small>
+                        </span>
+                        {canOpenReviewOrders && <button className="ghost-action" type="button"
+                          aria-label={`Abrir orden pendiente de revisión ${item.work_order_id}`}
+                          onClick={() => {
+                            if (reportContext === currentScope.current &&
+                                api === currentApiRef.current &&
+                                canOpenFieldReviewOrders(session, dataMode)) {
+                              onOpenWorkOrder(item.work_order_id);
+                            }
+                          }}>Abrir orden para revisar</button>}
+                      </div>
+                    ))}
+                    {!canOpenReviewOrders && <small>Para gestionar una revisión necesitás
+                      acceso autorizado a Órdenes de trabajo.</small>}
+                  </div>}
+            </section>
           )}
 
           {/* Recent work orders */}
