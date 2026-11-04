@@ -169,7 +169,8 @@ test('verified, submitted and rejected execution declarations export complete bu
   assert.match(pdf,/Revision independiente: verified/);
   assert.match(pdf,/Revision independiente: submitted/);
   assert.match(pdf,/Revision independiente: rejected/);
-  assert.ok(pdf.includes('Area declarada (ha): 1.25'));
+  assert.ok(pdf.includes('Area declarada') && pdf.includes('1.25'),
+    'PDF escapes literal parentheses but must retain the true worked area');
   assert.ok(pdf.includes(obs) && pdf.includes(run));
   assert.ok(!pdf.includes('Privado: no exportar') && !pdf.includes('no exportar'));
   const xlsx = unzipStoredEntries(buildFieldXlsx(source)).get('xl/worksheets/sheet1.xml');
