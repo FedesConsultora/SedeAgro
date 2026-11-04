@@ -229,8 +229,7 @@ workOrdersRouter.get('/', requireCapability('orders.read'), asyncHandler(async (
 // Private, read-only return path: authenticated coordinators can discover
 // which real orders originated in a run's observations. No notes, coordinates,
 // photos, or contractor-readable provenance are included in this response.
-workOrdersRouter.get('/observation-links/runs/:runId',
-  requireCapability('orders.read'),
+workOrdersRouter.get('/observation-links/runs/:runId', requireCapability('orders.read'),
   asyncHandler(async (req, res) => {
     const parsed = z.string().uuid().safeParse(req.params.runId);
     if (!parsed.success) {
