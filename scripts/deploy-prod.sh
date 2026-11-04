@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Prevent inherited xtrace from logging production secrets.
+set +x
 set -euo pipefail
 
 # 0P.38: exclude competing deploys across checkout/worktree paths on THIS host.
@@ -40,28 +42,14 @@ git pull --ff-only origin main
 # Requires the exact approved SHA and an explicit matching deployment approval.
 bash scripts/production-preflight.sh
 
-# Compose reads .env independently; source it here for controlled role provisioning.
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
+# Compose reads .env itself. NEVER source untrusted dotenv text as shell:
+# parse only five required values without eval or emitting credentials.
+# The helper is committed code from the exact reviewed SHA, not a dotenv file.
+if ! source scripts/production-env-loader.sh || ! production_load_db_env .env; then
+  echo "BLOCKED: producción requiere credenciales de BD seguras y no ambiguas en .env." >&2
+  exit 2
+fi
 
-POSTGRES_DB="${POSTGRES_DB:-sedeagro}"
-POSTGRES_USER="${POSTGRES_USER:-sedeagro}"
-APP_DB_USER="${APP_DB_USER:-sedeagro_app}"
-
-if [[ -z "${POSTGRES_PASSWORD:-}" || -z "${APP_DB_PASSWORD:-}" ]]; then
-  echo "POSTGRES_PASSWORD y APP_DB_PASSWORD son obligatorios." >&2
-  exit 1
-fi
-if [[ ! "$APP_DB_USER" =~ ^[a-z_][a-z0-9_]*$ || "$APP_DB_USER" == "$POSTGRES_USER" ]]; then
-  echo "APP_DB_USER debe ser un rol propio, distinto del propietario de la BD." >&2
-  exit 1
-fi
-if [[ ${#APP_DB_PASSWORD} -lt 24 || ! "$APP_DB_PASSWORD" =~ ^[A-Za-z0-9._~-]+$ ]]; then
-  echo "APP_DB_PASSWORD debe tener 24+ caracteres y ser seguro para una URL PostgreSQL." >&2
-  exit 1
-fi
 if ! grep -Eq '^NODE_ENV=production[[:space:]]*$' backend/.env; then
   echo "backend/.env debe tener NODE_ENV=production antes de desplegar." >&2
   exit 1
@@ -104,9 +92,9 @@ fi
 
 # Migrations execute with the schema owner, never with the HTTP server's limited role.
 echo "Aplicando migraciones y catálogo global con rol propietario..."
-docker compose run --rm --no-deps \
+MIGRATION_DB_PASSWORD="$POSTGRES_PASSWORD" docker compose run --rm --no-deps \
   -e MIGRATION_DB_USER="$POSTGRES_USER" \
-  -e MIGRATION_DB_PASSWORD="$POSTGRES_PASSWORD" \
+  -e MIGRATION_DB_PASSWORD \
   -e MIGRATION_DB_NAME="$POSTGRES_DB" \
   backend sh -ec '
     DATABASE_URL="$(node -e '\''const p=process.env; const user=encodeURIComponent(p.MIGRATION_DB_USER); const pass=encodeURIComponent(p.MIGRATION_DB_PASSWORD); const db=encodeURIComponent(p.MIGRATION_DB_NAME); process.stdout.write("postgres://"+user+":"+pass+"@db:5432/"+db);'\'')" \
@@ -114,12 +102,16 @@ docker compose run --rm --no-deps \
   '
 
 echo "Provisionando permisos mínimos del usuario de la aplicación..."
-docker compose exec -T db psql \
+# psql -v app_password=... leaks credentials via /proc/*/cmdline. Pass a
+# validated URL-safe literal only via stdin, before the reviewed SQL script.
+# Do not add -a/-e/echo-all to psql: those options would echo secrets.
+{
+  printf '\set app_password %s\n' "$APP_DB_PASSWORD"
+  cat scripts/provision-runtime-role.sql
+} | docker compose exec -T db psql \
   -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 \
   -v "db_owner=$POSTGRES_USER" \
-  -v "app_user=$APP_DB_USER" \
-  -v "app_password=$APP_DB_PASSWORD" \
-  < scripts/provision-runtime-role.sql
+  -v "app_user=$APP_DB_USER"
 
 echo "Recreando backend y frontend con credenciales de aplicación no privilegiadas..."
 docker compose up -d --no-deps backend frontend

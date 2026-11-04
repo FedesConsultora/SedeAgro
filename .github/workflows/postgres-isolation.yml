@@ -56,6 +56,7 @@ jobs:
           node --test scripts/test/production-deploy-lock.test.mjs
           bash -n scripts/production-preflight.sh
           node --test scripts/test/production-preflight.test.mjs
+          node --test scripts/test/production-env-loader.test.mjs
           node --check scripts/verify-production-image-admission.mjs
           node --test scripts/test/production-image-admission.test.mjs
           node --check scripts/verify-release-owner-approval.mjs
