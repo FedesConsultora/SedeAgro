@@ -275,12 +275,43 @@ try {
   await invitations.getByRole('button', { name: 'Generar invitación' }).click();
   assert.equal((await inviteAck).status(), 201, 'real invitation must be created server-side');
   await invitations.getByText('Invitación generada (todavía no enviada)').waitFor();
+  const oldSecret = (await invitations.locator('code').textContent())?.trim() || '';
+  assert.match(oldSecret, /^[0-9a-f-]{36}\.[a-f0-9]{64}$/i);
+  assert.equal(oldSecret.slice(0, 36).toLowerCase(), tenantId.toLowerCase());
+
+  // A real admin loses the one-shot manual delivery code before sending it.
+  // Renew from the actual pending invitation list; the backend must invalidate
+  // the previous hash and return one new secret, never an invented email.
+  await invitations.getByRole('button', { name: 'Reemitir código' }).waitFor();
+  page1.once('dialog', dialog => dialog.accept());
+  const replacementAck = page1.waitForResponse(res =>
+    /\/auth\/invitations\/[0-9a-f-]{36}\/rotate$/.test(new URL(res.url()).pathname) &&
+    res.request().method() === 'POST');
+  await invitations.getByRole('button', { name: 'Reemitir código' }).click();
+  const replacement = await replacementAck;
+  assert.equal(replacement.status(), 200, await replacement.text());
+  const rotated = await replacement.json();
+  assert.equal(rotated.delivery.channel, 'manual');
+  assert.equal(rotated.delivery.delivered, false);
+  assert.equal(rotated.data.email, scoutEmail);
+  assert.equal(rotated.data.roleCode, 'scout');
+  await invitations.getByText('Invitación generada (todavía no enviada)').waitFor();
   const secret = (await invitations.locator('code').textContent())?.trim() || '';
-  assert.match(secret, /^[0-9a-f-]{36}\.[a-f0-9]{64}$/i);
-  assert.equal(secret.slice(0, 36).toLowerCase(), tenantId.toLowerCase());
+  assert.equal(secret, rotated.delivery.token);
+  assert.notEqual(secret, oldSecret);
+  const scopedRows = (await admin.query(
+    'SELECT count(*)::int AS n FROM member_invitations WHERE tenant_id=$1 AND email=$2',
+    [tenantId, scoutEmail])).rows[0].n;
+  assert.equal(scopedRows, 1, 'renewal keeps exactly one pending invite and reserved seat');
   // No email, token or one-time invitation secret is written to the test log.
   const inviteContext = await browser.newContext();
   try {
+    const expiredCode = await inviteContext.request.post(
+      'http://127.0.0.1:3001/api/v1/auth/invite/accept', {
+        data: { token: oldSecret, password: scoutPassword, fullName: scoutName }
+      });
+    assert.equal(expiredCode.status(), 404,
+      'the replaced invitation code cannot activate a membership');
     const recipient = await inviteContext.newPage();
     await recipient.goto('http://127.0.0.1:4177/');
     assert.equal((await inviteContext.cookies()).some(c => c.name === 'sedeagro_session'), false);
