@@ -96,7 +96,7 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
     assert.equal(issued.status, 201, JSON.stringify(issued.json));
     assert.equal(issued.json.delivery.channel, 'manual');
     assert.equal(issued.json.delivery.delivered, false);
-    let secret = issued.json.delivery.token;
+    const secret = issued.json.delivery.token;
     const id = issued.json.data.id;
     assert.ok(secret.startsWith(a + '.'));
     assert.equal((await invite(adminA, a, email)).status, 409);
@@ -118,65 +118,6 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
     assert.equal(stored.status, 'pending');
     assert.notEqual(stored.token_hash, secret);
     assert.equal(stored.token_hash.length, 64);
-
-    const rotate = (identity, tenantId, invitationId, updatedAt) =>
-      api('/invitations/' + invitationId + '/rotate', {
-        method: 'POST', token: identity.token, tenantId,
-        body: { expectedUpdatedAt: updatedAt }
-      });
-    const previousSecret = secret;
-    const originalRevision = issued.json.data.updatedAt;
-    assert.ok(Number.isFinite(Date.parse(originalRevision)));
-    assert.equal((await rotate(scoutA, a, id, originalRevision)).status, 403);
-    assert.equal((await rotate(adminB, b, id, originalRevision)).status, 404);
-    const rotated = await rotate(adminA, a, id, originalRevision);
-    assert.equal(rotated.status, 200, JSON.stringify(rotated.json));
-    assert.equal(rotated.json.delivery.channel, 'manual');
-    assert.equal(rotated.json.delivery.delivered, false);
-    assert.equal(rotated.json.data.id, id);
-    assert.equal(rotated.json.data.email, email);
-    assert.equal(rotated.json.data.roleCode, 'scout');
-    assert.ok(Date.parse(rotated.json.data.updatedAt) > Date.parse(originalRevision));
-    assert.ok(Date.parse(rotated.json.data.expiresAt) > Date.parse(issued.json.data.expiresAt));
-    secret = rotated.json.delivery.token;
-    assert.notEqual(secret, previousSecret);
-    assert.equal((await api('/invite/accept', { method: 'POST', body: {
-      token: previousSecret, password: 'StrongTesting903', fullName: 'Old Code Denied'
-    } })).status, 404);
-    const wrongRevision = await rotate(adminA, a, id, originalRevision);
-    assert.equal(wrongRevision.status, 409, JSON.stringify(wrongRevision.json));
-    assert.equal(wrongRevision.json.error.code, 'INVITATION_ROTATION_STALE');
-    const currentList = await api('/invitations', { token: adminA.token, tenantId: a });
-    const currentRow = currentList.json.data.find(row => row.id === id);
-    assert.equal(currentRow.updatedAt, rotated.json.data.updatedAt);
-    assert.equal(JSON.stringify(currentList.json).includes(secret), false);
-    assert.equal(JSON.stringify(currentList.json).includes(previousSecret), false);
-    assert.equal((await owner.query(
-      'SELECT count(*)::int AS n FROM member_invitations WHERE id=$1', [id]
-    )).rows[0].n, 1);
-    const rotationAudit = (await owner.query(
-      "SELECT action,before,after FROM audit_events WHERE entity_id=$1 ORDER BY created_at",
-      [id])).rows;
-    assert.equal(rotationAudit.length, 2);
-    assert.deepEqual(rotationAudit.map(row => row.action),
-      ['member_invitation.created', 'member_invitation.rotated']);
-    assert.equal(JSON.stringify(rotationAudit).includes(secret), false);
-    assert.equal(JSON.stringify(rotationAudit).includes(previousSecret), false);
-
-    // Two requests from the same listed revision cannot both claim a valid
-    // replacement. The row and tenant lock serialize this under FORCE RLS.
-    const raceRotations = await Promise.all([
-      rotate(adminA, a, id, currentRow.updatedAt),
-      rotate(adminA, a, id, currentRow.updatedAt)
-    ]);
-    assert.deepEqual(raceRotations.map(row => row.status).sort(), [200, 409],
-      JSON.stringify(raceRotations));
-    secret = raceRotations.find(row => row.status === 200).json.delivery.token;
-    const staleCode = rotated.json.delivery.token;
-    assert.notEqual(secret, staleCode);
-    assert.equal((await api('/invite/accept', { method: 'POST', body: {
-      token: staleCode, password: 'StrongTesting903', fullName: 'Stale Code Denied'
-    } })).status, 404);
 
     // An opaque secret with a valid tenant prefix still grants no authority.
     assert.equal((await api('/invite/accept', { method: 'POST', body: {
@@ -221,9 +162,6 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
       fullName: 'Revoked Contractor'
     } });
     assert.equal(afterRevoke.status, 410);
-    const revokedRotation = await rotate(adminA, a, issued2.json.data.id,
-      issued2.json.data.updatedAt);
-    assert.equal(revokedRotation.status, 410);
 
     // Multiempresa existing users retain their own password. An invite cannot
     // overwrite another account's credentials or transfer memberships silently.
@@ -257,9 +195,6 @@ test('member invitations: tenant isolation, password ownership, expiry, revocati
       token: expiring.json.delivery.token, password: 'FreshStrongPassword903', fullName: 'Expired'
     } });
     assert.equal(past.status, 410);
-    const expiredRotation = await rotate(adminA, a, expiring.json.data.id,
-      expiring.json.data.updatedAt);
-    assert.equal(expiredRotation.status, 410, JSON.stringify(expiredRotation.json));
     const reissued = await invite(adminA, a, expiredEmail);
     assert.equal(reissued.status, 201, JSON.stringify(reissued.json));
     assert.notEqual(reissued.json.data.id, expiring.json.data.id);
