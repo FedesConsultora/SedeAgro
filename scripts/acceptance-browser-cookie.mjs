@@ -147,7 +147,7 @@ try {
   let firstCampaignRequestId = null;
   let lostAckCount = 0;
   await page1.locator('.sidebar__item[title="Campañas"]').click();
-  await page1.getByRole('button', { name: 'Nueva campaña' }).click();
+  await page1.getByRole('button', { name: 'Nueva campaña' }).first().click();
   const pendingCampaignDialog = page1.getByRole('dialog', { name: 'Nueva campaña' });
   await pendingCampaignDialog.getByText('Comprobando envíos pendientes cifrados…').waitFor({ state: 'hidden' });
   await pendingCampaignDialog.locator('#campaign-name').fill(campaignName);
@@ -209,7 +209,7 @@ try {
   // Full tab reload proves the journal is durable, not merely a React ref.
   await page1.reload();
   await page1.locator('.sidebar__item[title="Campañas"]').click();
-  await page1.getByRole('button', { name: 'Nueva campaña' }).click();
+  await page1.getByRole('button', { name: 'Nueva campaña' }).first().click();
   const recoveryCampaignDialog = page1.getByRole('dialog', { name: 'Nueva campaña' });
   await recoveryCampaignDialog.getByText('Hay una creación pendiente de confirmar.', {
     exact: false
