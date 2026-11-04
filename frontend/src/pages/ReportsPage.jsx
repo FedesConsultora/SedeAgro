@@ -9,7 +9,7 @@ import { useTenantCollection } from '../services/useTenantCollection.js';
 import { reportAccessContext } from '../services/reportAccessContext.js';
 import { WorkspaceHeading, CollectionState } from '../components/WorkspacePrimitives.jsx';
 
-export function ReportsPage() {
+export function ReportsPage({ onNavigate = null }) {
   const { api, dataMode, session } = useSession();
   const { records: fields, loading, error, reload } = useTenantCollection({
     api, method: 'fields', dataMode, tenantId: session?.tenant?.id,
@@ -64,6 +64,7 @@ export function ReportsPage() {
               fieldName={field.name}
               farmName={field.Farm?.name || '–'}
               areaHectares={field.area_hectares}
+              onOpenWorkOrder={id => onNavigate?.('orders', { id })}
             />
           ))}
         </div>
