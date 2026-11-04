@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Op } from 'sequelize';
 import { z } from 'zod';
 import { withTenantTransaction } from '../../core/db.js';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import { AuditEvent, MemberInvitation, Membership, Plan, Tenant, User } from '../../models/index.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { hashPassword, validatePasswordStrength, verifyPassword } from '../../utils/password.js';
@@ -208,11 +209,21 @@ invitationScopedRouter.post('/:invitationId/rotate',
     // Monotonic millisecond revision: two concurrent admins cannot both
     // receive seemingly valid codes for the same prior revision.
     const updatedAt = new Date(Math.max(now.getTime(), previousTime + 1));
-    await invitation.update({
-      token_hash: identity.tokenHash,
-      expires_at: new Date(now.getTime() + INVITATION_TTL_MS),
-      updated_at: updatedAt
-    }, { transaction, silent: true });
+    // Sequelize's silent instance.update can omit updated_at even when it is
+    // explicitly provided. Write and re-read the revision under the SAME
+    // tenant-scoped, row-locked transaction; a stale parallel operator must
+    // never receive a success for a superseded code.
+    await queryTenantTransaction(`
+      UPDATE member_invitations
+      SET token_hash = :hash, expires_at = :expiresAt,
+          updated_at = :updatedAt
+      WHERE tenant_id = :tenant AND id = :invitationId AND status = 'pending'
+    `, { transaction, replacements: {
+      tenant: tenant.id, invitationId: invitation.id,
+      hash: identity.tokenHash,
+      expiresAt: new Date(now.getTime() + INVITATION_TTL_MS), updatedAt
+    } });
+    await invitation.reload({ transaction });
     await recordInvitationAudit({ transaction, tenantId: tenant.id,
       actorId: req.auth.user.id, invitation, action: 'member_invitation.rotated' });
     res.setHeader('Cache-Control', 'private, no-store');
