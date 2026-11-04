@@ -24,6 +24,10 @@ test('registration and login return real enabled modules under FORCE RLS', async
   const slug = `rls-auth-${random}`;
   const email = `owner-${random}@example.test`;
   const password = 'StrongCI-Password-2026!';
+  const premiumCode = 'pilot-premium-' + random;
+  const premiumSlug = 'rls-public-premium-' + random;
+  const premiumEmail = 'premium-attempt-' + random + '@example.test';
+  let premiumPlanId;
   let userId;
   let tenantId;
 
@@ -41,6 +45,43 @@ test('registration and login return real enabled modules under FORCE RLS', async
     const { rows: [{ name }] } = await owner.query('SELECT current_database() AS name');
     assert.match(name, /(?:^|[_-])test(?:$|[_-])/i,
       'Refusing to test registration in a non-test database');
+
+
+    // The catalog may contain privately configured, ACTIVE paid plans.
+    // Public signup must never self-select one based on untrusted planCode.
+    const premium = await owner.query(
+      "INSERT INTO plans(code,name,max_users,limits,is_active) VALUES($1,$2,80,'{}'::jsonb,true) RETURNING id",
+      [premiumCode, 'Premium integration fixture']);
+    premiumPlanId = premium.rows[0].id;
+    await owner.query(
+      "INSERT INTO plan_modules(plan_id,module_code) VALUES($1,'integrations')",
+      [premiumPlanId]);
+    const premiumAttempt = await fetch(`${baseUrl}/register-tenant`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        organizationName: 'Unauthorized Premium Signup',
+        slug: premiumSlug,
+        fullName: 'Premium Test Owner',
+        email: premiumEmail, password, planCode: premiumCode
+      })
+    });
+    const premiumBody = await premiumAttempt.json();
+    assert.equal(premiumAttempt.status, 422,
+      'public registration must reject an EXISTING active non-starter plan');
+    assert.equal(premiumBody?.token, undefined);
+    assert.equal(premiumAttempt.headers.get('set-cookie'), null,
+      'invalid plan request must not issue a browser session');
+    assert.equal((await owner.query(
+      'SELECT count(*)::integer AS n FROM tenants WHERE slug=$1', [premiumSlug]
+    )).rows[0].n, 0);
+    assert.equal((await owner.query(
+      'SELECT count(*)::integer AS n FROM users WHERE email=$1', [premiumEmail]
+    )).rows[0].n, 0);
+    assert.equal((await owner.query(
+      "SELECT count(*)::integer AS n FROM auth_sessions WHERE user_id IN (SELECT id FROM users WHERE email=$1)",
+      [premiumEmail]
+    )).rows[0].n, 0);
 
     const response = await fetch(`${baseUrl}/register-tenant`, {
       method: 'POST',
@@ -201,6 +242,14 @@ test('registration and login return real enabled modules under FORCE RLS', async
   } finally {
     if (tenantId) await owner.query('DELETE FROM tenants WHERE id = $1', [tenantId]);
     if (userId) await owner.query('DELETE FROM users WHERE id = $1', [userId]);
+    // Never leave a synthetic premium plan or an incorrectly accepted
+    // registration behind, even when the assertion above fails.
+    await owner.query('DELETE FROM tenants WHERE slug = $1', [premiumSlug]);
+    await owner.query('DELETE FROM users WHERE email = $1', [premiumEmail]);
+    if (premiumPlanId) {
+      await owner.query('DELETE FROM plan_modules WHERE plan_id = $1', [premiumPlanId]);
+      await owner.query('DELETE FROM plans WHERE id = $1', [premiumPlanId]);
+    }
     await owner.end();
   }
 });
