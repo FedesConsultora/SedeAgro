@@ -15,6 +15,7 @@ import { loadFieldReportSnapshot } from './fieldSnapshot.js';
 import { fieldCsvPeriod } from './fieldCsv.js';
 import { buildFieldPdf } from './fieldPdf.js';
 import { buildFieldXlsx } from './fieldXlsx.js';
+import { loadFieldReviewSummary } from './fieldReviewSummary.js';
 import { requireCapability } from '../../infra/http/middlewares/requireCapability.js';
 
 export const reportsRouter = Router();
@@ -310,12 +311,15 @@ reportsRouter.get('/field/:fieldId', requireCapability('reports.read'), asyncHan
     })
   ]);
 
+  const reviewSummary = await loadFieldReviewSummary(req, fieldId);
+
   res.json({
     data: {
       field,
       activeCampaignField,
       lastScoutingRun,
-      workOrdersSummary: { open, closed, recent }
+      workOrdersSummary: { open, closed, recent },
+      reviewSummary
     }
   });
 }));
