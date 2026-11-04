@@ -6,7 +6,9 @@ const page = readFileSync(new URL('../src/pages/ScoutingPage.jsx', import.meta.u
 const [detailScope, pageScope] = page.split('export function ScoutingPage');
 
 test('RunDetail never references parent-only deep-link props or collection state', () => {
-  assert.ok(detailScope.includes('function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder })'));
+  assert.ok(detailScope.includes('function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder, onOpenWorkOrder })'));
+  assert.match(detailScope, /onOpenWorkOrder\?\.\(item\.work_order_id\)/,
+    'the detail delegates verified order IDs without owning cross-module navigation');
   assert.match(detailScope, /onCreateWorkOrder\(draft\)/,
     'the detail may delegate authorized observation drafts but never navigate itself');
   assert.doesNotMatch(detailScope, /\bonNavigate\b|\bsetFocused\b/,

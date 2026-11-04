@@ -182,6 +182,10 @@ export function createApiClient(session, feedback, authEpoch = 0) {
     getEvidenceContent: (evidenceId) => request(`/scouting/evidence/${evidenceId}/content`),
     getEvidenceIntegrity: (id) => request(`/scouting/evidence/${id}/integrity`),
     workOrders: () => request('/work-orders'),
+    observationWorkOrderLinks: (runId) => request(
+      `/work-orders/observation-links/runs/${encodeURIComponent(runId)}`,
+      { silent: true }
+    ),
     createWorkOrder: (body) => request('/work-orders', { method: 'POST', body }),
     updateWorkOrderStatus: (workOrderId, body) => request(`/work-orders/${workOrderId}/status`, { method: 'PATCH', body }),
     assignWorkOrderUser: (workOrderId, body) => request(`/work-orders/${workOrderId}/assignees`, { method: 'POST', body }),

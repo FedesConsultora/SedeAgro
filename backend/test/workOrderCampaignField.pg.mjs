@@ -193,6 +193,46 @@ test('work orders cannot combine different fields or tenants with a campaign-fie
     assert.equal(replay.status,200,JSON.stringify(replay.json));
     assert.equal(replay.json.data.id,first.json.data.id);
     assert.equal(replay.json.replayed,true);
+    const second=await request(adminA,a,{...linkedBody,
+      title:'Second inspection of same observation',client_request_id:randomUUID()});
+    assert.equal(second.status,201,JSON.stringify(second.json));
+
+    const getLinks=async(token,tenantId,runId)=>{
+      const response=await fetch(base+'/observation-links/runs/'+runId,{
+        headers:{authorization:'Bearer '+token,'x-tenant-id':tenantId}
+      });
+      return {status:response.status,json:await response.json(),
+        cacheControl:response.headers.get('cache-control')};
+    };
+    const linked=await getLinks(adminA,a,own.runId);
+    assert.equal(linked.status,200,JSON.stringify(linked.json));
+    assert.match(linked.cacheControl,/no-store/);
+    assert.equal(linked.json.data.scoutingRunId,own.runId);
+    assert.equal(linked.json.data.rows.length,2,
+      'one observed finding may require two independently authorized orders');
+    assert.deepEqual(new Set(linked.json.data.rows.map(item=>item.work_order_id)),
+      new Set([first.json.data.id,second.json.data.id]));
+    for(const item of linked.json.data.rows){
+      assert.equal(item.scouting_observation_id,own.observationId);
+      assert.equal(item.status,'draft');
+      assert.equal(item.type,'inspection');
+      assert.equal(item.priority,'normal');
+      assert.ok(item.title);
+      assert.deepEqual(Object.keys(item).sort(),
+        ['scouting_observation_id','work_order_id','title','type','status','priority'].sort());
+    }
+    assert.equal(JSON.stringify(linked.json).includes('Actual observation'),false,
+      'the list must not leak private scouting notes');
+    assert.equal((await getLinks(scoutA,a,own.runId)).status,403);
+    assert.equal((await getLinks(adminB,b,own.runId)).status,404);
+    assert.equal((await getLinks(adminA,a,foreign.runId)).status,404);
+    assert.equal((await getLinks(adminA,a,randomUUID())).status,404);
+    const empty=await getLinks(adminB,b,foreign.runId);
+    assert.equal(empty.status,200,JSON.stringify(empty.json));
+    assert.deepEqual(empty.json.data.rows,[]);
+    const emptyLegacy=await getLinks(adminA,a,other.runId);
+    assert.equal(emptyLegacy.status,200);
+    assert.deepEqual(emptyLegacy.json.data.rows,[]);
     for(const [patch,status,code] of [
       [{origin_observation_id:other.observationId},422,'ORDER_ORIGIN_FIELD_CAMPAIGN_MISMATCH'],
       [{origin_observation_id:foreign.observationId},404,'ORDER_ORIGIN_OBSERVATION_NOT_FOUND'],
@@ -212,7 +252,7 @@ test('work orders cannot combine different fields or tenants with a campaign-fie
     error=>error.code==='23503');
     assert.equal((await owner.query(
       'SELECT count(*)::int AS n FROM work_order_observation_origins WHERE tenant_id=$1',
-      [a])).rows[0].n,1);
+      [a])).rows[0].n,2);
   } finally {
     if (ownerConnected) {
       try {

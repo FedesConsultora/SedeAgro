@@ -205,7 +205,36 @@ try {
   await page.getByRole('button',{name:'Abrir recorrida de origen'}).click();
   await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
   await panel.getByText('Archivos registrados · página 1').waitFor();
-  console.log('PASS: persisted observation -> authenticated inspection draft -> exact PostgreSQL provenance FK + authorized scouting navigation');
+
+  // The reverse side must query the REAL origin table, not text instructions,
+  // client-side navigation history, or a second write. This is a new HTTP
+  // GET guarded independently by both scouting and orders capabilities.
+  const linkedPanel=page.getByRole('region',{
+    name:'Órdenes vinculadas a observación '+observation
+  });
+  await linkedPanel.getByRole('button',{
+    name:'Abrir orden vinculada '+creation.data.id
+  }).waitFor();
+  await linkedPanel.getByText('Verificar hallazgo de malezas',{exact:false}).waitFor();
+  assert.equal(await linkedPanel.getByRole('button',{
+    name:'Abrir orden vinculada '+creation.data.id
+  }).count(),1,'one real order must appear once from the observation');
+  await linkedPanel.getByRole('button',{
+    name:'Abrir orden vinculada '+creation.data.id
+  }).click();
+  await page.getByRole('heading',{name:'Órdenes de trabajo'}).waitFor();
+  await page.getByText('Origen de monitoreo verificado').waitFor();
+  await page.getByText(observation,{exact:true}).waitFor();
+  assert.equal((await admin.query(
+    'SELECT count(*)::int AS n FROM work_orders WHERE tenant_id=$1 AND id=$2',
+    [tenantId,creation.data.id])).rows[0].n,1,
+  'reopening an existing linked order must not POST or duplicate it');
+  await page.getByRole('button',{name:'Abrir recorrida de origen'}).click();
+  await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
+  await linkedPanel.getByRole('button',{
+    name:'Abrir orden vinculada '+creation.data.id
+  }).waitFor();
+  console.log('PASS: persisted observation -> one authenticated work order -> reverse SQL link -> authorized order detail and back');
 
   await page.evaluate(() => {
     const original = Object.getOwnPropertyDescriptor(navigator, 'geolocation');

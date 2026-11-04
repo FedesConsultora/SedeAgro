@@ -9,6 +9,10 @@ import { EvidencePreviewModal } from '../components/EvidencePreviewModal.jsx';
 import { parseScoutingPrivateEvidence } from '../services/scoutingPrivateEvidenceClient.js';
 import { sessionScope } from '../services/offlineSyncModel.js';
 import { observationWorkOrderDraft } from '../services/observationWorkOrderDraft.js';
+import {
+  observationWorkOrderLinkScope, checkedObservationWorkOrderLinks,
+  visibleObservationWorkOrderLinks
+} from '../services/observationWorkOrderLinks.js';
 import { ScoutingAuditPanel } from '../components/ScoutingAuditPanel.jsx';
 import { ScoutingObservationGeoPanel } from '../components/ScoutingObservationGeoPanel.jsx';
 import { RunOfflineCaptures } from '../components/RunOfflineCaptures.jsx';
@@ -36,7 +40,7 @@ function StatusBadge({ status }) {
   return <span className={`status-badge status-badge--${status}`}>{RUN_STATUS_ES[status] || status}</span>;
 }
 
-function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder }) {
+function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder, onOpenWorkOrder }) {
   const { api, dataMode, session } = useSession();
   const [details, setDetails] = useState(dataMode === 'mock' ? run : null);
   const [loading, setLoading] = useState(dataMode === 'live');
@@ -49,6 +53,14 @@ function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder }) {
   const [downloadingId, setDownloadingId] = useState(null);
   const [preview, setPreview] = useState(null);
   const [showAudit, setShowAudit] = useState(false);
+  const [linkSnapshot, setLinkSnapshot] = useState(null);
+  const [linkRevision, setLinkRevision] = useState(0);
+  const linkRequestSequence = useRef(0);
+  const linkScope = observationWorkOrderLinkScope(session, dataMode);
+  const linkScopeRef = useRef(linkScope);
+  linkScopeRef.current = linkScope;
+  const linkApiRef = useRef(api);
+  linkApiRef.current = api;
   const [eligibleAssignees, setEligibleAssignees] = useState([]);
   const [selectedAssignee, setSelectedAssignee] = useState('');
   const [loadingAssignees, setLoadingAssignees] = useState(false);
@@ -213,7 +225,41 @@ function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder }) {
     }
   };
 
+  // Reverse provenance is a separate, authorized GET. It is never inferred
+  // from free-text instructions, prior list rows, or another actor's cache.
+  useEffect(() => {
+    const sequence = ++linkRequestSequence.current;
+    const requestScope = linkScope;
+    const requestApi = api;
+    const requestDetail = details;
+    const current = () => linkRequestSequence.current === sequence &&
+      linkScopeRef.current === requestScope && linkApiRef.current === requestApi;
+    if (!requestScope || !requestDetail) {
+      setLinkSnapshot(null);
+      return () => { linkRequestSequence.current += 1; };
+    }
+    const initial = { scope: requestScope, api: requestApi, runId: requestDetail.id,
+      detail: requestDetail, revision: linkRevision, phase: 'loading', rows: [], error: '' };
+    setLinkSnapshot(initial);
+    void requestApi.observationWorkOrderLinks(requestDetail.id)
+      .then(response => {
+        const rows = checkedObservationWorkOrderLinks(
+          response, requestDetail.id, requestDetail.ScoutingObservations
+        );
+        if (current()) setLinkSnapshot({ ...initial, phase: 'ready', rows });
+      })
+      .catch(err => {
+        if (current()) setLinkSnapshot({ ...initial, phase: 'error',
+          error: err?.message || 'No se pudieron verificar las órdenes vinculadas.' });
+      });
+    return () => { linkRequestSequence.current += 1; };
+  }, [api, details, linkScope, linkRevision]);
+
   const observations = details?.ScoutingObservations || [];
+  const visibleLinkSnapshot = visibleObservationWorkOrderLinks(
+    linkSnapshot, linkScope, api, details?.id, linkRevision
+  );
+  const linkResult = visibleLinkSnapshot?.detail === details ? visibleLinkSnapshot : null;
 
   return (
     <section className="scouting-run-detail" aria-label="Detalle de recorrida">
@@ -327,6 +373,35 @@ function RunDetail({ run, onChanged, onOpenSync, onCreateWorkOrder }) {
                       </div>
                     ))}
                   </div>
+                  {linkScope && <section className="scouting-run-detail__linked-orders"
+                    aria-label={'Órdenes vinculadas a observación ' + obs.id}>
+                    <div className="scouting-run-detail__linked-heading">
+                      <strong>Órdenes de trabajo vinculadas</strong>
+                      {linkResult?.phase === 'ready' && <span className="status-badge status-badge--slate">
+                        {linkResult.rows.filter(item => item.scouting_observation_id === obs.id).length}
+                      </span>}
+                    </div>
+                    {!linkResult || linkResult.phase === 'loading' ?
+                      <p role="status">Verificando órdenes persistidas…</p> :
+                      linkResult.phase === 'error' ?
+                        <p role="alert">No se pudieron verificar los vínculos. {linkResult.error}
+                          <button type="button" className="ghost-action"
+                            onClick={() => setLinkRevision(value => value + 1)}>Reintentar consulta</button>
+                        </p> :
+                        linkResult.rows.filter(item => item.scouting_observation_id === obs.id)
+                          .length === 0 ?
+                          <p>Sin órdenes con origen registrado. Las órdenes antiguas sin vínculo no se infieren.</p> :
+                          <div className="scouting-run-detail__linked-list">
+                            {linkResult.rows.filter(item => item.scouting_observation_id === obs.id)
+                              .map(item => <button key={item.work_order_id} type="button"
+                                className="ghost-action"
+                                onClick={() => onOpenWorkOrder?.(item.work_order_id)}
+                                aria-label={'Abrir orden vinculada ' + item.work_order_id}>
+                                {item.title} · {item.status.replaceAll('_', ' ')}
+                                <ChevronRight size={14} aria-hidden="true" />
+                              </button>)}
+                          </div>}
+                  </section>}
                   {canObserve && <button className="ghost-action" type="button"
                     style={{ marginTop: 8 }} onClick={() => setShowEvidModal(obs.id)}>+ Adjuntar archivo</button>}
                   {onCreateWorkOrder && observationWorkOrderDraft(details, obs, session, dataMode) &&
@@ -478,7 +553,8 @@ export function ScoutingPage({ focusRunId = null, onNavigate }) {
                 </button>
                 {expanded[run.id] && <RunDetail key={scope + ':' + run.id} run={run} onChanged={load}
                   onOpenSync={() => onNavigate?.('sync', { id: run.id })}
-                  onCreateWorkOrder={draft => onNavigate?.('orders', { orderDraft: draft })} />}
+                  onCreateWorkOrder={draft => onNavigate?.('orders', { orderDraft: draft })}
+                  onOpenWorkOrder={id => onNavigate?.('orders', { id })} />}
               </div>
             ))}
         </div>
