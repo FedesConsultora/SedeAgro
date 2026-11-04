@@ -283,6 +283,13 @@ try {
   assert.equal(workOrderPostCount,1,
     'navigating from a report must never create a second work order');
   page.off('request',countOrderRequest);
+  // Drawer is modal and correctly intercepts background navigation.
+  // Close it via the accessible action before switching views.
+  const reviewedOrderDrawer=page.getByRole('dialog',{name:'Verificar hallazgo de malezas'});
+  await reviewedOrderDrawer.getByRole('button',{
+    name:'Cerrar Verificar hallazgo de malezas'
+  }).click();
+  await reviewedOrderDrawer.waitFor({state:'detached'});
   await page.getByTitle('Monitoreo').click();
   await page.getByRole('heading',{name:'Monitoreo'}).waitFor();
   await page.getByRole('button',{name:/Evidence Browser Lote/}).click();
