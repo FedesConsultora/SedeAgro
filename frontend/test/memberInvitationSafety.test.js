@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   memberInviteAuthority, prepareMemberInvitation, confirmMemberInvitation,
-  checkedMemberInvitations, createMemberInviteGate, confirmMemberActivation
+  checkedMemberInvitations, createMemberInviteGate, confirmMemberActivation,
+  prepareMemberInviteRotation, confirmMemberInviteRotation
 } from '../src/services/memberInvitationSafety.js';
 
 const tid = '9d941d8a-9a66-4c6d-8469-54c37596e3a9';
@@ -47,7 +48,8 @@ test('creation ACK must match exact tenant, email, role and one-time manual code
 
 test('invitation lists are bounded and never return secrets', () => {
   const row = { id: userId, email: 'scout@example.com', roleCode: 'scout',
-    expiresAt: new Date().toISOString(), status: 'pending' };
+    expiresAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    status: 'pending' };
   assert.deepEqual(checkedMemberInvitations({ data: [row] }), [row]);
   assert.throws(() => checkedMemberInvitations({ data: [{ ...row, token: 'secret' }] }), /inválidas/);
   assert.throws(() => checkedMemberInvitations({ data: [{ ...row, roleCode: 'platform_admin' }] }), /inválidas/);
@@ -85,4 +87,58 @@ test('recipient success must be confirmed by the same tenant as pasted secret', 
   assert.match(src, /credentials: 'omit'/);
   assert.match(src, /confirmMemberActivation\(result, form\.token\.trim\(\)\)/);
   assert.doesNotMatch(src, /localStorage|sessionStorage|location\.search|URLSearchParams/);
+});
+
+
+test('admin can request a pending-code replacement but cannot invent a delivered invite', () => {
+  const now = Date.now();
+  const row = {
+    id: userId, email: 'scout@example.com', roleCode: 'scout',
+    status: 'pending', updatedAt: new Date(now - 30_000).toISOString(),
+    expiresAt: new Date(now + 2 * 86400000).toISOString()
+  };
+  const prepared = prepareMemberInviteRotation(row, session, 'live');
+  assert.equal(prepared.id, userId);
+  assert.equal(prepared.tenantId, tid);
+  assert.equal(prepared.expectedUpdatedAt, row.updatedAt);
+  const reply = { data: { ...row,
+    updatedAt: new Date(now + 1000).toISOString(),
+    expiresAt: new Date(now + 7 * 86400000).toISOString()
+  }, delivery: { channel: 'manual', delivered: false,
+    token: tid + '.' + 'b'.repeat(64) } };
+  assert.equal(confirmMemberInviteRotation(reply, prepared).secret, reply.delivery.token);
+  for (const fail of [
+    { ...reply, data: { ...reply.data, id: tid } },
+    { ...reply, data: { ...reply.data, updatedAt: row.updatedAt } },
+    { ...reply, data: { ...reply.data, roleCode: 'contractor' } },
+    { ...reply, delivery: { ...reply.delivery, delivered: true } },
+    { ...reply, delivery: { ...reply.delivery, token: userId + '.' + 'b'.repeat(64) } }
+  ]) assert.throws(() => confirmMemberInviteRotation(fail, prepared), /no confirmó/i);
+  for (const invalid of [
+    { ...row, status: 'accepted' },
+    { ...row, roleCode: 'tenant_admin' },
+    { ...row, expiresAt: new Date(now - 1000).toISOString() },
+    { ...row, updatedAt: 'forged' },
+    { ...row, id: 'not-uuid' }
+  ]) assert.throws(() => prepareMemberInviteRotation(invalid, session, 'live'), /no puede renovarse/);
+  assert.throws(() => prepareMemberInviteRotation(row, {
+    ...session, membership: { ...session.membership, roleCode: 'scout' }
+  }, 'live'), /Solo la administración/);
+});
+
+test('rotation is an explicit operator action: safe API, scopes, no secret persistence', () => {
+  const panel = readFileSync(new URL('../src/components/MemberInvitationPanel.jsx', import.meta.url), 'utf8');
+  const backend = readFileSync(new URL('../../backend/src/modules/auth/invitations.js', import.meta.url), 'utf8');
+  const api = readFileSync(new URL('../src/services/api.js', import.meta.url), 'utf8');
+  assert.match(panel, /window\.confirm\('¿Invalidar el código anterior/);
+  assert.match(panel, /gate\.current\.acquire\(\)/);
+  assert.match(panel, /confirmMemberInviteRotation\(response, prepared\)/);
+  assert.match(panel, /setSecret\(null\);\s*try \{/);
+  assert.match(panel, /Reemitir código/);
+  assert.match(api, /rotateMemberInvitation: \(id, expectedUpdatedAt\)/);
+  assert.match(backend, /requireCapability\('members\.invite'\)/);
+  assert.match(backend, /lock: transaction\.LOCK\.UPDATE/);
+  assert.match(backend, /INVITATION_ROTATION_STALE/);
+  assert.match(backend, /member_invitation\.rotated/);
+  assert.doesNotMatch(panel, /localStorage|sessionStorage|location\.search/);
 });
