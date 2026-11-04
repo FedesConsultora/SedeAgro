@@ -263,6 +263,27 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
       await expectStatus(endpoint, foreignAdmin, 'GET', undefined, 404);
     }
 
+    // A dated export must include a work actually FINISHED in the period,
+    // even if its parent order was created much earlier. Update only this
+    // disposable fixture's creation timestamp; do not change execution truth.
+    await owner.query(`
+      UPDATE work_orders SET created_at='2025-01-01T00:00:00Z'
+      WHERE tenant_id=$1 AND id=$2
+    `, [tenantA,order]);
+    const completionDay = new Date(finished).toISOString().slice(0,10);
+    const dated = await expectStatus(
+      `/reports/field/${field}/export.csv?from=${completionDay}&to=${completionDay}`,
+      admin,'GET',undefined,200);
+    assert.equal(dated.data.counts.workOrders,0,
+      'no historical parent order should be misdated as created this period');
+    assert.equal(dated.data.counts.executions,1,
+      'actual execution finished during the period must remain exported');
+    assert.ok(dated.data.csv.includes(execution));
+    assert.ok(dated.data.csv.includes(order));
+    await expectStatus(
+      `/reports/field/${field}/export.csv?from=${completionDay}&to=${completionDay}`,
+      foreignAdmin,'GET',undefined,404);
+
     // Database evidence: exactly ONE observation, one private file, one
     // verified execution and the same lot for both products.
     const count = async (sql, args) => (await owner.query(sql, args)).rows[0];
