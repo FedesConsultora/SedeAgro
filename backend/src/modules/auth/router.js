@@ -42,7 +42,9 @@ const registerTenantSchema = z.object({
   fullName: z.string().min(2).max(180),
   email: z.string().email(),
   password: z.string().min(12),
-  planCode: z.string().default('starter')
+  // Public signup cannot select paid/private platform plans.
+  // Keep explicit legacy 'starter' requests compatible.
+  planCode: z.literal('starter').optional()
 });
 
 const loginSchema = z.object({
