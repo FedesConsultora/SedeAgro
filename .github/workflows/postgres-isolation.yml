@@ -50,6 +50,7 @@ jobs:
           npm run check:syntax
           bash -n scripts/verify-pilot-staging.sh
           node --test scripts/test/staging-smoke-guards.test.mjs
+          node --test scripts/test/pilot-mobile-evidence.test.mjs
           bash -n scripts/deploy-prod.sh
           bash -n scripts/production-deploy-lock.sh
           node --test scripts/test/production-deploy-lock.test.mjs
