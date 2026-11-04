@@ -145,7 +145,7 @@ invitationScopedRouter.post('/',
 invitationScopedRouter.get('/', requireCapability('members.invite'), asyncHandler(async (req, res) => {
   const rows = await MemberInvitation.findAll({
     where: { tenant_id: req.tenantId }, transaction: req.dbTransaction,
-    attributes: ['id', 'email', 'role_code', 'status', 'expires_at', 'created_at'],
+    attributes: ['id', 'email', 'role_code', 'status', 'expires_at', 'created_at', 'updated_at'],
     order: [['created_at', 'DESC'], ['id', 'DESC']], limit: 100
   });
   res.setHeader('Cache-Control', 'no-store');
