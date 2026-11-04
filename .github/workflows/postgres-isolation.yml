@@ -98,6 +98,7 @@ jobs:
           node --test scripts/test/verify-oci-signed-provenance.test.mjs
           node --check scripts/verify-image-security.mjs
           node --test scripts/test/image-security.test.mjs
+          node --test scripts/test/pilot-trivy-verified-install.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
