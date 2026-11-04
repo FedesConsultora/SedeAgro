@@ -143,7 +143,9 @@ authPublicRouter.post('/register-tenant', rateLimit({ windowMs: 10 * 60 * 1000, 
 
   const result = await sequelize.transaction(async (transaction) => {
     const plan = await Plan.findOne({
-      where: { code: payload.planCode, is_active: true },
+      // The public route has no billing or platform approval context.
+      // Only platform-admin flow may later select another plan for a tenant.
+      where: { code: 'starter', is_active: true },
       transaction,
       skipTenantScope: true
     });
