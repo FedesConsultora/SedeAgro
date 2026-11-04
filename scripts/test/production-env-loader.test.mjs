@@ -118,3 +118,16 @@ test('production deploy passes secrets by environment/stdin, not argv or shell e
     'this PR deliberately does not remove the existing OCI release hard-stop');
   assert.doesNotMatch(deploy, /(?:^\s*set -x|psql[^\n]*-a\b)/m);
 });
+
+test('actual psql stdin assignment is one complete line followed by LF', () => {
+  const line = deploy.split('\n').find(row =>
+    row.includes('printf ') && row.includes('app_password %s'));
+  assert.ok(line, 'missing safe stdin assignment');
+  const out = spawnSync('bash', ['-e', '-c', line], {
+    encoding: 'utf8', timeout: 3000,
+    env: { ...process.env, APP_DB_PASSWORD: secretRuntime }
+  });
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stderr, '');
+  assert.equal(out.stdout, '\\set app_password ' + secretRuntime + '\n');
+});
