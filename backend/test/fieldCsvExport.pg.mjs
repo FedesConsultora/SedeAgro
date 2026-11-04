@@ -116,6 +116,7 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
     const json = await result.json();
     assert.equal(json.data.counts.observations, 1);
     assert.equal(json.data.counts.workOrders, 1);
+    assert.equal(json.data.counts.executions, 0, 'no real work has been executed in this period');
     assert.equal(json.data.mimeType, 'text/csv;charset=utf-8');
     assert.ok(json.data.csv.includes('"\'=HYPERLINK(""bad"")"'));
     assert.ok(json.data.csv.includes('"\'@SUM(1)"'));
@@ -129,7 +130,7 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
       assert.equal(response.status, 200, await response.clone().text());
       assert.equal(response.headers.get('cache-control'), 'private, no-store');
       const doc = (await response.json()).data;
-      assert.deepEqual(doc.counts, { observations: 1, workOrders: 1 });
+      assert.deepEqual(doc.counts, { observations: 1, workOrders: 1, executions: 0 });
       assert.equal(doc.period.from, '2026-10-15');
       assert.equal(doc.period.to, '2026-10-15');
       assert.ok(doc.filename.endsWith('.' + format));
@@ -149,7 +150,8 @@ test('field CSV exports authorized tenant data, excludes other tenant and reject
 
     const empty = await get(base + '?from=2026-10-16&to=2026-10-16');
     assert.equal(empty.status, 200);
-    assert.deepEqual((await empty.json()).data.counts, { observations: 0, workOrders: 0 });
+    assert.deepEqual((await empty.json()).data.counts,
+      { observations: 0, workOrders: 0, executions: 0 });
     assert.equal((await get(base + '?from=2026-02-30')).status, 422);
     assert.equal((await get(base + '?from=2026-10-16&to=2026-10-15')).status, 422);
     assert.equal((await get(base + '?evil=1')).status, 422);
