@@ -11,7 +11,9 @@ export function decodeFieldDocument(payload, format) {
       typeof payload.content_base64 !== 'string' ||
       payload.content_base64.length > 4 * 1024 * 1024 + 4 ||
       !Number.isSafeInteger(payload.counts?.observations) ||
-      !Number.isSafeInteger(payload.counts?.workOrders)) {
+      !Number.isSafeInteger(payload.counts?.workOrders) ||
+      !Number.isSafeInteger(payload.counts?.executions) ||
+      payload.counts.executions < 0 || payload.counts.executions > 200) {
     throw new Error('Respuesta de reporte inválida; no se descargó ningún archivo.');
   }
   let binary;

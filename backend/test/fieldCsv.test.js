@@ -59,3 +59,34 @@ test('CSV prevents silent truncation at per-kind bound and at total bytes', () =
     })), workOrders: []
   }), /supera 1 MiB/);
 });
+
+
+test('execution rows preserve 15 columns, review status and CSV formula neutralization', () => {
+  const input = {
+    field: {id:'field-1',name:'Lote operativo',Farm:{name:'Campo norte'}},
+    observations:[],workOrders:[],
+    executions:[{
+      id:'exec-1',work_order_id:'order-legacy',work_order_type:'inspection',
+      work_order_priority:'urgent',review_status:'submitted',
+      worked_area_hectares:'1.25',started_at:'2026-10-01T01:00:00Z',
+      finished_at:'2026-11-03T02:00:00Z',reviewed_at:null,
+      result_summary:'=HYPERLINK("https://falso") texto del operario',
+      scouting_observation_id:null,scouting_run_id:null
+    }]
+  };
+  const csv = buildFieldCsv(input);
+  const lines = csv.trimEnd().split('\r\n');
+  assert.equal(lines.length,3);
+  assert.ok(lines[0].includes('"orden_asociada_id"'));
+  assert.ok(lines[0].includes('"hectareas_ejecutadas"'));
+  assert.ok(lines[0].includes('"fecha_revision_utc"'));
+  assert.ok(lines[2].includes('"ejecucion"'));
+  assert.ok(lines[2].includes('"submitted"'));
+  assert.ok(lines[2].includes('"order-legacy"'));
+  assert.ok(lines[2].includes('"1.25"'));
+  assert.ok(lines[2].includes('2026-11-03T02:00:00.000Z'));
+  assert.ok(lines[2].includes('"\'=HYPERLINK(""https://falso"") texto del operario"'));
+  assert.throws(() => buildFieldCsv({...input,
+    executions:Array.from({length:FIELD_CSV_MAX_ROWS_PER_KIND+1},()=>input.executions[0])
+  }),/demasiadas filas/);
+});

@@ -224,7 +224,7 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
     for (const format of ['csv', 'pdf', 'xlsx']) {
       const endpoint = `/reports/field/${field}/export.${format}`;
       const output = await expectStatus(endpoint, admin, 'GET', undefined, 200);
-      assert.deepEqual(output.data.counts, { observations: 1, workOrders: 1 });
+      assert.deepEqual(output.data.counts, { observations: 1, workOrders: 1, executions: 1 });
       assert.match(output.data.filename, new RegExp(`\\.${format}$`));
       if (format === 'csv') {
         assert.ok(output.data.csv.includes('Pilot observation created once'));
@@ -232,6 +232,15 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
         assert.ok(output.data.csv.includes('observacion_origen_id'));
         assert.ok(output.data.csv.includes(observationId));
         assert.ok(output.data.csv.includes(run));
+        assert.ok(output.data.csv.includes('orden_asociada_id'));
+        assert.ok(output.data.csv.includes('hectareas_ejecutadas'));
+        assert.ok(output.data.csv.includes('fecha_revision_utc'));
+        assert.ok(output.data.csv.includes('"ejecucion"'));
+        assert.ok(output.data.csv.includes('"verified"'));
+        assert.ok(output.data.csv.includes('"1.25"'));
+        assert.ok(output.data.csv.includes(execution));
+        assert.ok(output.data.csv.includes(order));
+        assert.ok(output.data.csv.includes('Inspección completada sobre el lote'));
       } else {
         const bytes = Buffer.from(output.data.content_base64, 'base64');
         assert.equal(bytes.length, output.data.size_bytes);
@@ -241,10 +250,39 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
           format + ' must include verified order-origin ID in the final export');
         assert.ok(bytes.includes(Buffer.from(run, 'utf8')),
           format + ' must include the originating scouting run ID');
+        assert.ok(bytes.includes(Buffer.from(execution, 'utf8')),
+          format + ' must include actual independently reviewed execution UUID');
+        assert.ok(bytes.includes(Buffer.from('verified', 'utf8')),
+          format + ' must include persisted independent review outcome');
+        assert.ok(bytes.includes(Buffer.from('1.25', 'utf8')),
+          format + ' must include declared worked area');
+        assert.ok(bytes.includes(Buffer.from('completada sobre el lote', 'utf8')),
+          format + ' must include the actual declared operation result');
       }
       await expectStatus(endpoint, scout, 'GET', undefined, 403);
       await expectStatus(endpoint, foreignAdmin, 'GET', undefined, 404);
     }
+
+    // A dated export must include a work actually FINISHED in the period,
+    // even if its parent order was created much earlier. Update only this
+    // disposable fixture's creation timestamp; do not change execution truth.
+    await owner.query(`
+      UPDATE work_orders SET created_at='2025-01-01T00:00:00Z'
+      WHERE tenant_id=$1 AND id=$2
+    `, [tenantA,order]);
+    const completionDay = new Date(finished).toISOString().slice(0,10);
+    const dated = await expectStatus(
+      `/reports/field/${field}/export.csv?from=${completionDay}&to=${completionDay}`,
+      admin,'GET',undefined,200);
+    assert.equal(dated.data.counts.workOrders,0,
+      'no historical parent order should be misdated as created this period');
+    assert.equal(dated.data.counts.executions,1,
+      'actual execution finished during the period must remain exported');
+    assert.ok(dated.data.csv.includes(execution));
+    assert.ok(dated.data.csv.includes(order));
+    await expectStatus(
+      `/reports/field/${field}/export.csv?from=${completionDay}&to=${completionDay}`,
+      foreignAdmin,'GET',undefined,404);
 
     // Database evidence: exactly ONE observation, one private file, one
     // verified execution and the same lot for both products.

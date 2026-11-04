@@ -211,7 +211,8 @@ async function exportFieldDocument(req, res, format) {
     content_base64: buffer.toString('base64'),
     size_bytes: buffer.length,
     counts: { observations: snapshot.observations.length,
-      workOrders: snapshot.workOrders.length },
+      workOrders: snapshot.workOrders.length,
+      executions: snapshot.executions.length },
     period: { from: snapshot.period.from, to: snapshot.period.to }
   } });
 }
@@ -235,7 +236,8 @@ reportsRouter.get('/field/:fieldId/export.csv', requireCapability('reports.read'
       filename: `reporte-lote-${snapshot.field.id}.csv`,
       mimeType: 'text/csv;charset=utf-8', csv,
       counts: { observations: snapshot.observations.length,
-        workOrders: snapshot.workOrders.length },
+        workOrders: snapshot.workOrders.length,
+      executions: snapshot.executions.length },
       period: { from: snapshot.period.from, to: snapshot.period.to }
     } });
   }));
