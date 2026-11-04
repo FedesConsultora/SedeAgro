@@ -256,7 +256,7 @@ test('0U pilot: one tenant crop -> offline observation+GPS -> private JPEG -> re
           format + ' must include persisted independent review outcome');
         assert.ok(bytes.includes(Buffer.from('1.25', 'utf8')),
           format + ' must include declared worked area');
-        assert.ok(bytes.includes(Buffer.from('Inspección completada', 'utf8')),
+        assert.ok(bytes.includes(Buffer.from('completada sobre el lote', 'utf8')),
           format + ' must include the actual declared operation result');
       }
       await expectStatus(endpoint, scout, 'GET', undefined, 403);
