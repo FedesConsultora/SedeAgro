@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Op } from 'sequelize';
 import { z } from 'zod';
 import { withTenantTransaction } from '../../core/db.js';
+import { queryTenantTransaction } from '../../infra/db/rawScope.js';
 import { AuditEvent, MemberInvitation, Membership, Plan, Tenant, User } from '../../models/index.js';
 import { asyncHandler, HttpError, validate } from '../../utils/http.js';
 import { hashPassword, validatePasswordStrength, verifyPassword } from '../../utils/password.js';
@@ -18,6 +19,12 @@ export const invitationScopedRouter = Router();
 const inviteSchema = z.object({
   email: z.string().trim().email().max(320).transform(normalizeInvitationEmail),
   roleCode: z.enum(['scout', 'contractor', 'agronomic_coordinator', 'producer_viewer'])
+}).strict();
+
+// The known revision is not authorization. It only protects an administrator
+// from invalidating a newly generated code with a stale parallel request.
+const rotateSchema = z.object({
+  expectedUpdatedAt: z.iso.datetime({ offset: true })
 }).strict();
 
 const acceptSchema = z.object({
@@ -139,7 +146,7 @@ invitationScopedRouter.post('/',
 invitationScopedRouter.get('/', requireCapability('members.invite'), asyncHandler(async (req, res) => {
   const rows = await MemberInvitation.findAll({
     where: { tenant_id: req.tenantId }, transaction: req.dbTransaction,
-    attributes: ['id', 'email', 'role_code', 'status', 'expires_at', 'created_at'],
+    attributes: ['id', 'email', 'role_code', 'status', 'expires_at', 'created_at', 'updated_at'],
     order: [['created_at', 'DESC'], ['id', 'DESC']], limit: 100
   });
   res.setHeader('Cache-Control', 'no-store');
@@ -162,6 +169,68 @@ invitationScopedRouter.delete('/:invitationId',
     await recordInvitationAudit({ transaction, tenantId: req.tenantId,
       actorId: req.auth.user.id, invitation, action: 'member_invitation.revoked' });
     res.status(204).end();
+  })
+);
+
+// A lost manual code cannot be retrieved from SHA-256 storage. An admin can
+// instead explicitly invalidate it and generate exactly one NEW secret while
+// retaining the intended recipient, role and reserved seat.
+invitationScopedRouter.post('/:invitationId/rotate',
+  requireCapability('members.invite'),
+  rateLimit({ windowMs: 10 * 60 * 1000, max: 8, keyPrefix: 'member-invite-rotate' }),
+  validate(rotateSchema),
+  asyncHandler(async (req, res) => {
+    const parsed = z.string().uuid().safeParse(req.params.invitationId);
+    if (!parsed.success) throw opaqueTokenError();
+    const transaction = req.dbTransaction;
+    const tenant = await lockActiveTenant(req.tenantId, transaction);
+    const invitation = await MemberInvitation.findOne({
+      where: { id: parsed.data, tenant_id: tenant.id },
+      transaction, lock: transaction.LOCK.UPDATE
+    });
+    if (!invitation) throw opaqueTokenError();
+    const now = new Date();
+    if (invitation.status !== 'pending' || invitation.expires_at <= now) {
+      throw new HttpError(410, 'La invitación ya no está pendiente y vigente.',
+        undefined, 'INVITATION_UNAVAILABLE');
+    }
+    if (!isInvitableRole(invitation.role_code)) {
+      throw new HttpError(422, 'Rol de invitación no permitido.',
+        undefined, 'INVITATION_ROLE_INVALID');
+    }
+    const previousTime = new Date(invitation.updated_at).getTime();
+    if (!Number.isFinite(previousTime) ||
+        new Date(req.body.expectedUpdatedAt).getTime() !== previousTime) {
+      throw new HttpError(409, 'La invitación cambió. Actualizá la lista antes de emitir otro código.',
+        undefined, 'INVITATION_ROTATION_STALE');
+    }
+    const token = newInvitationToken(tenant.id);
+    const identity = invitationTokenIdentity(token);
+    // Monotonic millisecond revision: two concurrent admins cannot both
+    // receive seemingly valid codes for the same prior revision.
+    const updatedAt = new Date(Math.max(now.getTime(), previousTime + 1));
+    // Sequelize's silent instance.update can omit updated_at even when it is
+    // explicitly provided. Write and re-read the revision under the SAME
+    // tenant-scoped, row-locked transaction; a stale parallel operator must
+    // never receive a success for a superseded code.
+    await queryTenantTransaction(`
+      UPDATE member_invitations
+      SET token_hash = :hash, expires_at = :expiresAt,
+          updated_at = :updatedAt
+      WHERE tenant_id = :tenant AND id = :invitationId AND status = 'pending'
+    `, { transaction, replacements: {
+      tenant: tenant.id, invitationId: invitation.id,
+      hash: identity.tokenHash,
+      expiresAt: new Date(now.getTime() + INVITATION_TTL_MS), updatedAt
+    } });
+    await invitation.reload({ transaction });
+    await recordInvitationAudit({ transaction, tenantId: tenant.id,
+      actorId: req.auth.user.id, invitation, action: 'member_invitation.rotated' });
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(200).json({
+      data: invitationPublicShape(invitation),
+      delivery: { channel: 'manual', delivered: false, token }
+    });
   })
 );
 

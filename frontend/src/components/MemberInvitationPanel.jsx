@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Mail, UserPlus } from 'lucide-react';
 import {
   MEMBER_INVITE_ROLES, checkedMemberInvitations, confirmMemberInvitation,
-  createMemberInviteGate, memberInviteAuthority, prepareMemberInvitation
+  confirmMemberInviteRotation, createMemberInviteGate, memberInviteAuthority,
+  prepareMemberInvitation, prepareMemberInviteRotation
 } from '../services/memberInvitationSafety.js';
 
 const ROLE_NAMES = {
@@ -63,7 +64,8 @@ export function MemberInvitationPanel({ api, session, dataMode, refreshKey = 0 }
         }
       })();
     }
-    return () => { active = false; gate.current.release(); };
+    // List refreshes must not unlock an in-flight invitation mutation.
+    return () => { active = false; };
   }, [scope, api, revision, refreshKey]);
 
   const submit = async (event) => {
@@ -125,6 +127,43 @@ export function MemberInvitationPanel({ api, session, dataMode, refreshKey = 0 }
     }
   };
 
+  const rotate = async (row) => {
+    if (!rows.some(item => item.id === row.id &&
+        item.updatedAt === row.updatedAt && item.status === 'pending')) return;
+    if (!window.confirm('¿Invalidar el código anterior y generar uno nuevo? El anterior dejará de funcionar inmediatamente, incluso si ya lo compartiste.')) return;
+    let prepared;
+    try { prepared = prepareMemberInviteRotation(row, session, dataMode); }
+    catch (err) { setError(err.message); return; }
+    if (!gate.current.acquire()) return;
+    const requestScope = scope;
+    const requestApi = api;
+    setBusy(true);
+    setError('');
+    // A previously displayed code is unusable after this uncertain POST.
+    setSecret(null);
+    try {
+      const response = await requestApi.rotateMemberInvitation(
+        prepared.id, prepared.expectedUpdatedAt
+      );
+      if (!requestIsCurrent(requestScope, requestApi)) return;
+      const confirmed = confirmMemberInviteRotation(response, prepared);
+      if (!requestIsCurrent(requestScope, requestApi)) return;
+      setSecret({ scope: requestScope, api: requestApi, ...confirmed });
+      setRevision(value => value + 1);
+    } catch (err) {
+      if (requestIsCurrent(requestScope, requestApi)) {
+        setError('No se pudo confirmar el código nuevo. Actualizá la lista antes de intentar otra renovación. ' +
+          (err?.message || 'Sin respuesta del servidor.'));
+        setRevision(value => value + 1);
+      }
+    } finally {
+      if (requestIsCurrent(requestScope, requestApi)) {
+        gate.current.release();
+        setBusy(false);
+      }
+    }
+  };
+
   if (!scope) return null;
 
   return (
@@ -135,7 +174,8 @@ export function MemberInvitationPanel({ api, session, dataMode, refreshKey = 0 }
       </div>
       <p>Generá una invitación segura válida por siete días. SedeAgro todavía no envía emails:
         deberás compartir el código una sola vez por un canal privado con su destinatario.
-        Nunca lo publiques en un grupo o incidencia.</p>
+        Nunca lo publiques en un grupo o incidencia. Si se pierde antes de entregarlo,
+        podés reemitirlo: el anterior queda invalidado.</p>
       <form onSubmit={submit} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
         <label className="form-field" style={{ flex: '1 1 230px' }}>
           Email del destinatario
@@ -192,9 +232,14 @@ export function MemberInvitationPanel({ api, session, dataMode, refreshKey = 0 }
                     row.status === 'accepted' ? 'Aceptada' : 'Revocada'} ·
                     Vence {new Date(row.expiresAt).toLocaleDateString('es-AR')}</small>
                 </div>
-                {row.status === 'pending' && !expired &&
+                {row.status === 'pending' && !expired && <div style={{
+                  display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap'
+                }}>
                   <button type="button" className="ghost-action" disabled={busy}
-                    onClick={() => revoke(row.id)}>Revocar</button>}
+                    onClick={() => rotate(row)}>Reemitir código</button>
+                  <button type="button" className="ghost-action" disabled={busy}
+                    onClick={() => revoke(row.id)}>Revocar</button>
+                </div>}
               </article>;
             })}
           </div>

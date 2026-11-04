@@ -98,6 +98,7 @@ jobs:
           node --test scripts/test/verify-oci-signed-provenance.test.mjs
           node --check scripts/verify-image-security.mjs
           node --test scripts/test/image-security.test.mjs
+          node --test scripts/test/pilot-trivy-verified-install.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
@@ -406,6 +407,28 @@ jobs:
           upload-artifact: 'false'
           upload-release-assets: 'false'
           dependency-snapshot: 'false'
+      # setup-trivy's installer can fail before scanner execution while
+      # resolving its release-asset mirror (exit 6). Fetch the official pinned
+      # release directly with bounded retries; verify its published SHA-256
+      # BEFORE extracting/running anything. No fallback, skip or fake scan.
+      - name: Install SHA256-verified Trivy v0.76.1 for real image scans
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/trivy_0.76.1_Linux-64bit.tar.gz"
+          install -d -m 700 "$RUNNER_TEMP/sedeagro-trivy"
+          curl --fail --location --show-error --silent \
+            --retry 5 --retry-all-errors --retry-delay 3 \
+            --connect-timeout 15 --max-time 180 \
+            "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" \
+            --output "$archive"
+          printf '%s  %s\n' \
+            'c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0' \
+            "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP/sedeagro-trivy" trivy
+          chmod 755 "$RUNNER_TEMP/sedeagro-trivy/trivy"
+          "$RUNNER_TEMP/sedeagro-trivy/trivy" --version | grep -Fx 'Version: 0.76.1'
+          printf '%s\n' "$RUNNER_TEMP/sedeagro-trivy" >> "$GITHUB_PATH"
       - name: Scan built backend OS and libraries with Trivy v0.76.1
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # pinned v0.36.0
         with:
@@ -419,6 +442,7 @@ jobs:
           output: ${{ runner.temp }}/sedeagro-security/sedeagro-backend-${{ env.IMAGE_SHA }}.trivy.json
           exit-code: '0'
           version: v0.76.1
+          skip-setup-trivy: 'true'
           cache: 'false'
           timeout: 10m
       - name: Scan built frontend OS and libraries with Trivy v0.76.1
@@ -434,6 +458,7 @@ jobs:
           output: ${{ runner.temp }}/sedeagro-security/sedeagro-frontend-${{ env.IMAGE_SHA }}.trivy.json
           exit-code: '0'
           version: v0.76.1
+          skip-setup-trivy: 'true'
           cache: 'false'
           timeout: 10m
       - name: Check nonsecret Syft/Trivy output structure before strict security admission
