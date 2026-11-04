@@ -13,14 +13,14 @@ function payload(format, bytes) {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     content_base64: Buffer.from(bytes).toString('base64'),
     size_bytes: bytes.length,
-    counts: { observations: 1, workOrders: 2 }
+    counts: { observations: 1, workOrders: 2, executions: 3 }
   };
 }
 test('PDF and XLSX response decoder validates signatures and bytes', async () => {
   const pdf = decodeFieldDocument(payload('pdf', Buffer.from('%PDF-1.4 text')), 'pdf');
   assert.equal(pdf.blob.type, 'application/pdf');
   assert.equal(pdf.blob.size, 13);
-  assert.deepEqual(pdf.counts, { observations: 1, workOrders: 2 });
+  assert.deepEqual(pdf.counts, { observations: 1, workOrders: 2, executions: 3 });
   const xlsx = decodeFieldDocument(payload('xlsx', Buffer.from([80,75,3,4,10,0])), 'xlsx');
   assert.equal(xlsx.blob.size, 6);
   assert.match(xlsx.blob.type, /spreadsheetml/);
@@ -45,4 +45,20 @@ test('same cookie-authenticated session/tenant fences all three formats', () => 
   assert.match(reportCard, /exportLock\.current = true/);
   assert.match(reportCard, /\['csv', 'pdf', 'xlsx'\]\.map/);
   assert.match(reportCard, /dataMode === 'live' &&/);
+});
+
+test('execution counts are mandatory truthful download metadata, not silently treated as zero',()=>{
+  const good = payload('pdf',Buffer.from('%PDF-1.4 text'));
+  for(const counts of [
+    {observations:1,workOrders:2},
+    {...good.counts,executions:-1},
+    {...good.counts,executions:201},
+    {...good.counts,executions:2.5},
+    {...good.counts,executions:'3'}
+  ]){
+    assert.throws(()=>decodeFieldDocument({...good,counts},'pdf'),/reporte inválida/);
+  }
+  assert.match(reportCard,/counts\.executions/);
+  assert.match(reportCard,/ejecuciones declaradas/);
+  assert.match(reportCard,/Las ejecuciones se filtran por su fecha de finalización/);
 });
