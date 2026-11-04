@@ -106,7 +106,7 @@ echo "Provisionando permisos mínimos del usuario de la aplicación..."
 # validated URL-safe literal only via stdin, before the reviewed SQL script.
 # Do not add -a/-e/echo-all to psql: those options would echo secrets.
 {
-  printf '\\set app_password %s\\n' "$APP_DB_PASSWORD"
+  printf '\set app_password %s\n' "$APP_DB_PASSWORD"
   cat scripts/provision-runtime-role.sql
 } | docker compose exec -T db psql \
   -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 \
