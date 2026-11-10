@@ -17,7 +17,7 @@ expected="${SEDEAGRO_VERIFIED_BACKUP_SHA256:-}"
 [[ "${SEDEAGRO_RESTORE_APPROVAL:-}" == "RESTORED:$release:$expected" ]] ||
   fail "operator must explicitly attest RESTORED:<release SHA>:<backup SHA256> after external restore"
 
-for cmd in docker sha256sum stat realpath grep date; do
+for cmd in docker sha256sum stat realpath awk date; do
   command -v "$cmd" >/dev/null 2>&1 || fail "missing required tool $cmd"
 done
 [[ "$backup" == /* && "$backup" =~ ^/[A-Za-z0-9._/-]+$ ]] ||
@@ -55,11 +55,27 @@ actual="$(sha256sum "$backup" | cut -d ' ' -f 1)"
 if ! archive_list="$(docker compose exec -T db pg_restore --list < "$backup")"; then
   fail "pg_restore cannot read archive TOC in the PostGIS container"
 fi
-for required in sequelize_migrations tenants auth_sessions fields work_orders evidence_blobs; do
-  if ! grep -qF "$required" <<< "$archive_list"; then
-    fail "backup missing expected schema object $required"
-  fi
-done
+# pg_restore -l emits: ID; OID OID TABLE schema name owner.
+# A substring match can be forged by TOC comments, TABLE DATA entries,
+# prefixes (work_orders_old) or objects in another schema. Count ONLY exact,
+# single public TABLE definitions for the six release-critical entities.
+# This proves archive structure, NOT that the operator actually restored it.
+if ! awk '
+  BEGIN {
+    split("sequelize_migrations tenants auth_sessions fields work_orders evidence_blobs", names, " ")
+    for (i in names) expected[names[i]] = 0
+  }
+  $1 ~ /^[0-9]+;$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ &&
+    $4 == "TABLE" && $5 == "public" && ($6 in expected) {
+      expected[$6]++
+  }
+  END {
+    for (name in expected) if (expected[name] != 1) bad = 1
+    if (bad) exit 1
+  }
+' <<< "$archive_list"; then
+  fail "backup TOC missing or duplicating exact required public table definitions"
+fi
 
 printf 'PASS read-only backup gate: recent private archive, matching SHA256 and pg_restore TOC for release %s.\n' "$release"
 printf 'CAUTION: external restore verification is an operator attestation, not proved by this check.\n'
