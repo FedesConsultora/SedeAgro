@@ -110,6 +110,186 @@ test('rejects an omitted, partial or mismatching SHA and incorrect approval', (t
   rejected(attempt({}, ['--bypass']));
 });
 
+test('rejects remote Docker, unreviewed Compose topology and operator-supplied OCI images',t=>{
+  const {attempt}=fixture(t);
+  const blockedOverrides=[
+    'DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH',
+    'DOCKER_CONFIG','DOCKER_DEFAULT_PLATFORM','BUILDX_BUILDER',
+    'COMPOSE_FILE','COMPOSE_PROJECT_NAME','COMPOSE_ENV_FILES',
+    'COMPOSE_PROFILES','COMPOSE_DISABLE_ENV_FILE','COMPOSE_PATH_SEPARATOR',
+    'COMPOSE_IGNORE_ORPHANS',
+    'SEDEAGRO_OCI_BACKEND_IMAGE','SEDEAGRO_OCI_FRONTEND_IMAGE'
+  ];
+  for(const name of blockedOverrides){
+    const unsafe=name.includes('IMAGE')?'sha256:'+'a'.repeat(64):
+      'UNTRUSTED_ENVIRONMENT_VALUE_NEVER_EXPOSE_ME';
+    const result=attempt({[name]:unsafe});
+    rejected(result,new RegExp('release environment override forbidden: '+name));
+    assert.doesNotMatch(result.stdout+result.stderr,/NEVER_EXPOSE_ME|sha256:aaaaaaaa/);
+    assert.doesNotMatch(result.stdout,/PASS read-only production preflight/);
+  }
+  // Default dedicated local Docker/Compose environment gets past this gate,
+  // but still fails at mandatory signed OCI and human release admission.
+  rejected(attempt(),/signed OCI\/security evidence directory is mandatory/);
+});
+
+test('environment boundary runs BEFORE git, signed image trust and Docker',()=>{
+  const override=source.indexOf('for override in');
+  const git=source.indexOf('for command in git grep stat');
+  const security=source.indexOf('verify-production-security.mjs');
+  const images=source.indexOf('verify-production-image-admission.mjs');
+  assert.ok(override>=0&&override<git&&git<security&&security<images);
+  assert.match(source,/DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY/);
+  assert.match(source,/COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES/);
+  assert.match(source,/SEDEAGRO_OCI_BACKEND_IMAGE SEDEAGRO_OCI_FRONTEND_IMAGE/);
+  assert.doesNotMatch(source,/printf.*override/);
+});
+
+test('rejects a different branch and detached HEAD', (t) => {
+  const { root, sha, attempt } = fixture(t);
+  must('git', ['-C', root, 'switch', '-q', '-c', 'some-feature'], root);
+  rejected(attempt());
+  must('git', ['-C', root, 'switch', '-q', '--detach', sha], root);
+  rejected(attempt());
+});
+
+test('rejects an uncommitted tracked edit', (t) => {
+  const { root, attempt } = fixture(t);
+  writeFileSync(join(root, 'README.md'), 'Dirty deployment\n');
+  rejected(attempt(), /uncommitted/);
+});
+
+test('rejects a local main ahead of the approved remote SHA', (t) => {
+  const { root, attempt, sha } = fixture(t);
+  must('git', ['-C', root, '-c', 'user.name=ReleaseFixture',
+    '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm',
+    'local drift'], root);
+  const moved = must('git', ['-C', root, 'rev-parse', 'HEAD'], root);
+  rejected(attempt({
+    SEDEAGRO_RELEASE_SHA: moved, SEDEAGRO_DEPLOY_APPROVAL: 'DEPLOY:' + moved
+  }), /origin\/main/);
+  rejected(attempt({
+    SEDEAGRO_RELEASE_SHA: sha, SEDEAGRO_DEPLOY_APPROVAL: 'DEPLOY:' + sha
+  }), /local HEAD/);
+});
+
+test('rejects missing, symlinked or world-readable env files', (t) => {
+  const { root, attempt } = fixture(t);
+  const path = join(root, 'backend/.env');
+  chmodSync(path, 0o644);
+  rejected(attempt(), /chmod 600/);
+  chmodSync(path, 0o600);
+  rmSync(path);
+  rejected(attempt(), /missing or a symlink/);
+});
+
+test('rejects demo seeds, debug logs and unsafe origin without executing config', (t) => {
+  const { root, attempt } = fixture(t);
+  const path = join(root, 'backend/.env');
+  const original = readFileSync(path, 'utf8');
+  for (const [before, after] of [
+    ['SEED_MODE=prod', 'SEED_MODE=demo'],
+    ['NODE_ENV=production', 'NODE_ENV=development'],
+    ['LOG_SQL=0', 'LOG_SQL=1'],
+    ['LOG_STACK=0', 'LOG_STACK=1'],
+    ['CORS_ORIGIN=https://sedeagro.fedes.ai', 'CORS_ORIGIN=http://localhost:3000']
+  ]) {
+    writeFileSync(path, original.replace(before, after));
+    rejected(attempt());
+  }
+  writeFileSync(path, original);
+  rejected(attempt(), /signed OCI\/security evidence directory is mandatory/);
+});
+
+test('rejects weak secrets, shared DB users and duplicate configuration', (t) => {
+  const { root, attempt } = fixture(t);
+  const backendPath = join(root, 'backend/.env');
+  const ownerPath = join(root, '.env');
+  writeFileSync(backendPath, backendEnv.replace(
+    'SyntheticJwtReleaseKey123456789abcdef', 'replace-with-production-secret'));
+  rejected(attempt(), /JWT_SECRET/);
+  writeFileSync(backendPath, backendEnv);
+  writeFileSync(ownerPath, rootEnv.replace(
+    'APP_DB_USER=sedeagro_app', 'APP_DB_USER=sedeagro_owner'));
+  rejected(attempt(), /non-owner/);
+  writeFileSync(ownerPath, rootEnv + 'APP_DB_PASSWORD=AnotherRuntimeReleaseKey123456789abcdef\n');
+  rejected(attempt(), /duplicate/);
+});
+
+
+test('rejects cross-reuse of owner, runtime and JWT credentials before image admission',t=>{
+  const {root,attempt}=fixture(t);
+  const path=join(root,'.env');
+  const jwt='SyntheticJwtReleaseKey123456789abcdef';
+  const cases=[
+    rootEnv.replace('APP_DB_PASSWORD=RuntimeReleaseKey123456789abcdef',
+      'APP_DB_PASSWORD=OwnerReleaseKey123456789abcdef'),
+    rootEnv.replace('POSTGRES_PASSWORD=OwnerReleaseKey123456789abcdef',
+      'POSTGRES_PASSWORD='+jwt),
+    rootEnv.replace('APP_DB_PASSWORD=RuntimeReleaseKey123456789abcdef',
+      'APP_DB_PASSWORD='+jwt)
+  ];
+  for(const changed of cases){
+    writeFileSync(path,changed);
+    const response=attempt();
+    rejected(response,/must be pairwise distinct/);
+    assert.doesNotMatch(response.stdout+response.stderr,
+      /OwnerReleaseKey123456789abcdef|RuntimeReleaseKey123456789abcdef|SyntheticJwtReleaseKey123456789abcdef/);
+    assert.doesNotMatch(response.stdout,/PASS read-only production preflight/);
+  }
+  writeFileSync(path,rootEnv);
+  rejected(attempt(),/signed OCI\/security evidence directory is mandatory/);
+});
+
+test('secret independence gate precedes package and signed OCI admission',()=>{
+  const distinct=source.indexOf('must be pairwise distinct');
+  const npm=source.indexOf('verify-production-security.mjs');
+  const oci=source.indexOf('verify-production-image-admission.mjs');
+  assert.ok(distinct>=0 && npm>distinct && oci>npm);
+  assert.doesNotMatch(source,/echo\s+"?\$\{?(?:jwt|owner_password|runtime_password)/);
+});
+
+test('does not source or evaluate release-critical env values', (t) => {
+  const { root, attempt } = fixture(t);
+  const marker = join(root, 'unsafe-executed');
+  const path = join(root, 'backend/.env');
+  writeFileSync(path, backendEnv.replace(
+    'SyntheticJwtReleaseKey123456789abcdef', '$(touch ' + marker + ')'));
+  rejected(attempt());
+  assert.equal(existsSync(marker), false);
+  assert.doesNotMatch(source, /(?:^|\n)\s*(?:source|\.)\s+.*\.env/m);
+  assert.doesNotMatch(source, /\bdocker (?:compose|run|exec)\b/);
+});
+
+test('historical unaccepted moderate inventory refuses SHA-approved deploy', (t) => {
+  const { attempt, sha } = fixture(t, historicalUnacceptedPolicy, securityCurrentLock);
+  const out = attempt();
+  rejected(out, /security P0 unresolved/);
+  assert.match(out.stderr, /unresolved moderate advisories/);
+  assert.doesNotMatch(out.stdout, /PASS read-only production preflight/);
+  assert.equal(typeof sha, 'string');
+});
+
+test('synthetic remediated release must also eliminate every recorded vulnerable version', (t) => {
+  const lock = structuredClone(safeSyntheticLock);
+  lock.packages['node_modules/uuid'] = { version: '8.3.2' };
+  const { attempt } = fixture(t, zeroRiskPolicy, lock);
+  rejected(attempt(), /security P0 unresolved/);
+});
+
+test('real patched npm lock remains insufficient for release without attested images', t => {
+  const { attempt } = fixture(t, securityCurrentPolicy, securityCurrentLock);
+  rejected(attempt(), /signed OCI\/security evidence directory is mandatory/);
+});
+
+test('admission runs after secret/npm checks but before any production PASS or Docker', () => {
+  const gate = source.indexOf('node "$ROOT/scripts/verify-production-image-admission.mjs"');
+  const npm = source.indexOf('node "$ROOT/scripts/verify-production-security.mjs"');
+  const pass = source.indexOf("printf 'PASS read-only production preflight:");
+  assert.ok(npm >= 0 && gate > npm && pass > gate);
+  assert.doesNotMatch(source, /(?:DEPLOY_APPROVAL|SKIP_GIT_PULL).*bypass/i);
+});
+
 test('rejects a different branch and detached HEAD', (t) => {
   const { root, sha, attempt } = fixture(t);
   must('git', ['-C', root, 'switch', '-q', '-c', 'some-feature'], root);
