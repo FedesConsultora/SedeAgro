@@ -1,11 +1,13 @@
 // 0P.33 — Read-only production image admission. Intentionally fail closed.
 // A CI scan/signature is NOT permission to deploy or evidence that a locally
 // rebuilt Compose image is byte-identical to CI's signed Docker-save artifact.
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifySecuritySignatures } from './verify-image-security.mjs';
 import { verifySignedRelease } from './verify-oci-signed-provenance.mjs';
+import { verifiedReleaseRiskContext, verifySecurityOwnerApproval } from
+  './verify-release-owner-approval.mjs';
 
 const SHA40 = /^[a-f0-9]{40}$/;
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -71,9 +73,48 @@ export function verifySignedSecurityDecision(security, sha) {
     human_owner_required: true };
 }
 
+
+/**
+ * Secondary, independent human attestation. The registry is ONLY the
+ * repository-pinned trust roster (empty in current main). There is no
+ * environment/CLI-supplied public key, signing bypass or risk rewrite.
+ */
+export function verifyHumanRiskEvidence({ sha, base, security, oci, receiptPath }) {
+  const approvalDir = secureDirectory(join(base, 'approval'));
+  const approvalPath = join(approvalDir, 'sedeagro-owner-approval-' + sha + '.json');
+  let st;
+  try { st = lstatSync(approvalPath); }
+  catch { deny('signed Security Owner approval evidence is missing'); }
+  check(st.isFile() && !st.isSymbolicLink() && st.nlink === 1 &&
+    st.size > 1 && st.size <= 16 * 1024 && (st.mode & 0o077) === 0 &&
+    (typeof process.getuid !== 'function' || st.uid === process.getuid()),
+  'private bounded single-link human approval required');
+  const receiptStat = lstatSync(receiptPath);
+  check(receiptStat.isFile() && !receiptStat.isSymbolicLink() &&
+    receiptStat.size > 1 && receiptStat.size < 65536,
+  'signed OCI receipt is missing, oversized or not regular');
+  const registry = JSON.parse(readFileSync(join(SRC,
+    'scripts/security-owner-trust.json'), 'utf8'));
+  const approval = JSON.parse(readFileSync(approvalPath, 'utf8'));
+  const context = verifiedReleaseRiskContext({
+    sha, oci, security, receiptBytes: readFileSync(receiptPath)
+  });
+  const owner = verifySecurityOwnerApproval({ approval, registry, context });
+  check(owner?.head === sha &&
+    owner.status === 'SECURITY_OWNER_IMAGE_RISK_SIGNED_NOT_DEPLOYED' &&
+    owner.scope === 'SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION' &&
+    owner.production_go === false &&
+    owner.staging_certified === false &&
+    owner.time_of_use_certified === false &&
+    owner.other_owners_approved === false,
+  'human risk signature cannot grant deploy or approvals of other owners');
+  return owner;
+}
+
 export async function inspectProductionImageAdmission({
   sha, evidenceDir, securityVerifier = verifySecuritySignatures,
-  ociVerifier = verifySignedRelease
+  ociVerifier = verifySignedRelease,
+  humanReviewVerifier = verifyHumanRiskEvidence
 } = {}) {
   check(SHA40.test(sha || ''), 'exact release SHA required');
   const base = secureDirectory(evidenceDir);
@@ -92,6 +133,18 @@ export async function inspectProductionImageAdmission({
     oci.source_ref === 'refs/heads/main' &&
     Array.isArray(oci.subjects) && oci.subjects.length === 2,
   'exact signed OCI archive and receipt are mandatory');
+  // Unlike the GitHub-signed scanner receipt, this is an independent
+  // human Ed25519 risk acceptance with exact SHA, OCI archive, image config
+  // IDs and security findings. No trust root exists until enrolled by humans.
+  const human = await humanReviewVerifier({ sha, base, security, oci, receiptPath });
+  check(human?.head === sha &&
+    human.status === 'SECURITY_OWNER_IMAGE_RISK_SIGNED_NOT_DEPLOYED' &&
+    human.scope === 'SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION' &&
+    human.production_go === false &&
+    human.staging_certified === false &&
+    human.time_of_use_certified === false &&
+    human.other_owners_approved === false,
+  'missing independent cryptographically signed Security Owner risk acceptance');
   // Current deploy-prod.sh always executes docker compose build locally.
   // Even a future authorized signed security receipt cannot certify different
   // rebuilt image bytes. This permanent-in-current-release fence is removed
