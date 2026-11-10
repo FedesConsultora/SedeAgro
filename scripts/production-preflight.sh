@@ -79,6 +79,15 @@ for key in POSTGRES_PASSWORD APP_DB_PASSWORD; do
   esac
 done
 
+# Distinct usernames are not enough: one leaked token or low-privilege DB
+# credential must never grant access to the owner account or vice versa.
+# Compare in memory; never include any of the three values in error output.
+owner_password="$(value "$root" POSTGRES_PASSWORD)"
+runtime_password="$(value "$root" APP_DB_PASSWORD)"
+[[ "$owner_password" != "$runtime_password" &&
+   "$jwt" != "$owner_password" && "$jwt" != "$runtime_password" ]] ||
+  fail "JWT_SECRET and both database passwords must be pairwise distinct"
+
 # A security-inventory CI success is not release acceptance. Refuse the
 # production deploy while any moderate backend advisory remains unresolved.
 # Run after Git/secret checks, still BEFORE Docker, backups or migrations.

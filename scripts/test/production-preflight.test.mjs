@@ -181,6 +181,39 @@ test('rejects weak secrets, shared DB users and duplicate configuration', (t) =>
   rejected(attempt(), /duplicate/);
 });
 
+
+test('rejects cross-reuse of owner, runtime and JWT credentials before image admission',t=>{
+  const {root,attempt}=fixture(t);
+  const path=join(root,'.env');
+  const jwt='SyntheticJwtReleaseKey123456789abcdef';
+  const cases=[
+    rootEnv.replace('APP_DB_PASSWORD=RuntimeReleaseKey123456789abcdef',
+      'APP_DB_PASSWORD=OwnerReleaseKey123456789abcdef'),
+    rootEnv.replace('POSTGRES_PASSWORD=OwnerReleaseKey123456789abcdef',
+      'POSTGRES_PASSWORD='+jwt),
+    rootEnv.replace('APP_DB_PASSWORD=RuntimeReleaseKey123456789abcdef',
+      'APP_DB_PASSWORD='+jwt)
+  ];
+  for(const changed of cases){
+    writeFileSync(path,changed);
+    const response=attempt();
+    rejected(response,/must be pairwise distinct/);
+    assert.doesNotMatch(response.stdout+response.stderr,
+      /OwnerReleaseKey123456789abcdef|RuntimeReleaseKey123456789abcdef|SyntheticJwtReleaseKey123456789abcdef/);
+    assert.doesNotMatch(response.stdout,/PASS read-only production preflight/);
+  }
+  writeFileSync(path,rootEnv);
+  rejected(attempt(),/signed OCI\/security evidence directory is mandatory/);
+});
+
+test('secret independence gate precedes package and signed OCI admission',()=>{
+  const distinct=source.indexOf('must be pairwise distinct');
+  const npm=source.indexOf('verify-production-security.mjs');
+  const oci=source.indexOf('verify-production-image-admission.mjs');
+  assert.ok(distinct>=0 && npm>distinct && oci>npm);
+  assert.doesNotMatch(source,/echo\s+"?\$\{?(?:jwt|owner_password|runtime_password)/);
+});
+
 test('does not source or evaluate release-critical env values', (t) => {
   const { root, attempt } = fixture(t);
   const marker = join(root, 'unsafe-executed');
