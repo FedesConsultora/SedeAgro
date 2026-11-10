@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { inspectProductionImageAdmission, verifySignedSecurityDecision, verifyHumanRiskEvidence } from
+import { inspectProductionImageAdmission, inspectSignedImageCandidate,
+  verifySignedSecurityDecision, verifyHumanRiskEvidence } from
   '../verify-production-image-admission.mjs';
 
 const SHA='a'.repeat(40);
@@ -98,6 +99,31 @@ test('real scanner and signed OCI evidence still deny without independent human 
   }),/independent private Security Owner evidence directory required/);
   assert.equal(signedCalls,1);
   assert.equal(ociCalls,1,'review-only scan must not falsely deny real OCI before owner stage');
+});
+
+test('separate signed candidate stage remains read-only and cannot claim deployment GO',async t=>{
+  const base=privateDirs(t);
+  let signedCalls=0,ociCalls=0,humanCalls=0;
+  const result=await inspectSignedImageCandidate({
+    sha:SHA,evidenceDir:base,
+    securityVerifier:()=>{signedCalls++;return security();},
+    ociVerifier:async()=>{ociCalls++;return oci();},
+    humanReviewVerifier:async()=>{humanCalls++;return {
+      ...fakeVerifiedOwner(),signer_key_id:'f'.repeat(64)
+    };}
+  });
+  assert.deepEqual([signedCalls,ociCalls,humanCalls],[1,1,1]);
+  assert.equal(result.status,'HUMAN_SIGNED_OCI_IMAGE_RISK_REVIEW_NOT_DEPLOYED');
+  assert.equal(result.head,SHA);
+  assert.equal(result.oci_archive_sha256,'c'.repeat(64));
+  assert.equal(result.oci_receipt_sha256,'d'.repeat(64));
+  assert.equal(result.security_receipt_sha256,'b'.repeat(64));
+  assert.equal(result.security_owner_risk_accepted,true);
+  for(const field of ['production_go','other_owners_approved','staging_certified',
+    'time_of_use_certified','images_loaded','containers_created'])
+    assert.equal(result[field],false);
+  // This test uses injected synthetic verifiers. The real Security Owner
+  // key registry is empty and actual CLI remains blocked.
 });
 
 test('even hypothetical signed owner approval cannot authorize local Docker rebuild',async t=>{
