@@ -113,7 +113,7 @@ export function verifyHumanRiskEvidence({ sha, base, security, oci, receiptPath 
   return owner;
 }
 
-export async function inspectProductionImageAdmission({
+export async function inspectSignedImageCandidate({
   sha, evidenceDir, securityVerifier = verifySecuritySignatures,
   ociVerifier = verifySignedRelease,
   humanReviewVerifier = verifyHumanRiskEvidence
@@ -133,7 +133,10 @@ export async function inspectProductionImageAdmission({
     oci.repository === 'FedesConsultora/SedeAgro' &&
     oci.signer_workflow === 'FedesConsultora/SedeAgro/.github/workflows/postgres-isolation.yml' &&
     oci.source_ref === 'refs/heads/main' &&
-    Array.isArray(oci.subjects) && oci.subjects.length === 2,
+    Array.isArray(oci.subjects) && oci.subjects.length === 2 &&
+    oci.subjects[0]?.name === 'sedeagro-images-' + sha + '.tar' &&
+    oci.subjects[1]?.name === 'sedeagro-images-' + sha + '.json' &&
+    oci.subjects.every(subject => /^[a-f0-9]{64}$/.test(subject.sha256 || '')),
   'exact signed OCI archive and receipt are mandatory');
   // Unlike the GitHub-signed scanner receipt, this is an independent
   // human Ed25519 risk acceptance with exact SHA, OCI archive, image config
@@ -147,10 +150,30 @@ export async function inspectProductionImageAdmission({
     human.time_of_use_certified === false &&
     human.other_owners_approved === false,
   'missing independent cryptographically signed Security Owner risk acceptance');
-  // Current deploy-prod.sh always executes docker compose build locally.
-  // Even a future authorized signed security receipt cannot certify different
-  // rebuilt image bytes. This permanent-in-current-release fence is removed
-  // only in a separately reviewed change that imports and proves EXACT bytes.
+  // Risk acceptance is deliberately NOT production/deploy authorization.
+  // The real registry currently contains no human key and will fail closed.
+  return {
+    status: 'HUMAN_SIGNED_OCI_IMAGE_RISK_REVIEW_NOT_DEPLOYED',
+    head: sha,
+    oci_archive_sha256: oci.subjects[0].sha256,
+    oci_receipt_sha256: oci.subjects[1].sha256,
+    security_receipt_sha256: security.subjects[4].sha256,
+    signer_key_id: human.signer_key_id || null,
+    security_owner_risk_accepted: true,
+    staging_certified: false, other_owners_approved: false,
+    production_go: false, time_of_use_certified: false,
+    images_loaded: false, containers_created: false
+  };
+}
+
+/**
+ * Current production script always rebuilds images. Even a valid signed
+ * human acceptance of scanner risk cannot certify those rebuilt bytes.
+ * Keep the unconditional admission hardstop until an independently reviewed
+ * immutable import/cutover implementation and real staging/operator GO.
+ */
+export async function inspectProductionImageAdmission(options = {}) {
+  await inspectSignedImageCandidate(options);
   deny('deploy-prod.sh rebuilds Docker images; signed OCI bytes are not the deployed artifact');
 }
 

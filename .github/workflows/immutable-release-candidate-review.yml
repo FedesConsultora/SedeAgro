@@ -1,0 +1,53 @@
+name: Immutable OCI candidate human review contract
+
+on:
+  pull_request:
+    paths:
+      - "scripts/verify-production-image-admission.mjs"
+      - "scripts/review-production-immutable-candidate.mjs"
+      - "scripts/test/review-production-immutable-candidate.test.mjs"
+      - "scripts/test/production-image-admission.test.mjs"
+      - ".github/workflows/immutable-release-candidate-review.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/verify-production-image-admission.mjs"
+      - "scripts/review-production-immutable-candidate.mjs"
+      - "scripts/test/review-production-immutable-candidate.test.mjs"
+      - "scripts/test/production-image-admission.test.mjs"
+      - ".github/workflows/immutable-release-candidate-review.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: immutable-oci-candidate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  immutable-oci-candidate-review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact event SHA
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Review-only candidate and admission syntax
+        run: |
+          node --check scripts/verify-production-image-admission.mjs
+          node --check scripts/review-production-immutable-candidate.mjs
+          node --check scripts/test/review-production-immutable-candidate.test.mjs
+      - name: Reject forged human approvals and immutable Docker mismatches
+        run: |
+          node --test scripts/test/production-image-admission.test.mjs
+          node --test scripts/test/review-production-immutable-candidate.test.mjs
+      - name: Preserve independent Ed25519 signature verifier and deploy hardstop
+        run: node --test scripts/test/release-owner-approval.test.mjs

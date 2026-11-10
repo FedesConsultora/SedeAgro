@@ -501,6 +501,12 @@ try {
   await secondTab.locator('#login-password').fill(password);
   await secondTab.locator('#login-submit').click();
   await secondTab.getByTitle('Sesiones').waitFor();
+  // The first tab is backgrounded by the second-tab login. Test the real
+  // operator return-to-tab path: foreground visibility/focus must recheck
+  // the now-shared HttpOnly cookie and tenant before exposing private UI.
+  await page.bringToFront();
+  await page.waitForFunction(() => document.visibilityState === 'visible');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.getByTitle('Monitoreo').waitFor();
   await page.getByTitle('Monitoreo').click();
   await page.getByRole('button', { name: /Evidence Browser Lote/ }).click();

@@ -66,9 +66,12 @@ function override(base){
   }
   return candidate;
 }
-function fakeCompose({mutate,checkArgs}={}){
+function fakeCompose({mutate,mutateImmutable,checkArgs}={}){
   const calls=[],base=baseConfig(),candidate=override(base);
   if(mutate)mutate({base,candidate});
+  const locked=structuredClone(candidate);
+  for(const im of images)locked.services[im.service].image=im.config_id;
+  if(mutateImmutable)mutateImmutable(locked);
   const execute=(args,env)=>{
     calls.push(args);
     assert.deepEqual(args.slice(0,4),['--context','default','compose','-f']);
@@ -82,18 +85,25 @@ function fakeCompose({mutate,checkArgs}={}){
       'SEDEAGRO_OCI_BACKEND_IMAGE','SEDEAGRO_OCI_FRONTEND_IMAGE'
     ].sort());
     const isOverride=args.filter(x=>x==='-f').length===2;
+    const useIds=env.SEDEAGRO_OCI_BACKEND_IMAGE===images[0].config_id;
+    assert.equal(env.SEDEAGRO_OCI_FRONTEND_IMAGE,
+      useIds?images[1].config_id:images[1].tag);
     if(checkArgs)checkArgs(args,env);
-    return JSON.stringify(isOverride?candidate:base);
+    return JSON.stringify(isOverride?(useIds?locked:candidate):base);
   };
   return {execute,calls};
 }
-async function run(t,{mutate,inspected}={}){
+async function run(t,{mutate,mutateImmutable,inspected}={}){
   const {dir,content}=fixture(t);
-  const mock=fakeCompose({mutate});
+  const mock=fakeCompose({mutate,mutateImmutable});
   let checks=0;
   const report=previewSignedHostCompose({
     sha:SHA,evidenceDir:dir,
-    inspect:async()=>{checks++;return inspected??accepted(content);},
+    inspect:async()=>{
+      checks++;
+      return typeof inspected==='function'?inspected(checks,content):
+        (inspected??accepted(content));
+    },
     execute:mock.execute
   });
   return {report,calls:mock.calls,checks:()=>checks};
@@ -111,8 +121,11 @@ test('signed host OCI ids match secret-free Compose topology; never production G
   assert.equal(result.time_of_container_create_certified,false);
   assert.equal(result.containers_created,false);
   assert.equal(result.release_go,false);
-  assert.equal(a.checks(),1);
-  assert.equal(a.calls.length,2);
+  assert.equal(a.checks(),2);
+  assert.equal(a.calls.length,3);
+  assert.equal(result.immutable_config_ids_bound,true);
+  assert.equal(result.mutable_tag_reference_in_final_plan,false);
+  assert.equal(result.docker_identity_rechecked_after_compose,true);
   for(const call of a.calls)
     assert.ok(!call.some(x=>['build','pull','run','create','up','start','load'].includes(x)));
 });
@@ -171,7 +184,46 @@ test('unreviewed topology mutations fail: port, network, pin, build, pull',async
   for(const mutate of attacks){
     const a=await run(t,{mutate});
     await assert.rejects(a.report,/OCI_PRODUCTION_OVERLAY_BLOCKED/);
-    assert.equal(a.calls.length,2);
+    assert.equal(a.calls.length,3);
+  }
+});
+
+test('immutable host plan rejects mutated db, redis, network, pull, port and signed IDs',async t=>{
+  for(const mutateImmutable of [
+    c=>{c.services.backend.image=images[0].tag;},
+    c=>{c.services.frontend.image=id('a');},
+    c=>{c.services.frontend.pull_policy='always';},
+    c=>{c.services.backend.build={context:'/tmp/untrusted'};},
+    c=>{c.services.db.image='postgres:latest';},
+    c=>{c.services.redis.ports=['6379:6379'];},
+    c=>{c.networks['fedes-net'].external=false;},
+    c=>{c.volumes.extra={};},
+    c=>{c.services.backend.environment={LEAK:'from-untrusted'};}
+  ]){
+    const a=await run(t,{mutateImmutable});
+    await assert.rejects(a.report,/IMMUTABLE_PRODUCTION_COMPOSE_BLOCKED/);
+    assert.equal(a.calls.length,3);
+    assert.equal(a.checks(),1,'must reject malicious Compose before second OCI read');
+  }
+});
+
+test('local signed-image identity changing during Compose review fails safely',async t=>{
+  for(const drift of [
+    {head:OTHER},
+    {oci_archive_sha256:'a'.repeat(64)},
+    {security_receipt_sha256:'b'.repeat(64)},
+    {inspected_image_ids:{backend:id('a'),frontend:images[1].config_id}},
+    {security_owner_approved:true},
+    {release_go:true},
+    {image_pull_allowed:true},
+    {local_docker_context:'remote'},
+    {time_of_container_create_certified:true}
+  ]){
+    const a=await run(t,{inspected:(checks,content)=>
+      checks===1?accepted(content):{...accepted(content),...drift}});
+    await assert.rejects(a.report,/HOST_OCI_COMPOSE_PREVIEW_BLOCKED/);
+    assert.equal(a.calls.length,3);
+    assert.equal(a.checks(),2);
   }
 });
 
