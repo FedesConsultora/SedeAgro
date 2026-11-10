@@ -80,7 +80,9 @@ export function verifySignedSecurityDecision(security, sha) {
  * environment/CLI-supplied public key, signing bypass or risk rewrite.
  */
 export function verifyHumanRiskEvidence({ sha, base, security, oci, receiptPath }) {
-  const approvalDir = secureDirectory(join(base, 'approval'));
+  let approvalDir;
+  try { approvalDir = secureDirectory(join(base, 'approval')); }
+  catch { deny('independent private Security Owner evidence directory required'); }
   const approvalPath = join(approvalDir, 'sedeagro-owner-approval-' + sha + '.json');
   let st;
   try { st = lstatSync(approvalPath); }
