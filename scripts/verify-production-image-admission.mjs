@@ -50,18 +50,25 @@ export function verifySignedSecurityDecision(security, sha) {
     Number.isSafeInteger(review.severities.HIGH) &&
     Number.isSafeInteger(review.severities.MEDIUM) &&
     Number.isSafeInteger(review.severities.UNKNOWN) &&
+    Number.isSafeInteger(review.severities.LOW) &&
     Number.isSafeInteger(review.high_critical_findings) &&
+    ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].every(
+      key => review.severities[key] >= 0) &&
     review.high_critical_findings ===
       review.severities.CRITICAL + review.severities.HIGH &&
-    review.high_critical_findings === 0,
-  'missing or nonzero HIGH/CRITICAL inventory');
-  // Today's signed CI receipt has release_go:false even with zero HIGH.
-  // It must never be treated as an affirmative security-owner decision.
-  check(review.release_go === true &&
-    review.security_owner_review_required === false &&
-    review.release_gate === 'APPROVED_FOR_RELEASE',
-  'explicit approved security-owner release decision missing; signed CI scan is review-only');
-  return { head: sha, findings: review.findings };
+    review.high_critical_findings === 0 &&
+    review.findings === ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN']
+      .reduce((total, key) => total + review.severities[key], 0),
+  'missing, negative or nonzero HIGH/CRITICAL inventory');
+  // GitHub's signed scan is a REVIEW artifact, not human authorization.
+  // Never rewrite an OIDC-signed release_go=false to true in JSON. The human
+  // Security Owner must independently sign exact OCI/image risk evidence.
+  check(review.release_go === false &&
+    review.security_owner_review_required === true &&
+    review.release_gate === 'EXTERNAL_SECURITY_REVIEW_REQUIRED',
+  'signed GitHub risk scan must require independent Security Owner review');
+  return { head: sha, findings: review.findings, release_go: false,
+    human_owner_required: true };
 }
 
 export async function inspectProductionImageAdmission({
