@@ -79,6 +79,8 @@ if ! nginx -t >/dev/null 2>/tmp/sedeagro-nginx-syntax.err; then
   stage=syntax
   if grep -qiE 'host not found in upstream|could not be resolved|no resolver defined' /tmp/sedeagro-nginx-syntax.err; then
     stage=upstream
+  elif grep -qiE 'operation not permitted|setgid|setgroups|initgroups|setuid|chown' /tmp/sedeagro-nginx-syntax.err; then
+    stage=privilege
   elif grep -qiE 'read-only file system|permission denied|mkdir\(\)|open\(\).*failed' /tmp/sedeagro-nginx-syntax.err; then
     stage=filesystem
   elif grep -qiE 'unknown directive|invalid number|unexpected|duplicate' /tmp/sedeagro-nginx-syntax.err; then
@@ -108,6 +110,10 @@ function runtimeArgs(service,imageId,name){
     '--env','LOG_STACK=0','--workdir','/app',
     '--entrypoint','node',imageId,'--input-type=module','-e',backendProbe];
   return [...common,
+    // Nginx config includes "user nginx". With CAP_SETGID dropped, root can
+    // fail nginx -t while trying to switch groups. Check syntax as the image's
+    // own nonprivileged nginx user instead; keep all caps dropped.
+    '--user','nginx',
     '--tmpfs','/var/cache/nginx:rw,nosuid,nodev,mode=1777,size=16m',
     '--tmpfs','/run:rw,nosuid,nodev,mode=1777,size=4m',
     '--tmpfs','/var/log/nginx:rw,nosuid,nodev,mode=1777,size=8m',
@@ -157,7 +163,7 @@ export async function rehearseRunningImageProcesses({
       const stderr=typeof error?.stderr==='string'?error.stderr:'';
       const stage=im.service==='backend'
         ? /CI_OCI_BACKEND_PROBE_STAGE:(liveness|revision|readiness)/.exec(stderr)?.[1]
-        : /CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:(syntax|upstream|filesystem|config)/.exec(stderr)?.[1];
+        : /CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:(syntax|upstream|filesystem|config|privilege)/.exec(stderr)?.[1];
       const code=Number.isInteger(error?.status)&&error.status>=0&&
         error.status<=255?error.status:'unknown';
       // Only include authored, enumerable stage + exit code. Never reveal
@@ -228,7 +234,7 @@ async function main(){
 if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])){
   main().catch(error=>{
     const message=String(error?.message||'');
-    const authored=/^OCI_NETWORKLESS_PROCESS_BLOCKED: (?:backend|frontend) process exit=(?:[0-9]{1,3}|unknown) stage=(?:liveness|revision|readiness|syntax|upstream|filesystem|config|startup)$/.exec(message);
+    const authored=/^OCI_NETWORKLESS_PROCESS_BLOCKED: (?:backend|frontend) process exit=(?:[0-9]{1,3}|unknown) stage=(?:liveness|revision|readiness|syntax|upstream|filesystem|config|privilege|startup)$/.exec(message);
     console.error('BLOCKED OCI runtime smoke: '+(authored?
       authored[0].replace('OCI_NETWORKLESS_PROCESS_BLOCKED: ',''):
       'signed image, isolated process or cleanup did not pass'));
