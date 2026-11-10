@@ -68,8 +68,12 @@ function fakeDocker(options={}){
           assert.ok(args.includes('node'));
           assert.ok(args.some(x=>x.includes('/health/revision')&&x.includes('/health/ready')));
         }else{
+          assert.ok(args.includes('--user'));
+          assert.equal(args[args.indexOf('--user')+1],'nginx');
           assert.ok(args.includes('sedeagro_backend:127.0.0.1'));
-          assert.ok(args.includes('/var/cache/nginx:rw,nosuid,nodev,size=16m'));
+          assert.ok(args.includes('/var/cache/nginx:rw,nosuid,nodev,mode=1777,size=16m'));
+          assert.ok(args.includes('/run:rw,nosuid,nodev,mode=1777,size=4m'));
+          assert.ok(args.includes('/var/log/nginx:rw,nosuid,nodev,mode=1777,size=8m'));
           assert.ok(args.some(x=>x.includes('nginx -t')&&x.includes('/usr/share/nginx/html/index.html')));
         }
         seen.run.push(service);
@@ -181,7 +185,10 @@ test('failed runtime emits only authored stage and numeric exit, never raw Docke
   for(const [service,marker,expected] of [
     ['backend','CI_OCI_BACKEND_PROBE_STAGE:revision\\nEXPOSE_NO_VALUE','backend process exit=13 stage=revision'],
     ['backend','CI_OCI_BACKEND_PROBE_STAGE:readiness\\nEXPOSE_NO_VALUE','backend process exit=13 stage=readiness'],
-    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=syntax']
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=syntax'],
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:filesystem\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=filesystem'],
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:upstream\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=upstream'],
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:privilege\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=privilege']
   ]){
     const a=args(t,{failRun:service,marker});
     await assert.rejects(rehearseRunningImageProcesses(a),error=>{
@@ -199,6 +206,10 @@ test('source probes bind exact revision, fail closed without DB, and check Nginx
   assert.match(backendProbe,/ready.status!==503/);
   assert.match(backendProbe,/process.env.SEDEAGRO_BUILD_SHA/);
   assert.match(frontendProbe,/nginx -t/);
+  assert.match(frontendProbe,/CI_OCI_FRONTEND_NGINX_CONFIG_STAGE/);
+  assert.match(frontendProbe,/read-only file system/);
+  assert.match(frontendProbe,/host not found in upstream/);
+  assert.doesNotMatch(frontendProbe,/cat .*sedeagro-nginx-syntax/);
   assert.match(frontendProbe,/\/usr\/share\/nginx\/html\/sw.js/);
   assert.match(frontendProbe,/CI_OCI_FRONTEND_NGINX_CONFIG_OK/);
   const images=readFileSync(new URL('../ci-oci-running-image-smoke.mjs',import.meta.url),'utf8');
