@@ -289,8 +289,6 @@ test('admission runs after secret/npm checks but before any production PASS or D
   assert.ok(npm >= 0 && gate > npm && pass > gate);
   assert.doesNotMatch(source, /(?:DEPLOY_APPROVAL|SKIP_GIT_PULL).*bypass/i);
 });
- + '{!override'));
-});
 
 test('rejects a different branch and detached HEAD', (t) => {
   const { root, sha, attempt } = fixture(t);
