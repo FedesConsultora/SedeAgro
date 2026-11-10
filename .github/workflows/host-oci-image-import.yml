@@ -44,6 +44,6 @@ jobs:
         run: |
           node --test scripts/test/import-host-signed-oci-images.test.mjs
           node --test scripts/test/release-owner-approval.test.mjs
-      - name: Confirm trusted Security Owner registry remains empty
+      - name: Confirm trust roster is public-only and repository-bound
         run: |
-          node -e 'const r=require("./scripts/security-owner-trust.json");if(!Array.isArray(r.trusted_keys)||r.trusted_keys.length!==0)process.exit(1)'
+          node -e 'const r=require("./scripts/security-owner-trust.json");if(r.schema!=="sedeagro-security-owner-trust-v1"||r.repository!=="FedesConsultora/SedeAgro"||!Array.isArray(r.trusted_keys)||r.trusted_keys.some(k=>Object.keys(k).some(n=>/private|secret|seed/i.test(n))))process.exit(1)'
