@@ -147,7 +147,7 @@ test('wrong OCI source, security receipt, Docker context or runtime image ID den
 test('unhealthy, wrong project, wrong OCI config reference or overclaimed staging fails',async()=>{
   const edits=[
     {status:'CI_CONFIG_ONLY'},{project:'sedeagro'},
-    {head:OTHER},{release_sha:OTHER},{host:'staging.evil.test'},
+    {release_sha:OTHER},{host:'staging.evil.test'},
     {services:3},{network:'production'},
     {image_reference_kind:'legacy-staging-tag'},
     {image_ids:{...IMAGES,backend:ID('f')}},
