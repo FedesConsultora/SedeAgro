@@ -38,9 +38,25 @@ function fixture(t) {
     '[[ "$*" == "compose exec -T db pg_restore --list" ]] || exit 44',
     'if [[ "$MOCK_FAIL_DOCKER" == 1 ]]; then exit 55; fi',
     'cat >/dev/null',
-    'if [[ "$MOCK_MISSING" == 1 ]]; then echo "TABLE public tenants"; exit 0; fi',
+    'case "${MOCK_TOC_CASE:-valid}" in',
+    '  missing) echo "19; 1259 456 TABLE public tenants owner"; exit 0 ;;',
+    'esac',
+    'n=90',
     'for table in sequelize_migrations tenants auth_sessions fields work_orders evidence_blobs; do',
-    '  echo "TABLE public $table"',
+    '  if [[ "$table" == work_orders && -n "${MOCK_TOC_CASE:-}" && "$MOCK_TOC_CASE" != valid ]]; then',
+    '    case "$MOCK_TOC_CASE" in',
+    '      comment) echo "; 1259 999 TABLE public work_orders owner" ;;',
+    '      data) echo "120; 0 999 TABLE DATA public work_orders owner" ;;',
+    '      prefix) echo "120; 1259 999 TABLE public work_orders_archive owner" ;;',
+    '      schema) echo "120; 1259 999 TABLE audit work_orders owner" ;;',
+    '      view) echo "120; 1259 999 VIEW public work_orders owner" ;;',
+    '      malformed) echo "bad; 1259 999 TABLE public work_orders owner" ;;',
+    '      duplicate) echo "120; 1259 999 TABLE public work_orders owner"; echo "121; 1259 1000 TABLE public work_orders owner" ;;',
+    '    esac',
+    '  else',
+    '    echo "$n; 1259 999 TABLE public $table owner"',
+    '  fi',
+    '  ((n+=1))',
     'done',
     ''
   ].join('\n');
@@ -124,8 +140,30 @@ test('rejects a backup older than 24h or unexpectedly small', t => {
 test('fails closed if pg_restore fails or expected schema objects are absent', t => {
   const f = fixture(t);
   blocked(f.attempt({ MOCK_FAIL_DOCKER: '1' }));
-  blocked(f.attempt({ MOCK_MISSING: '1' }));
+  blocked(f.attempt({ MOCK_TOC_CASE: 'missing' }));
   assert.match(readFileSync(f.logFile, 'utf8'), /pg_restore --list/);
+});
+
+
+test('rejects fake TOC presence in comments, TABLE DATA, wrong schemas, prefixes and duplicate table definitions',t=>{
+  const f=fixture(t);
+  for(const attack of ['missing','comment','data','prefix','schema','view','malformed','duplicate']){
+    const result=f.attempt({MOCK_TOC_CASE:attack});
+    blocked(result);
+    assert.match(result.stderr,/exact required public table definitions/);
+    assert.doesNotMatch(result.stdout,/PASS read-only backup gate/);
+  }
+  const safe=f.attempt({MOCK_TOC_CASE:'valid'});
+  assert.equal(safe.status,0,safe.stderr);
+});
+
+test('TOC validation is structural, exact and read-only',()=>{
+  const code=readFileSync(sourceScript,'utf8');
+  assert.match(code,/\$4 == "TABLE" && \$5 == "public"/);
+  assert.match(code,/\$6 in expected/);
+  assert.match(code,/expected\[\$6\]\+\+/);
+  assert.doesNotMatch(code,/grep -qF "\$required"/);
+  assert.doesNotMatch(code,/docker compose (?:up|down|run)|\bpg_restore\s+--dbname/);
 });
 
 test('rejects arbitrary arguments and does not mutate a database', t => {
