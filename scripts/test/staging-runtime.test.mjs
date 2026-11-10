@@ -159,3 +159,98 @@ test('unknown host and truncated SHA never reach Docker',()=>{
   }
   assert.equal(called,false);
 });
+
+
+test('signed OCI staging accepts ONLY exact backend/frontend immutable config IDs',()=>{
+  const c=fixture(),expected={backend:imageId('3'),frontend:imageId('4')};
+  for(const [i,name] of ['db','redis','backend','frontend'].entries()){
+    c[name].Id=String(i+5).repeat(64);
+  }
+  c.backend.Config.Image=expected.backend;
+  c.frontend.Config.Image=expected.frontend;
+  const proof=validateStagingContainers(c,{sha,host,signedImageIds:expected});
+  assert.equal(proof.status,'RUNTIME_REVIEW_REQUIRED');
+  assert.equal(proof.image_reference_kind,'immutable-config-id');
+  assert.deepEqual(proof.container_ids,{
+    db:'5'.repeat(64),redis:'6'.repeat(64),
+    backend:'7'.repeat(64),frontend:'8'.repeat(64)
+  });
+  assert.equal(proof.signed_provenance_certified,false,
+    'shape validation alone must never claim real signature verification');
+  assert.equal(proof.registry_digest_certified,false);
+  assert.doesNotMatch(JSON.stringify(proof),/PRIVATE-NOT-IN-OUTPUT/);
+  // Legacy mode may not accept sha256 Config.Image; never downgrade silently.
+  assert.throws(()=>validateStagingContainers(c,{sha,host}),/STAGING_RUNTIME_BLOCKED/);
+});
+
+test('signed staging refuses mutable tags, alternative image IDs and replaced container identity',()=>{
+  const ids={backend:imageId('3'),frontend:imageId('4')};
+  const seeded=()=>{
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries()){
+      c[name].Id=String(i+5).repeat(64);
+    }
+    c.backend.Config.Image=ids.backend;
+    c.frontend.Config.Image=ids.frontend;
+    return c;
+  };
+  for(const change of [
+    c=>{c.backend.Config.Image='sedeagro-staging-backend:'+sha;},
+    c=>{c.frontend.Config.Image='sedeagro-frontend-rc:'+sha;},
+    c=>{c.backend.Config.Image=imageId('a');},
+    c=>{c.frontend.Image=imageId('a');},
+    c=>{c.backend.Config.Labels['org.opencontainers.image.revision']='b'.repeat(40);},
+    c=>{c.backend.Id='invalid';},
+    c=>{c.redis.Id=c.backend.Id;},
+    c=>{c.frontend.HostConfig.PortBindings['80/tcp'][0].HostIp='0.0.0.0';},
+    c=>{c.db.NetworkSettings.Networks={'production':{}};},
+    c=>{c.redis.Mounts[0].Name='sedeagro_redis';},
+    c=>{c.backend.State.Health.Status='unhealthy';},
+    c=>{c.backend.Config.Env[0]='NODE_ENV=development';}
+  ]){
+    const c=seeded();change(c);
+    assert.throws(()=>validateStagingContainers(c,{sha,host,signedImageIds:ids}),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
+  for(const invalid of [
+    {backend:ids.backend,frontend:ids.backend},
+    {backend:'backend:mutable',frontend:ids.frontend},
+    {backend:ids.backend},
+    {...ids,extra:ids.backend}
+  ]){
+    assert.throws(()=>validateStagingContainers(seeded(),{
+      sha,host,signedImageIds:invalid
+    }),/STAGING_RUNTIME_BLOCKED/);
+  }
+});
+
+test('signed staging Docker inspector ties each container list ID to inspected full ID',()=>{
+  const ids={backend:imageId('3'),frontend:imageId('4')},c=fixture();
+  const byService={db:'5',redis:'6',backend:'7',frontend:'8'};
+  for(const name of Object.keys(c)){
+    c[name].Id=byService[name].repeat(64);
+    if(ids[name])c[name].Config.Image=ids[name];
+  }
+  const execute=args=>{
+    if(args[0]==='container'){
+      const service=args.at(-1).split('=').at(-1);
+      return byService[service].repeat(12)+'\n';
+    }
+    const containerId=args.at(-1);
+    const service=Object.keys(byService).find(x=>
+      byService[x].repeat(12)===containerId);
+    return JSON.stringify(c[service]);
+  };
+  const ok=inspectStagingRuntime({sha,host,signedImageIds:ids,execute});
+  assert.equal(ok.image_reference_kind,'immutable-config-id');
+  c.frontend.Id='9'.repeat(64);
+  assert.throws(()=>inspectStagingRuntime({
+    sha,host,signedImageIds:ids,execute
+  }),/STAGING_RUNTIME_BLOCKED/);
+  let used=false;
+  assert.throws(()=>inspectStagingRuntime({
+    sha,host,signedImageIds:{backend:ids.backend,frontend:ids.backend},
+    execute:()=>{used=true;return '{}';}
+  }),/STAGING_RUNTIME_BLOCKED/);
+  assert.equal(used,false);
+});
