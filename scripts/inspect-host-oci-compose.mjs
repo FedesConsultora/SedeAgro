@@ -6,8 +6,10 @@ import {lstatSync,readFileSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {inspectHostSignedImages} from './inspect-host-oci-images.mjs';
-import {validateProductionOverlay,withSyntheticComposeFiles}
+import {withSyntheticComposeFiles}
   from './ci-oci-production-overlay.mjs';
+import {validateImmutableRuntimeCompose}
+  from './ci-oci-immutable-runtime-compose.mjs';
 
 const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const SHA=/^[a-f0-9]{40}$/;
@@ -88,21 +90,51 @@ export async function previewSignedHostCompose({
   // production .env, no service mutation, no actual secrets in output.
   const args=['config','--no-env-resolution','--format','json'];
   const env=syntheticEnv(sha);
-  const [base,candidate]=withSyntheticComposeFiles(({prod,overlay})=>[
+  const immutableEnv={
+    ...env,
+    SEDEAGRO_OCI_BACKEND_IMAGE:verified.inspected_image_ids.backend,
+    SEDEAGRO_OCI_FRONTEND_IMAGE:verified.inspected_image_ids.frontend
+  };
+  const [base,tagged,locked]=withSyntheticComposeFiles(({prod,overlay})=>[
     parse(execute(['--context','default','compose','-f',prod,...args],env),
       'base Compose config'),
     parse(execute(['--context','default','compose','-f',prod,'-f',overlay,...args],env),
-      'signed OCI Compose config')
+      'signed tag Compose config'),
+    parse(execute(['--context','default','compose','-f',prod,'-f',overlay,...args],
+      immutableEnv),'immutable ID Compose config')
   ]);
-  const ids=validateProductionOverlay(base,candidate,receipt,sha);
-  check(SERVICES.every(s=>ids[s]===verified.inspected_image_ids[s]),
-    'rendered Compose services do not match signed local Docker IDs');
+  // The new host proof must be identical to the existing signed CI image
+  // topology except for the two image references: signed config IDs replace
+  // mutable tags. DB, Redis, networks, ports, secrets, volumes and pull rules
+  // must not change. No actual host .env enters any of these previews.
+  const ids=validateImmutableRuntimeCompose(
+    base,tagged,locked,receipt,sha,verified.inspected_image_ids);
+  // Recheck signed host attestations, local Unix Docker endpoint, image ID,
+  // layers and tag after Compose resolution. A concurrent tag move must fail.
+  // Future time-of-container-create integrity is still not certified.
+  const later=await inspect({sha,evidenceDir});
+  check(later?.status===verified.status&&later.head===sha&&
+    later.local_docker_context==='default'&&
+    later.oci_archive_sha256===verified.oci_archive_sha256&&
+    later.oci_receipt_sha256===verified.oci_receipt_sha256&&
+    later.security_receipt_sha256===verified.security_receipt_sha256&&
+    later.signed_security_inventory_verified===true&&
+    later.images_loaded_during_check===false&&
+    later.containers_created===false&&
+    later.image_pull_allowed===false&&later.build_allowed===false&&
+    later.security_owner_approved===false&&later.release_go===false&&
+    later.time_of_container_create_certified===false&&
+    later.production_deploy_certified===false&&
+    SERVICES.every(service=>later.inspected_image_ids?.[service]===ids[service]),
+  'signed local Docker images changed during read-only Compose review');
   return {
     status:'HOST_SIGNED_OCI_COMPOSE_PARITY_READONLY_NOT_DEPLOYED',
     head:sha,oci_archive_sha256:verified.oci_archive_sha256,
     oci_receipt_sha256:digest,
     inspected_image_ids:ids,compose_project:'sedeagro',
     preview_uses_synthetic_files:true,
+    immutable_config_ids_bound:true,mutable_tag_reference_in_final_plan:false,
+    docker_identity_rechecked_after_compose:true,
     production_env_read:false,live_compose_config_used:false,
     image_pull_allowed:false,build_allowed:false,
     containers_created:false,containers_started:false,
