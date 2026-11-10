@@ -21,8 +21,16 @@ const HOST='HOST_SIGNED_OCI_IMAGES_PRESENT_READONLY_NOT_DEPLOYED';
 function deny(reason){throw new Error('SIGNED_HOST_OCI_IMPORT_BLOCKED: '+reason);}
 function check(ok,reason){if(!ok)deny(reason);}
 function sha256(bytes){return createHash('sha256').update(bytes).digest('hex');}
+// All host commands carry --context default, so image load is at argv[2:4].
+// Checking argv[0:2] accidentally gave a multi-GB Docker import only 20s.
+export function hostDockerTimeout(args){
+  const exact=Array.isArray(args)&&args.length===6&&
+    args[0]==='--context'&&args[1]==='default'&&
+    args[2]==='image'&&args[3]==='load'&&args[4]==='--input';
+  return exact?15*60*1000:20000;
+}
 const docker=args=>execFileSync('docker',args,{
-  encoding:'utf8',timeout:args[0]==='image'&&args[1]==='load'?240000:20000,
+  encoding:'utf8',timeout:hostDockerTimeout(args),
   maxBuffer:64*1024,stdio:['ignore','pipe','pipe'],
   env:{PATH:process.env.PATH,HOME:process.env.HOME}
 });
