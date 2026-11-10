@@ -13,6 +13,22 @@ SHA="${SEDEAGRO_RELEASE_SHA:-}"
 [[ "${SEDEAGRO_DEPLOY_APPROVAL:-}" == "DEPLOY:$SHA" ]] ||
   fail "explicit SEDEAGRO_DEPLOY_APPROVAL=DEPLOY:<full-SHA> is required"
 
+# Docker Compose honours environment overrides before evaluating the reviewed
+# compose files. A remote daemon, alternate project/file/profile/env-file, or
+# operator-supplied OCI image can silently change the intended deployment.
+# Fail before git, signed-image admission, Docker, migration or credentials.
+# Never print a value: it may contain a secret or a private hostname.
+for override in \
+  DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONFIG \
+  DOCKER_DEFAULT_PLATFORM BUILDX_BUILDER \
+  COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES COMPOSE_PROFILES \
+  COMPOSE_DISABLE_ENV_FILE COMPOSE_PATH_SEPARATOR COMPOSE_IGNORE_ORPHANS \
+  SEDEAGRO_OCI_BACKEND_IMAGE SEDEAGRO_OCI_FRONTEND_IMAGE
+do
+  [[ -z "${!override:-}" ]] ||
+    fail "release environment override forbidden: $override"
+done
+
 for command in git grep stat; do
   command -v "$command" >/dev/null 2>&1 || fail "missing required tool: $command"
 done
