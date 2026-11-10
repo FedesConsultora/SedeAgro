@@ -100,6 +100,8 @@ jobs:
           node --test scripts/test/ci-oci-container-creation.test.mjs
           node --check scripts/ci-oci-immutable-runtime-compose.mjs
           node --test scripts/test/ci-oci-immutable-runtime-compose.test.mjs
+          node --check scripts/ci-oci-staging-immutable-preview.mjs
+          node --test scripts/test/ci-oci-staging-immutable-preview.test.mjs
           node --check scripts/ci-oci-running-image-smoke.mjs
           node --test scripts/test/ci-oci-running-image-smoke.test.mjs
           node --check scripts/inspect-host-oci-images.mjs
@@ -732,6 +734,11 @@ jobs:
           # Resolve actual production topology once more with immutable
           # Docker config IDs, not mutable SHA tags. Read-only; no cutover.
           node scripts/ci-oci-immutable-runtime-compose.mjs --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          # Same signed image config IDs must also replace BOTH staging builds,
+          # preserving private DB/Redis/network/volumes/loopback-only port.
+          # Actual Compose parse only; no live staging container is started.
+          node scripts/ci-oci-staging-immutable-preview.mjs --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
           # After real signed import and immutable config-ID parity, start
           # real backend Express and Nginx from exactly those image IDs.
