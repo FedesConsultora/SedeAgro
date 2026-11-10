@@ -42,23 +42,29 @@ function receiptOf(path,sha){
 export const backendProbe=String.raw`import {createApp} from './src/app.js';
 const app=createApp();
 const server=app.listen(0,'127.0.0.1',async()=>{
+  let stage='liveness';
   try {
     const base='http://127.0.0.1:'+server.address().port;
     const live=await fetch(base+'/health');
     const liveBody=await live.json();
+    if(live.status!==200||liveBody.ok!==true||
+       liveBody.service!=='sedeagro-backend')throw new Error('unhealthy');
+    stage='revision';
     const rev=await fetch(base+'/health/revision');
     const revBody=await rev.json();
+    if(rev.status!==200||revBody.revision!==process.env.SEDEAGRO_BUILD_SHA)
+      throw new Error('revision invalid');
+    stage='readiness';
     const ready=await fetch(base+'/health/ready',{
       signal:AbortSignal.timeout(10000)});
     const readyBody=await ready.json();
-    if(live.status!==200||liveBody.ok!==true||
-       liveBody.service!=='sedeagro-backend'||
-       rev.status!==200||revBody.revision!==process.env.SEDEAGRO_BUILD_SHA||
-       ready.status!==503||readyBody.ready!==false)
-      throw new Error('invalid offline health/revision/readiness');
+    if(ready.status!==503||readyBody.ready!==false)
+      throw new Error('readiness failed open');
     console.log('CI_OCI_BACKEND_HEALTH_OK:'+revBody.revision);
-  }catch{process.exitCode=1;}
-  finally {server.close(()=>process.exit(process.exitCode||0));}
+  }catch{
+    console.error('CI_OCI_BACKEND_PROBE_STAGE:'+stage);
+    process.exitCode=1;
+  }finally {server.close(()=>process.exit(process.exitCode||0));}
 });
 setTimeout(()=>process.exit(3),16000).unref();`;
 
@@ -67,7 +73,10 @@ test -s /usr/share/nginx/html/index.html
 test -s /usr/share/nginx/html/sw.js
 test ! -e /usr/share/nginx/html/.env
 test ! -e /usr/share/nginx/html/node_modules
-nginx -t >/dev/null 2>&1
+if ! nginx -t >/dev/null 2>&1; then
+  printf 'CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax\n' >&2
+  exit 12
+fi
 printf 'CI_OCI_FRONTEND_NGINX_CONFIG_OK\n'`;
 
 function runtimeArgs(service,imageId,name){
@@ -133,7 +142,17 @@ export async function rehearseRunningImageProcesses({
       // imageId is the signed Docker config ID, NOT a tag. Neither script
       // exposes host ports, volumes, credentials or live network access.
       output=execute(runtimeArgs(im.service,im.config_id,name));
-    }catch{failure='isolated image process failed';}
+    }catch(error){
+      const stderr=typeof error?.stderr==='string'?error.stderr:'';
+      const stage=im.service==='backend'
+        ? /CI_OCI_BACKEND_PROBE_STAGE:(liveness|revision|readiness)/.exec(stderr)?.[1]
+        : /CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax/.test(stderr)?'syntax':null;
+      const code=Number.isInteger(error?.status)&&error.status>=0&&
+        error.status<=255?error.status:'unknown';
+      // Only include authored, enumerable stage + exit code. Never reveal
+      // raw Docker stderr, image contents, paths or environment variables.
+      failure=im.service+' process exit='+code+' stage='+(stage||'startup');
+    }
     finally{
       try{
         const inspect=()=>execute(['container','ls','--all','--quiet',
@@ -196,8 +215,12 @@ async function main(){
   console.log('NOT CERTIFIED: no database, staging, Security Owner or production cutover.');
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1])){
-  main().catch(()=>{
-    console.error('BLOCKED OCI runtime smoke: signed image, isolated process or cleanup did not pass');
+  main().catch(error=>{
+    const message=String(error?.message||'');
+    const authored=/^OCI_NETWORKLESS_PROCESS_BLOCKED: (?:backend|frontend) process exit=(?:[0-9]{1,3}|unknown) stage=(?:liveness|revision|readiness|syntax|startup)$/.exec(message);
+    console.error('BLOCKED OCI runtime smoke: '+(authored?
+      authored[0].replace('OCI_NETWORKLESS_PROCESS_BLOCKED: ',''):
+      'signed image, isolated process or cleanup did not pass'));
     process.exitCode=2;
   });
 }
