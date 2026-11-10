@@ -1,11 +1,13 @@
 // 0P.33 — Read-only production image admission. Intentionally fail closed.
 // A CI scan/signature is NOT permission to deploy or evidence that a locally
 // rebuilt Compose image is byte-identical to CI's signed Docker-save artifact.
-import { lstatSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifySecuritySignatures } from './verify-image-security.mjs';
 import { verifySignedRelease } from './verify-oci-signed-provenance.mjs';
+import { verifiedReleaseRiskContext, verifySecurityOwnerApproval } from
+  './verify-release-owner-approval.mjs';
 
 const SHA40 = /^[a-f0-9]{40}$/;
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,23 +52,71 @@ export function verifySignedSecurityDecision(security, sha) {
     Number.isSafeInteger(review.severities.HIGH) &&
     Number.isSafeInteger(review.severities.MEDIUM) &&
     Number.isSafeInteger(review.severities.UNKNOWN) &&
+    Number.isSafeInteger(review.severities.LOW) &&
     Number.isSafeInteger(review.high_critical_findings) &&
+    ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'].every(
+      key => review.severities[key] >= 0) &&
     review.high_critical_findings ===
       review.severities.CRITICAL + review.severities.HIGH &&
-    review.high_critical_findings === 0,
-  'missing or nonzero HIGH/CRITICAL inventory');
-  // Today's signed CI receipt has release_go:false even with zero HIGH.
-  // It must never be treated as an affirmative security-owner decision.
-  check(review.release_go === true &&
-    review.security_owner_review_required === false &&
-    review.release_gate === 'APPROVED_FOR_RELEASE',
-  'explicit approved security-owner release decision missing; signed CI scan is review-only');
-  return { head: sha, findings: review.findings };
+    review.high_critical_findings === 0 &&
+    review.findings === ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN']
+      .reduce((total, key) => total + review.severities[key], 0),
+  'missing, negative or nonzero HIGH/CRITICAL inventory');
+  // GitHub's signed scan is a REVIEW artifact, not human authorization.
+  // Never rewrite an OIDC-signed release_go=false to true in JSON. The human
+  // Security Owner must independently sign exact OCI/image risk evidence.
+  check(review.release_go === false &&
+    review.security_owner_review_required === true &&
+    review.release_gate === 'EXTERNAL_SECURITY_REVIEW_REQUIRED',
+  'signed GitHub risk scan must require independent Security Owner review');
+  return { head: sha, findings: review.findings, release_go: false,
+    human_owner_required: true };
+}
+
+
+/**
+ * Secondary, independent human attestation. The registry is ONLY the
+ * repository-pinned trust roster (empty in current main). There is no
+ * environment/CLI-supplied public key, signing bypass or risk rewrite.
+ */
+export function verifyHumanRiskEvidence({ sha, base, security, oci, receiptPath }) {
+  let approvalDir;
+  try { approvalDir = secureDirectory(join(base, 'approval')); }
+  catch { deny('independent private Security Owner evidence directory required'); }
+  const approvalPath = join(approvalDir, 'sedeagro-owner-approval-' + sha + '.json');
+  let st;
+  try { st = lstatSync(approvalPath); }
+  catch { deny('signed Security Owner approval evidence is missing'); }
+  check(st.isFile() && !st.isSymbolicLink() && st.nlink === 1 &&
+    st.size > 1 && st.size <= 16 * 1024 && (st.mode & 0o077) === 0 &&
+    (typeof process.getuid !== 'function' || st.uid === process.getuid()),
+  'private bounded single-link human approval required');
+  const receiptStat = lstatSync(receiptPath);
+  check(receiptStat.isFile() && !receiptStat.isSymbolicLink() &&
+    receiptStat.size > 1 && receiptStat.size < 65536,
+  'signed OCI receipt is missing, oversized or not regular');
+  const registry = JSON.parse(readFileSync(join(SRC,
+    'scripts/security-owner-trust.json'), 'utf8'));
+  const approval = JSON.parse(readFileSync(approvalPath, 'utf8'));
+  const context = verifiedReleaseRiskContext({
+    sha, oci, security, receiptBytes: readFileSync(receiptPath)
+  });
+  const owner = verifySecurityOwnerApproval({ approval, registry, context });
+  check(owner?.head === sha &&
+    owner.status === 'SECURITY_OWNER_IMAGE_RISK_SIGNED_NOT_DEPLOYED' &&
+    owner.scope === 'SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION' &&
+    owner.production_go === false &&
+    owner.staging_certified === false &&
+    owner.time_of_use_certified === false &&
+    owner.other_owners_approved === false,
+  'human risk signature cannot grant deploy or approvals of other owners');
+  return owner;
 }
 
 export async function inspectProductionImageAdmission({
   sha, evidenceDir, securityVerifier = verifySecuritySignatures,
-  ociVerifier = verifySignedRelease
+  ociVerifier = verifySignedRelease,
+  humanReviewVerifier = verifyHumanRiskEvidence
 } = {}) {
   check(SHA40.test(sha || ''), 'exact release SHA required');
   const base = secureDirectory(evidenceDir);
@@ -85,6 +135,18 @@ export async function inspectProductionImageAdmission({
     oci.source_ref === 'refs/heads/main' &&
     Array.isArray(oci.subjects) && oci.subjects.length === 2,
   'exact signed OCI archive and receipt are mandatory');
+  // Unlike the GitHub-signed scanner receipt, this is an independent
+  // human Ed25519 risk acceptance with exact SHA, OCI archive, image config
+  // IDs and security findings. No trust root exists until enrolled by humans.
+  const human = await humanReviewVerifier({ sha, base, security, oci, receiptPath });
+  check(human?.head === sha &&
+    human.status === 'SECURITY_OWNER_IMAGE_RISK_SIGNED_NOT_DEPLOYED' &&
+    human.scope === 'SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION' &&
+    human.production_go === false &&
+    human.staging_certified === false &&
+    human.time_of_use_certified === false &&
+    human.other_owners_approved === false,
+  'missing independent cryptographically signed Security Owner risk acceptance');
   // Current deploy-prod.sh always executes docker compose build locally.
   // Even a future authorized signed security receipt cannot certify different
   // rebuilt image bytes. This permanent-in-current-release fence is removed

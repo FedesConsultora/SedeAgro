@@ -296,7 +296,10 @@ test('production deployment and Signed CI report remain untouched and explicitly
   const gate=readFileSync(new URL('scripts/verify-production-image-admission.mjs',root),'utf8');
   const prod=readFileSync(new URL('scripts/deploy-prod.sh',root),'utf8');
   const workflow=readFileSync(new URL('.github/workflows/postgres-isolation.yml',root),'utf8');
-  assert.match(gate,/review\.release_go === true/);
+  assert.match(gate,/review\.release_go === false/);
+  assert.match(gate,/verifyHumanRiskEvidence/);
+  assert.match(gate,/verifySecurityOwnerApproval/);
+  assert.match(gate,/SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION/);
   assert.match(gate,/rebuilds Docker images/);
   assert.match(prod,/docker compose build backend frontend/);
   assert.match(workflow,/scripts\/test\/release-owner-approval\.test\.mjs/);

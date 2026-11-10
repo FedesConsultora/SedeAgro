@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, chmodSync, rmSync, symlinkSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, chmodSync, rmSync, symlinkSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { inspectProductionImageAdmission, verifySignedSecurityDecision } from
+import { inspectProductionImageAdmission, verifySignedSecurityDecision, verifyHumanRiskEvidence } from
   '../verify-production-image-admission.mjs';
 
 const SHA='a'.repeat(40);
@@ -20,7 +21,7 @@ const security=(review={})=>({
   status:'GITHUB_SIGNED_IMAGE_SECURITY_VERIFIED_RELEASE_NOT_CERTIFIED',
   head:SHA,source_signed:true,images_verified:2,
   subjects:subjects.map(name=>({name,sha256:'b'.repeat(64)})),
-  review:{findings:3,severities:{CRITICAL:0,HIGH:0,MEDIUM:1,UNKNOWN:2},
+  review:{findings:3,severities:{CRITICAL:0,HIGH:0,MEDIUM:1,LOW:0,UNKNOWN:2},
     high_critical_findings:0,
     release_gate:'EXTERNAL_SECURITY_REVIEW_REQUIRED',
     security_owner_review_required:true,release_go:false,...review}
@@ -38,6 +39,13 @@ const oci=()=>({
     {name:'sedeagro-images-'+SHA+'.json',sha256:'d'.repeat(64)}]
 });
 
+const fakeVerifiedOwner=()=>({
+  head:SHA,status:'SECURITY_OWNER_IMAGE_RISK_SIGNED_NOT_DEPLOYED',
+  scope:'SECURITY_RISK_ONLY_NO_DEPLOY_AUTHORIZATION',
+  production_go:false,staging_certified:false,time_of_use_certified:false,
+  other_owners_approved:false
+});
+
 function privateDirs(t) {
   const base=mkdtempSync(join(tmpdir(),'sedeagro-admission-unit-'));
   t.after(()=>rmSync(base,{recursive:true,force:true}));
@@ -46,10 +54,12 @@ function privateDirs(t) {
   return base;
 }
 
-test('signed scanner output with zero HIGH does NOT constitute signed owner approval',()=>{
-  assert.throws(()=>verifySignedSecurityDecision(security(),SHA),
-    /approved security-owner release decision missing/);
-  assert.equal(verifySignedSecurityDecision(artificialApproval(),SHA).head,SHA);
+test('OIDC-signed scanner report is review-only; forged release_go true is rejected',()=>{
+  assert.deepEqual(verifySignedSecurityDecision(security(),SHA),{
+    head:SHA,findings:3,release_go:false,human_owner_required:true
+  });
+  assert.throws(()=>verifySignedSecurityDecision(artificialApproval(),SHA),
+    /must require independent Security Owner review/);
 });
 
 test('wrong SHA, missing/duplicate signed subjects, invalid inventory, false risk posture fail',()=>{
@@ -61,12 +71,15 @@ test('wrong SHA, missing/duplicate signed subjects, invalid inventory, false ris
     {...security(),subjects:[...security().subjects.slice(0,4),security().subjects[0]]},
     {...security(),images_verified:1},
     security({release_go:true}),
+    security({release_gate:'APPROVED_FOR_RELEASE'}),
     security({security_owner_review_required:false}),
     security({release_go:true,security_owner_review_required:false,
       release_gate:'EXTERNAL_SECURITY_REVIEW_REQUIRED'}),
     security({high_critical_findings:1}),
-    security({severities:{CRITICAL:0,HIGH:1,MEDIUM:1,UNKNOWN:2},
-      high_critical_findings:1}),
+    security({severities:{CRITICAL:0,HIGH:1,MEDIUM:1,LOW:0,UNKNOWN:2},
+      high_critical_findings:1,findings:4}),
+    security({severities:{CRITICAL:0,HIGH:0,MEDIUM:1,LOW:-1,UNKNOWN:2},findings:2}),
+    security({severities:{CRITICAL:0,HIGH:0,MEDIUM:1,LOW:0,UNKNOWN:2},findings:4}),
     security({findings:-1}),
   ];
   for(const candidate of candidates){
@@ -75,23 +88,24 @@ test('wrong SHA, missing/duplicate signed subjects, invalid inventory, false ris
   }
 });
 
-test('production path denies before OCI inspection when authentic CI risk gate is review-only',async t=>{
+test('real scanner and signed OCI evidence still deny without independent human risk file',async t=>{
   const base=privateDirs(t);
   let signedCalls=0,ociCalls=0;
   await assert.rejects(inspectProductionImageAdmission({
     sha:SHA,evidenceDir:base,
     securityVerifier:()=>{signedCalls++;return security();},
-    ociVerifier:()=>{ociCalls++;return oci();}
-  }),/approved security-owner release decision missing/);
+    ociVerifier:async()=>{ociCalls++;return oci();}
+  }),/independent private Security Owner evidence directory required/);
   assert.equal(signedCalls,1);
-  assert.equal(ociCalls,0);
+  assert.equal(ociCalls,1,'review-only scan must not falsely deny real OCI before owner stage');
 });
 
 test('even hypothetical signed owner approval cannot authorize local Docker rebuild',async t=>{
   const base=privateDirs(t);
   let ociCalls=0;
   await assert.rejects(inspectProductionImageAdmission({
-    sha:SHA,evidenceDir:base,securityVerifier:()=>artificialApproval(),
+    sha:SHA,evidenceDir:base,securityVerifier:()=>security(),
+    humanReviewVerifier:fakeVerifiedOwner,
     ociVerifier:async args=>{
       ociCalls++;
       assert.equal(args.sha,SHA);
@@ -111,10 +125,68 @@ test('forged OCI attestation identity rejected even with synthetic owner approva
     {subjects:[]},
     {status:'OFFLINE_BUNDLE_VERIFIED_NOT_DEPLOYED'}]){
     await assert.rejects(inspectProductionImageAdmission({
-      sha:SHA,evidenceDir:base,securityVerifier:()=>artificialApproval(),
+      sha:SHA,evidenceDir:base,securityVerifier:()=>security(),
+      humanReviewVerifier:fakeVerifiedOwner,
       ociVerifier:async()=>({...oci(),...changes})
     }),/exact signed OCI archive/);
   }
+});
+
+
+test('human approval status cannot impersonate production, staging or other owner GO',async t=>{
+  const base=privateDirs(t);
+  for(const tamper of [
+    {head:'f'.repeat(40)},
+    {status:'APPROVED_FOR_RELEASE'},
+    {scope:'DEPLOY_ALLOWED'},
+    {production_go:true},
+    {staging_certified:true},
+    {time_of_use_certified:true},
+    {other_owners_approved:true}
+  ]){
+    await assert.rejects(inspectProductionImageAdmission({
+      sha:SHA,evidenceDir:base,
+      securityVerifier:()=>security(),
+      ociVerifier:async()=>oci(),
+      humanReviewVerifier:async()=>({...fakeVerifiedOwner(),...tamper})
+    }),/missing independent cryptographically signed Security Owner risk acceptance/);
+  }
+});
+
+test('real trust roster is empty and a synthetic private approval cannot authorize image risk',t=>{
+  const base=privateDirs(t);
+  const approvalDir=join(base,'approval');
+  mkdirSync(approvalDir,{mode:0o700});
+  const receipt={
+    head:SHA,archive:{name:'sedeagro-images-'+SHA+'.tar',sha256:'c'.repeat(64)},
+    images:['backend','frontend'].map((service,i)=>({
+      service,tag:'sedeagro-'+service+'-rc:'+SHA,
+      config_id:'sha256:'+(i?'e':'d').repeat(64)
+    }))
+  };
+  const receiptPath=join(base,'oci','sedeagro-images-'+SHA+'.json');
+  const receiptBytes=Buffer.from(JSON.stringify(receipt));
+  writeFileSync(receiptPath,receiptBytes,{mode:0o600});
+  const signedOci={...oci(),subjects:[
+    {name:'sedeagro-images-'+SHA+'.tar',sha256:receipt.archive.sha256},
+    {name:'sedeagro-images-'+SHA+'.json',
+      sha256:createHash('sha256').update(receiptBytes).digest('hex')}
+  ]};
+  const approvalPath=join(approvalDir,'sedeagro-owner-approval-'+SHA+'.json');
+  writeFileSync(approvalPath,'{}',{mode:0o600});
+  const trust=JSON.parse(readFileSync(
+    new URL('../security-owner-trust.json',import.meta.url),'utf8'));
+  assert.deepEqual(trust.trusted_keys,[],'no human signing key is enrolled');
+  const context={sha:SHA,base,security:security(),oci:signedOci,receiptPath};
+  assert.throws(()=>verifyHumanRiskEvidence(context),/no authorized human key enrolled/);
+  chmodSync(approvalPath,0o644);
+  assert.throws(()=>verifyHumanRiskEvidence(context),
+    /private bounded single-link human approval required/);
+  chmodSync(approvalPath,0o600);
+  rmSync(approvalPath);
+  symlinkSync(receiptPath,approvalPath);
+  assert.throws(()=>verifyHumanRiskEvidence(context),
+    /private bounded single-link human approval required/);
 });
 
 test('private evidence dir, ownership, symlinks and source-checkout exclusion fail before verifier',async t=>{
