@@ -98,6 +98,8 @@ jobs:
           node --test scripts/test/ci-oci-production-overlay.test.mjs
           node --check scripts/ci-oci-container-creation.mjs
           node --test scripts/test/ci-oci-container-creation.test.mjs
+          node --check scripts/ci-oci-immutable-runtime-compose.mjs
+          node --test scripts/test/ci-oci-immutable-runtime-compose.test.mjs
           node --check scripts/verify-oci-signed-provenance.mjs
           node --test scripts/test/verify-oci-signed-provenance.test.mjs
           node --check scripts/verify-image-security.mjs
@@ -720,6 +722,10 @@ jobs:
           node scripts/ci-oci-production-overlay.mjs --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
           node scripts/ci-oci-container-creation.mjs --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          # Resolve actual production topology once more with immutable
+          # Docker config IDs, not mutable SHA tags. Read-only; no cutover.
+          node scripts/ci-oci-immutable-runtime-compose.mjs --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
           # Attestations are fetched from GitHub and verified via gh Sigstore
           # policy; no registry, deployment or production Docker access.
