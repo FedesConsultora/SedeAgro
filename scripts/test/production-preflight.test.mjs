@@ -203,8 +203,7 @@ test('rejects cross-reuse of owner, runtime and JWT credentials before image adm
     assert.doesNotMatch(response.stdout,/PASS read-only production preflight/);
   }
   writeFileSync(path,rootEnv);
-  rejected(attempt(),/signed OCI\/security evidence directory is mandatory/,
-    'distinct credentials cannot bypass signed image preflight');
+  rejected(attempt(),/signed OCI\/security evidence directory is mandatory/);
 });
 
 test('secret independence gate precedes package and signed OCI admission',()=>{
