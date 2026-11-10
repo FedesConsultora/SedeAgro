@@ -68,6 +68,8 @@ function fakeDocker(options={}){
           assert.ok(args.includes('node'));
           assert.ok(args.some(x=>x.includes('/health/revision')&&x.includes('/health/ready')));
         }else{
+          assert.ok(args.includes('--user'));
+          assert.equal(args[args.indexOf('--user')+1],'nginx');
           assert.ok(args.includes('sedeagro_backend:127.0.0.1'));
           assert.ok(args.includes('/var/cache/nginx:rw,nosuid,nodev,mode=1777,size=16m'));
           assert.ok(args.includes('/run:rw,nosuid,nodev,mode=1777,size=4m'));
@@ -185,7 +187,8 @@ test('failed runtime emits only authored stage and numeric exit, never raw Docke
     ['backend','CI_OCI_BACKEND_PROBE_STAGE:readiness\\nEXPOSE_NO_VALUE','backend process exit=13 stage=readiness'],
     ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=syntax'],
     ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:filesystem\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=filesystem'],
-    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:upstream\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=upstream']
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:upstream\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=upstream'],
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:privilege\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=privilege']
   ]){
     const a=args(t,{failRun:service,marker});
     await assert.rejects(rehearseRunningImageProcesses(a),error=>{
