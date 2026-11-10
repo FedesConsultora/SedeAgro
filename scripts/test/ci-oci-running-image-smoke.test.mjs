@@ -74,7 +74,12 @@ function fakeDocker(options={}){
         }
         seen.run.push(service);
         if(options.leaveBehind===service)leftovers.add(name);
-        if(options.failRun===service)throw new Error('no private stderr from Docker should be printed');
+        if(options.failRun===service){
+          const e=new Error('DO_NOT_PRINT_RAW_DOCKER_MESSAGE');
+          e.status=13;
+          e.stderr=options.marker||'DO_NOT_PRINT_DOCKER_STDERR';
+          throw e;
+        }
         return options.badOutput===service?'WRONG_PROCESS_OUTPUT':
           service==='backend'?'CI_OCI_BACKEND_HEALTH_OK:'+SHA+'\n':
             'CI_OCI_FRONTEND_NGINX_CONFIG_OK\n';
@@ -169,6 +174,21 @@ test('actual runtime failure, output mismatch and cleanup failures deny',async t
       /OCI_NETWORKLESS_PROCESS_BLOCKED/);
     assert.ok(a.trace.seen.check.length>0,
       'failure must inspect disposable containers for cleanup');
+  }
+});
+
+test('failed runtime emits only authored stage and numeric exit, never raw Docker stderr',async t=>{
+  for(const [service,marker,expected] of [
+    ['backend','CI_OCI_BACKEND_PROBE_STAGE:revision\\nEXPOSE_NO_VALUE','backend process exit=13 stage=revision'],
+    ['backend','CI_OCI_BACKEND_PROBE_STAGE:readiness\\nEXPOSE_NO_VALUE','backend process exit=13 stage=readiness'],
+    ['frontend','CI_OCI_FRONTEND_NGINX_CONFIG_STAGE:syntax\\nEXPOSE_NO_VALUE','frontend process exit=13 stage=syntax']
+  ]){
+    const a=args(t,{failRun:service,marker});
+    await assert.rejects(rehearseRunningImageProcesses(a),error=>{
+      assert.match(error.message,new RegExp(expected));
+      assert.doesNotMatch(error.message,/EXPOSE_NO_VALUE|DO_NOT_PRINT/);
+      return true;
+    });
   }
 });
 
