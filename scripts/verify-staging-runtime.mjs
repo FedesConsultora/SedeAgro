@@ -91,8 +91,8 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
         'sedeagro-staging-' + name + ':' + sha;
       // In immutable mode Docker must have actually created this container
       // using the exact config ID, not a mutable tag with the same revision.
-      assert(c.Config.Image === reference && c.Image ===
-        (immutable ? reference : c.Image) &&
+      assert(c.Config.Image === reference &&
+        (!immutable || c.Image === reference) &&
         labels['org.opencontainers.image.revision'] === sha);
     } else {
       assert(c.Config.Image === (name === 'db' ? BASE_REFS.postgis : BASE_REFS.redis));
