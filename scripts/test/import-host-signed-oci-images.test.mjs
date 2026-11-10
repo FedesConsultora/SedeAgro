@@ -6,7 +6,7 @@ import {mkdtempSync,mkdirSync,chmodSync,readFileSync,rmSync,writeFileSync,symlin
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {inspectHostSignedOciImport} from '../import-host-signed-oci-images.mjs';
+import {inspectHostSignedOciImport,hostDockerTimeout} from '../import-host-signed-oci-images.mjs';
 
 const SHA='a'.repeat(40),OTHER='b'.repeat(40),id=s=>'sha256:'+s.repeat(64);
 const H=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -119,6 +119,17 @@ function setup(t,opts={}){
     counters:()=>({riskCalls,offlineCalls,hostCalls})
   };
 }
+test('image-only import has a bounded realistic timeout with fixed local Docker context',()=>{
+  assert.equal(hostDockerTimeout(['--context','default','image','load','--input','/private/review.tar']),900000);
+  for(const command of [
+    ['--context','default','image','inspect','--format','{{json .}}','sha256:'+'a'.repeat(64)],
+    ['--context','default','image','pull','untrusted:tag'],
+    ['--context','remote','image','load','--input','/bad'],
+    ['image','load','--input','/bad'],
+    ['--context','default','image','load','--input','/file','--extra']
+  ])assert.equal(hostDockerTimeout(command),20000);
+});
+
 test('check-only inspects signed absent images without Docker load, containers or GO',async t=>{
   const f=setup(t),output=await inspectHostSignedOciImport(f.options);
   assert.equal(output.status,'HOST_SIGNED_OCI_IMPORT_CHECKED_NOT_DEPLOYED');
