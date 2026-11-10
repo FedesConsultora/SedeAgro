@@ -37,14 +37,16 @@ function privateDir(dir){
   'untrusted release evidence directory');
   return abs;
 }
-function privateArtifact(path,max){
+function privateArtifact(path,max,read=false){
   const st=lstatSync(path);
   check(st.isFile()&&!st.isSymbolicLink()&&st.nlink===1&&
     st.size>0&&st.size<=max&&
     (st.mode&0o077)===0&&
     (typeof process.getuid!=='function'||st.uid===process.getuid()),
   'untrusted signed OCI artifact');
-  return readFileSync(path);
+  // A production Docker-save TAR may be gigabytes. Never buffer it in RAM;
+  // the complete streaming digest/TAR parser below performs the actual check.
+  return read?readFileSync(path):st.size;
 }
 function parseDocker(value){
   check(typeof value==='string'&&value.length>2&&value.length<64*1024,
@@ -106,7 +108,7 @@ export async function inspectHostSignedOciImport({
   'real independent human image-risk signature required before import');
   // Offline verifier parses the complete Docker-save TAR, compares every
   // layer, digest and size, and recomputes the exact receipt from bytes.
-  const bytes=privateArtifact(receiptPath,65536);
+  const bytes=privateArtifact(receiptPath,65536,true);
   privateArtifact(bundlePath,8*1024*1024*1024);
   check(sha256(bytes)===human.oci_receipt_sha256,
     'signed receipt bytes drifted after human review');
