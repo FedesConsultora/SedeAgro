@@ -1,0 +1,12 @@
+# 0R.25: STAGING OCI PARITY PREVIEW ONLY. Do NOT use docker compose up
+# here; production and staging human sign-offs remain independent.
+# Compose !reset removes the local Docker build definitions.
+services:
+  backend:
+    build: !reset null
+    image: ${SEDEAGRO_OCI_BACKEND_IMAGE:?Exact signed backend config ID required}
+    pull_policy: never
+  frontend:
+    build: !reset null
+    image: ${SEDEAGRO_OCI_FRONTEND_IMAGE:?Exact signed frontend config ID required}
+    pull_policy: never
