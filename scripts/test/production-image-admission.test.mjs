@@ -132,6 +132,63 @@ test('forged OCI attestation identity rejected even with synthetic owner approva
   }
 });
 
+
+test('human approval status cannot impersonate production, staging or other owner GO',async t=>{
+  const base=privateDirs(t);
+  for(const tamper of [
+    {head:'f'.repeat(40)},
+    {status:'APPROVED_FOR_RELEASE'},
+    {scope:'DEPLOY_ALLOWED'},
+    {production_go:true},
+    {staging_certified:true},
+    {time_of_use_certified:true},
+    {other_owners_approved:true}
+  ]){
+    await assert.rejects(inspectProductionImageAdmission({
+      sha:SHA,evidenceDir:base,
+      securityVerifier:()=>security(),
+      ociVerifier:async()=>oci(),
+      humanReviewVerifier:async()=>({...fakeVerifiedOwner(),...tamper})
+    }),/missing independent cryptographically signed Security Owner risk acceptance/);
+  }
+});
+
+test('real trust roster is empty and a synthetic private approval cannot authorize image risk',t=>{
+  const base=privateDirs(t);
+  const approvalDir=join(base,'approval');
+  mkdirSync(approvalDir,{mode:0o700});
+  const receipt={
+    head:SHA,archive:{name:'sedeagro-images-'+SHA+'.tar',sha256:'c'.repeat(64)},
+    images:['backend','frontend'].map((service,i)=>({
+      service,tag:'sedeagro-'+service+'-rc:'+SHA,
+      config_id:'sha256:'+(i?'e':'d').repeat(64)
+    }))
+  };
+  const receiptPath=join(base,'oci','sedeagro-images-'+SHA+'.json');
+  const receiptBytes=Buffer.from(JSON.stringify(receipt));
+  writeFileSync(receiptPath,receiptBytes,{mode:0o600});
+  const signedOci={...oci(),subjects:[
+    {name:'sedeagro-images-'+SHA+'.tar',sha256:receipt.archive.sha256},
+    {name:'sedeagro-images-'+SHA+'.json',
+      sha256:createHash('sha256').update(receiptBytes).digest('hex')}
+  ]};
+  const approvalPath=join(approvalDir,'sedeagro-owner-approval-'+SHA+'.json');
+  writeFileSync(approvalPath,'{}',{mode:0o600});
+  const trust=JSON.parse(readFileSync(
+    new URL('../security-owner-trust.json',import.meta.url),'utf8'));
+  assert.deepEqual(trust.trusted_keys,[],'no human signing key is enrolled');
+  const context={sha:SHA,base,security:security(),oci:signedOci,receiptPath};
+  assert.throws(()=>verifyHumanRiskEvidence(context),/no authorized human key enrolled/);
+  chmodSync(approvalPath,0o644);
+  assert.throws(()=>verifyHumanRiskEvidence(context),
+    /private bounded single-link human approval required/);
+  chmodSync(approvalPath,0o600);
+  rmSync(approvalPath);
+  symlinkSync(receiptPath,approvalPath);
+  assert.throws(()=>verifyHumanRiskEvidence(context),
+    /private bounded single-link human approval required/);
+});
+
 test('private evidence dir, ownership, symlinks and source-checkout exclusion fail before verifier',async t=>{
   const base=privateDirs(t);
   let calls=0;
