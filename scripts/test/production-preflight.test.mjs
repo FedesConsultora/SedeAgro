@@ -142,7 +142,7 @@ test('environment boundary runs BEFORE git, signed image trust and Docker',()=>{
   assert.match(source,/DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY/);
   assert.match(source,/COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES/);
   assert.match(source,/SEDEAGRO_OCI_BACKEND_IMAGE SEDEAGRO_OCI_FRONTEND_IMAGE/);
-  assert.ok(!source.includes('printf "
+  assert.doesNotMatch(source,/printf.*override/);
 });
 
 test('rejects a different branch and detached HEAD', (t) => {
