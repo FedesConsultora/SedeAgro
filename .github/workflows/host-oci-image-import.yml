@@ -1,0 +1,49 @@
+name: Signed OCI host image-only import contract
+
+on:
+  pull_request:
+    paths:
+      - "scripts/import-host-signed-oci-images.mjs"
+      - "scripts/test/import-host-signed-oci-images.test.mjs"
+      - ".github/workflows/host-oci-image-import.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/import-host-signed-oci-images.mjs"
+      - "scripts/test/import-host-signed-oci-images.test.mjs"
+      - ".github/workflows/host-oci-image-import.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-host-image-import-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed-host-image-import:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify immutable event HEAD
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Validate importer and unit test syntax
+        run: |
+          node --check scripts/import-host-signed-oci-images.mjs
+          node --check scripts/test/import-host-signed-oci-images.test.mjs
+      - name: Test risk-first offline OCI host importer fail-closed
+        run: |
+          node --test scripts/test/import-host-signed-oci-images.test.mjs
+          node --test scripts/test/release-owner-approval.test.mjs
+      - name: Confirm trusted Security Owner registry remains empty
+        run: |
+          node -e 'const r=require("./scripts/security-owner-trust.json");if(!Array.isArray(r.trusted_keys)||r.trusted_keys.length!==0)process.exit(1)'
