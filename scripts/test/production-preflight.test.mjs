@@ -110,6 +110,41 @@ test('rejects an omitted, partial or mismatching SHA and incorrect approval', (t
   rejected(attempt({}, ['--bypass']));
 });
 
+test('rejects remote Docker, unreviewed Compose topology and operator-supplied OCI images',t=>{
+  const {attempt}=fixture(t);
+  const blockedOverrides=[
+    'DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH',
+    'DOCKER_CONFIG','DOCKER_DEFAULT_PLATFORM','BUILDX_BUILDER',
+    'COMPOSE_FILE','COMPOSE_PROJECT_NAME','COMPOSE_ENV_FILES',
+    'COMPOSE_PROFILES','COMPOSE_DISABLE_ENV_FILE','COMPOSE_PATH_SEPARATOR',
+    'COMPOSE_IGNORE_ORPHANS',
+    'SEDEAGRO_OCI_BACKEND_IMAGE','SEDEAGRO_OCI_FRONTEND_IMAGE'
+  ];
+  for(const name of blockedOverrides){
+    const unsafe=name.includes('IMAGE')?'sha256:'+'a'.repeat(64):
+      'UNTRUSTED_ENVIRONMENT_VALUE_NEVER_EXPOSE_ME';
+    const result=attempt({[name]:unsafe});
+    rejected(result,new RegExp('release environment override forbidden: '+name));
+    assert.doesNotMatch(result.stdout+result.stderr,/NEVER_EXPOSE_ME|sha256:aaaaaaaa/);
+    assert.doesNotMatch(result.stdout,/PASS read-only production preflight/);
+  }
+  // Default dedicated local Docker/Compose environment gets past this gate,
+  // but still fails at mandatory signed OCI and human release admission.
+  rejected(attempt(),/signed OCI\\/security evidence directory is mandatory/);
+});
+
+test('environment boundary runs BEFORE git, signed image trust and Docker',()=>{
+  const override=source.indexOf('for override in');
+  const git=source.indexOf('for command in git grep stat');
+  const security=source.indexOf('verify-production-security.mjs');
+  const images=source.indexOf('verify-production-image-admission.mjs');
+  assert.ok(override>=0&&override<git&&git<security&&security<images);
+  assert.match(source,/DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY/);
+  assert.match(source,/COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES/);
+  assert.match(source,/SEDEAGRO_OCI_BACKEND_IMAGE SEDEAGRO_OCI_FRONTEND_IMAGE/);
+  assert.doesNotMatch(source,/printf[^\\n]*\\$\\{!override/);
+});
+
 test('rejects a different branch and detached HEAD', (t) => {
   const { root, sha, attempt } = fixture(t);
   must('git', ['-C', root, 'switch', '-q', '-c', 'some-feature'], root);
