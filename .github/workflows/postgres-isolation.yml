@@ -100,6 +100,8 @@ jobs:
           node --test scripts/test/ci-oci-container-creation.test.mjs
           node --check scripts/ci-oci-immutable-runtime-compose.mjs
           node --test scripts/test/ci-oci-immutable-runtime-compose.test.mjs
+          node --check scripts/ci-oci-running-image-smoke.mjs
+          node --test scripts/test/ci-oci-running-image-smoke.test.mjs
           node --check scripts/inspect-host-oci-images.mjs
           node --test scripts/test/inspect-host-oci-images.test.mjs
           node --check scripts/inspect-host-oci-compose.mjs
@@ -730,6 +732,11 @@ jobs:
           # Resolve actual production topology once more with immutable
           # Docker config IDs, not mutable SHA tags. Read-only; no cutover.
           node scripts/ci-oci-immutable-runtime-compose.mjs --sha "$IMAGE_SHA" \
+            --bundle "$archive" --receipt "$receipt"
+          # After real signed import and immutable config-ID parity, start
+          # real backend Express and Nginx from exactly those image IDs.
+          # Networkless, read-only, no DB, no host ports and --rm cleanup.
+          node scripts/ci-oci-running-image-smoke.mjs --sha "$IMAGE_SHA" \
             --bundle "$archive" --receipt "$receipt"
           # Attestations are fetched from GitHub and verified via gh Sigstore
           # policy; no registry, deployment or production Docker access.
