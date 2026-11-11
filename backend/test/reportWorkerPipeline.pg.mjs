@@ -186,6 +186,26 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
     expectStatus(await request('/reports/runs/'+revoked.id+'/download',a),
       409,'revoked job has no private file');
 
+    // A crashed worker's third expired lease must be terminal, not retried
+    // forever or silently picked up by a different tenant.
+    const exhausted=expectStatus(await request('/reports/runs',a,{
+      method:'POST',body:runBody}),202,'enqueue exhausted lease candidate');
+    await owner.query(
+      "UPDATE report_runs SET status='running',attempt_count=3, "+
+      "lease_token=$3,lease_expires_at=now()-interval '30 seconds' "+
+      "WHERE tenant_id=$1 AND id=$2",
+      [a.tenant,exhausted.id,randomUUID()]);
+    assert.equal((await processNextReport(b.tenant)).state,'idle');
+    assert.equal((await processNextReport(a.tenant)).state,'idle',
+      'expired third lease becomes failed without another render');
+    const finalLease=expectStatus(await request('/reports/runs/'+exhausted.id,a),
+      200,'exhausted job must expose terminal result');
+    assert.equal(finalLease.status,'failed');
+    assert.equal(finalLease.error_code,'RETRY_EXHAUSTED');
+    assert.equal(finalLease.attempt_count,3);
+    expectStatus(await request('/reports/runs/'+exhausted.id+'/download',a),
+      409,'exhausted lease has no artifact');
+
     // Expiration and purge are independent: first deny API, then delete bytes.
     await owner.query("UPDATE report_run_files SET expires_at=now()-interval '1 second' "+
       "WHERE tenant_id=$1 AND run_id=$2",[a.tenant,queued.id]);
