@@ -83,9 +83,26 @@ export function validateStagingTopology(config, { sha, host } = {}) {
   const { db, redis, backend, frontend } = config.services;
   if (db.image !== BASE_REFS.postgis ||
       redis.image !== BASE_REFS.redis ||
-      db.environment?.POSTGRES_DB !== 'sedeagro_staging' ||
-      db.environment?.POSTGRES_USER !== 'sedeagro_staging_owner' ||
-      !credentials(db.environment?.POSTGRES_PASSWORD, 24) ||
+      // Only the three approved PostgreSQL initialization values belong
+      // in this project. Reject injected POSTGRES_HOST_AUTH_METHOD=trust,
+      // INITDB_ARGS, password-file or PGDATA overrides at Compose admission.
+      !db.environment || typeof db.environment !== 'object' ||
+      Array.isArray(db.environment) ||
+      Object.keys(db.environment).sort().join(',') !==
+        'POSTGRES_DB,POSTGRES_PASSWORD,POSTGRES_USER' ||
+      db.environment.POSTGRES_DB !== 'sedeagro_staging' ||
+      db.environment.POSTGRES_USER !== 'sedeagro_staging_owner' ||
+      !credentials(db.environment.POSTGRES_PASSWORD, 24) ||
+      // Redis is a persisted queue. A healthy ping does not guarantee AOF.
+      !Array.isArray(redis.command) ||
+      redis.command.length !== 3 ||
+      redis.command[0] !== 'redis-server' ||
+      redis.command[1] !== '--appendonly' ||
+      redis.command[2] !== 'yes' ||
+      (redis.environment !== undefined &&
+        (typeof redis.environment !== 'object' ||
+          Array.isArray(redis.environment) ||
+          Object.keys(redis.environment).length !== 0)) ||
       !volumeIs(db, 'staging_pgdata', '/var/lib/postgresql/data') ||
       !volumeIs(redis, 'staging_redisdata', '/data')) {
     block('staging database or Redis isolation mismatch');
