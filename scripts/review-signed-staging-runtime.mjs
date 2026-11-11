@@ -60,6 +60,7 @@ function validateLive(live,sha,host,ids) {
     live.network==='sedeagro-staging_staging_internal'&&
     live.image_reference_kind==='immutable-config-id'&&
     live.project_container_census_verified===true&&
+    live.project_volume_inventory_verified===true&&
     live.image_ids?.backend===ids.backend&&
     live.image_ids?.frontend===ids.frontend&&
     live.signed_provenance_certified===false&&
@@ -121,6 +122,7 @@ export async function reviewSignedStagingRuntime({
     checked_running_container_ids:true,
     checked_immutable_image_ids:true,
     verified_same_four_containers_twice:true,
+    verified_project_volumes_twice:true,
     read_only:true,containers_created:false,
     containers_started_by_review:false,production_env_read:false,
     staging_tls_certified:false,staging_db_restore_certified:false,
