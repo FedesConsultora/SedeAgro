@@ -8,6 +8,21 @@ fail() { printf 'BLOCKED backup gate: %s\n' "$1" >&2; exit 2; }
 
 [[ $# -eq 0 ]] || fail "arguments are not accepted"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# This gate may also be used standalone. Never let a caller silently select
+# another daemon, Compose file, project, env file or profile.
+for override in \
+  DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_CONFIG \
+  DOCKER_DEFAULT_PLATFORM BUILDX_BUILDER \
+  COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES COMPOSE_PROFILES \
+  COMPOSE_DISABLE_ENV_FILE COMPOSE_PATH_SEPARATOR COMPOSE_IGNORE_ORPHANS
+do
+  [[ -z "${!override:-}" ]] || fail "Docker/Compose override forbidden: $override"
+done
+[[ -f "$ROOT/docker-compose.yml" && ! -L "$ROOT/docker-compose.yml" ]] ||
+  fail "reviewed production Compose file is missing or linked"
+compose=(docker compose --project-directory "$ROOT" \
+  --file "$ROOT/docker-compose.yml" --project-name sedeagro)
 release="${SEDEAGRO_RELEASE_SHA:-}"
 backup="${SEDEAGRO_VERIFIED_BACKUP_FILE:-}"
 expected="${SEDEAGRO_VERIFIED_BACKUP_SHA256:-}"
@@ -50,11 +65,37 @@ now="$(date +%s)"
 actual="$(sha256sum "$backup" | cut -d ' ' -f 1)"
 [[ "$actual" == "$expected" ]] || fail "backup archive SHA256 mismatch"
 
+# Bind the read-only TOC inspection to the *actual* production PostGIS
+# container. A same-name service in another project, replaced DB, wrong
+# Docker image or unhealthy container must not be mistaken for production.
+# Never print docker inspect results: environment may contain secrets.
+source_container=''
+verify_db_identity() {
+  local id info
+  id="$("${compose[@]}" ps --quiet db 2>/dev/null)" ||
+    fail "production Compose DB service cannot be listed"
+  [[ "$id" =~ ^[0-9a-f]{64}$ ]] ||
+    fail "expected one full production DB container ID"
+  [[ -z "$source_container" || "$id" == "$source_container" ]] ||
+    fail "production DB container was replaced during backup check"
+  info="$(docker inspect --type=container --format \
+    '{{.Id}}|{{.Name}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.State.Running}}|{{.State.Health.Status}}' \
+    "$id" 2>/dev/null)" ||
+    fail "production DB container identity not readable"
+  [[ "$info" == "$id|/sedeagro_db|sedeagro|db|postgis/postgis:16-3.4@sha256:44126d872ac91993766c341e369c539e8196614321765d36a6f1bab0419a5fa5|true|healthy" ]] ||
+    fail "production DB project, image or health does not match"
+  source_container="$id"
+}
+
 # Compose DB must already be running. Verify custom archive is readable with
 # the pinned PostGIS pg_restore; never accept arbitrary SQL or apply a restore.
-if ! archive_list="$(docker compose exec -T db pg_restore --list < "$backup")"; then
-  fail "pg_restore cannot read archive TOC in the PostGIS container"
+verify_db_identity
+if ! archive_list="$("${compose[@]}" exec -T db pg_restore --list < "$backup")"; then
+  fail "pg_restore cannot read archive TOC in the pinned PostGIS container"
 fi
+verify_db_identity
+[[ "$(sha256sum "$backup" | cut -d ' ' -f 1)" == "$expected" ]] ||
+  fail "backup changed while pg_restore read its table of contents"
 # pg_restore -l emits: ID; OID OID TABLE schema name owner.
 # A substring match can be forged by TOC comments, TABLE DATA entries,
 # prefixes (work_orders_old) or objects in another schema. Count ONLY exact,
