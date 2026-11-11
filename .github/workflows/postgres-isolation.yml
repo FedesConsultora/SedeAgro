@@ -86,6 +86,9 @@ jobs:
           node --check scripts/verify-staging-topology.mjs
           node --check scripts/verify-staging-runtime.mjs
           node --test scripts/test/staging-topology.test.mjs scripts/test/staging-runtime.test.mjs
+          # Signed OCI host checks are read-only and require human risk first.
+          node --check scripts/review-signed-staging-runtime.mjs
+          node --test scripts/test/review-signed-staging-runtime.test.mjs
           node --check scripts/verify-frontend-image-parity.mjs
           node --test scripts/test/frontend-image-parity.test.mjs
           node --check scripts/oci-release-bundle.mjs

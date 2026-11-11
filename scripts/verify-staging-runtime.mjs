@@ -17,7 +17,9 @@ const SERVICES = ['db','redis','backend','frontend'];
 
 const defaultExecute = (args) => execFileSync('docker', args, {
   encoding: 'utf8', timeout: 12000, maxBuffer: 512 * 1024,
-  stdio: ['ignore','pipe','pipe']
+  stdio: ['ignore','pipe','pipe'],
+  // Never inherit a remote daemon from the operator's process environment.
+  env: { PATH: process.env.PATH, HOME: process.env.HOME }
 });
 
 function assert(ok) {
@@ -35,12 +37,23 @@ function envValues(list) {
   return env;
 }
 
-export function validateStagingContainers(containers, { sha, host } = {}) {
+export function validateStagingContainers(containers, { sha, host, signedImageIds } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
+  const immutable = signedImageIds !== undefined;
+  // This is only a shape/identity validator, not a signature checker.
+  // The operator CLI must obtain these values from signed human + OCI proof.
+  if (immutable) {
+    assert(signedImageIds && typeof signedImageIds === 'object' &&
+      !Array.isArray(signedImageIds) &&
+      Object.keys(signedImageIds).sort().join(',') === 'backend,frontend' &&
+      IMAGE_ID.test(signedImageIds.backend) &&
+      IMAGE_ID.test(signedImageIds.frontend) &&
+      signedImageIds.backend !== signedImageIds.frontend);
+  }
   assert(containers && typeof containers === 'object' &&
     Object.keys(containers).sort().join(',') === SERVICES.slice().sort().join(','));
-  const images = {};
+  const images = {}, containerIds = {};
   for (const name of SERVICES) {
     const c = containers[name];
     assert(c && c.Config && c.HostConfig && c.State &&
@@ -74,7 +87,12 @@ export function validateStagingContainers(containers, { sha, host } = {}) {
     }
 
     if (name === 'backend' || name === 'frontend') {
-      assert(c.Config.Image === 'sedeagro-staging-' + name + ':' + sha &&
+      const reference = immutable ? signedImageIds[name] :
+        'sedeagro-staging-' + name + ':' + sha;
+      // In immutable mode Docker must have actually created this container
+      // using the exact config ID, not a mutable tag with the same revision.
+      assert(c.Config.Image === reference &&
+        (!immutable || c.Image === reference) &&
         labels['org.opencontainers.image.revision'] === sha);
     } else {
       assert(c.Config.Image === (name === 'db' ? BASE_REFS.postgis : BASE_REFS.redis));
@@ -91,19 +109,32 @@ export function validateStagingContainers(containers, { sha, host } = {}) {
         url.pathname === '/sedeagro_staging' && url.username === 'sedeagro_staging_app');
     }
     images[name] = c.Image; // LOCAL Docker image ID; not a registry digest attestation.
+    if (immutable) {
+      assert(typeof c.Id === 'string' && /^[a-f0-9]{64}$/.test(c.Id));
+      containerIds[name] = c.Id;
+    }
   }
+  if (immutable) assert(new Set(Object.values(containerIds)).size === SERVICES.length);
   return {
     status: 'RUNTIME_REVIEW_REQUIRED',
     project: PROJECT, release_sha: sha, host,
     services: SERVICES.length, network: NETWORK,
-    image_ids: images, registry_digest_certified: false,
+    image_ids: images, image_reference_kind: immutable ? 'immutable-config-id' : 'legacy-staging-tag',
+    ...(immutable ? { container_ids: containerIds } : {}),
+    signed_provenance_certified: false, registry_digest_certified: false,
     tls_certified: false, database_isolation_certified: false
   };
 }
 
-export function inspectStagingRuntime({ sha, host, execute = defaultExecute } = {}) {
+export function inspectStagingRuntime({ sha, host, signedImageIds, execute = defaultExecute } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
+  const immutable = signedImageIds !== undefined;
+  if (immutable) {
+    assert(signedImageIds && Object.keys(signedImageIds).sort().join(',') === 'backend,frontend' &&
+      IMAGE_ID.test(signedImageIds.backend) && IMAGE_ID.test(signedImageIds.frontend) &&
+      signedImageIds.backend !== signedImageIds.frontend);
+  }
   const containers = {};
   for (const name of SERVICES) {
     // Docker label filters locate by exact project + service. Never inspect the
@@ -116,8 +147,11 @@ export function inspectStagingRuntime({ sha, host, execute = defaultExecute } = 
     const raw = execute(['inspect','--type=container','--format','{{json .}}',ids[0]]);
     assert(typeof raw === 'string' && raw.length < 512 * 1024);
     containers[name] = JSON.parse(raw);
+    // Double-check Docker listed exactly the same container we inspected.
+    if (immutable) assert(typeof containers[name]?.Id === 'string' &&
+      containers[name].Id.startsWith(ids[0]));
   }
-  return validateStagingContainers(containers,{sha,host});
+  return validateStagingContainers(containers,{sha,host,signedImageIds});
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
