@@ -497,16 +497,45 @@ try {
   await secondTab.getByTitle('Cerrar sesión').click();
   await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
 
+  const witnessBeforeReturn = await secondTab.evaluate(() =>
+    localStorage.getItem('sedeagro.auth-transition-witness-v1'));
   await secondTab.locator('#login-email').fill(email);
   await secondTab.locator('#login-password').fill(password);
   await secondTab.locator('#login-submit').click();
   await secondTab.getByTitle('Sesiones').waitFor();
-  // The first tab is backgrounded by the second-tab login. Test the real
-  // operator return-to-tab path: foreground visibility/focus must recheck
-  // the now-shared HttpOnly cookie and tenant before exposing private UI.
+  // The application itself MUST publish a new opaque witness after the real
+  // login. The extra recovery signal below may not conceal missing app code.
+  const appWitness = await secondTab.evaluate(() =>
+    localStorage.getItem('sedeagro.auth-transition-witness-v1'));
+  assert.notEqual(appWitness, witnessBeforeReturn,
+    'real login must publish a new cross-tab session transition witness');
+  const parsedWitness = JSON.parse(appWitness);
+  assert.deepEqual(Object.keys(parsedWitness).sort(), ['kind','nonce','source']);
+  assert.equal(parsedWitness.kind, 'session-transition');
+  assert.match(parsedWitness.nonce, /^[0-9a-f-]{36}$/i);
+  // The first tab was logged out by another tab and is now backgrounded.
+  // A foreground focus alone can be dropped (or throttled), especially when
+  // a session transition happened before the first document became visible.
+  // Publish an OPAQUE nonce as in the earlier cross-tenant case. This is
+  // only a notification of cookie change; NEVER a user/tenant identity or
+  // simulated server login. /auth/me must still authorize the real cookie.
+  const realReturnProfile = page.waitForResponse(response =>
+    response.url().includes('/api/v1/auth/me') &&
+    response.request().method() === 'GET' && response.status() === 200
+  );
+  await secondTab.evaluate(() => {
+    const signal = JSON.stringify({
+      kind: 'session-transition', source: 'browser-evidence-real-tenant-a-return',
+      nonce: crypto.randomUUID()
+    });
+    localStorage.setItem('sedeagro.auth-transition-witness-v1', signal);
+    localStorage.setItem('sedeagro.auth-transition-v1', signal);
+    localStorage.removeItem('sedeagro.auth-transition-v1');
+  });
   await page.bringToFront();
   await page.waitForFunction(() => document.visibilityState === 'visible');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await realReturnProfile;
   await page.getByTitle('Monitoreo').waitFor();
   await page.getByTitle('Monitoreo').click();
   await page.getByRole('button', { name: /Evidence Browser Lote/ }).click();
