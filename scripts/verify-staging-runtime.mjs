@@ -106,8 +106,8 @@ export function validateStagingVolumeInventory(volumes, containers) {
           Object.keys(v.Options).length === 0)));
     const root = v.Mountpoint;
     assert(typeof root === 'string' && root.startsWith('/') &&
-      !root.includes('\\') && !root.includes('//') && !root.includes('\\0') &&
-      !root.split('/').includes('..') &&
+      !root.includes('\\') && !root.includes('//') && !root.includes(String.fromCharCode(0)) &&
+      !root.split('/').some(part => part === '.' || part === '..') &&
       root.endsWith('/volumes/' + spec.name + '/_data'));
     const mount = containers?.[name]?.Mounts?.[0];
     assert(mount && containers[name].Mounts.length === 1 &&
