@@ -36,6 +36,12 @@ test('error classifications disclose only fixed codes, never private notes', () 
   assert.equal(classifyReportFailure(new Error('El PDF supera máximo de páginas')), 'REPORT_TOO_LARGE');
   assert.equal(classifyReportFailure(new Error('caracteres no admitidos')), 'INVALID_REPORT');
   assert.equal(classifyReportFailure(new Error('lote no encontrado')), 'AUTHORITY_REVOKED');
+  assert.equal(classifyReportFailure(
+    new Error('Autoridad revocada: plantilla inactiva o membresía no disponible.')),
+    'AUTHORITY_REVOKED');
+  assert.equal(classifyReportFailure(
+    new Error('Formato o alcance de reporte no admitido.')),
+    'INVALID_REPORT');
   assert.equal(classifyReportFailure(new Error('password=secret')), 'PROCESSING_FAILED');
 });
 
