@@ -1,5 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import {
+  chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { inspectPilotMobileEvidence, pilotMobileTemplate
 } from '../validate-pilot-mobile-evidence.mjs';
 
@@ -101,4 +108,85 @@ test('timestamps, issue references and private metadata must be coherent', () =>
   const unsafe = accepted();
   unsafe.cases[0].device_profile = 'Scout email user@example.com';
   assert.throws(() => inspectPilotMobileEvidence(unsafe, {expectedSha:SHA, now:NOW}));
+});
+
+const intakeCli = fileURLToPath(new URL('../validate-pilot-mobile-evidence.mjs', import.meta.url));
+
+function privateFixture(t) {
+  const dir=mkdtempSync(join(tmpdir(),'sedeagro-mob-private-'));
+  t.after(()=>rmSync(dir,{recursive:true,force:true}));
+  const file=join(dir,'evidence.json');
+  const doc=accepted();
+  const recorded=new Date(Math.floor((Date.now()-60000)/1000)*1000)
+    .toISOString().replace('.000Z','Z');
+  for(const item of doc.cases)item.tested_at=recorded;
+  writeFileSync(file,JSON.stringify(doc),{mode:0o600});
+  return {dir,file,doc};
+}
+function runIntake(file) {
+  return spawnSync(process.execPath,[intakeCli,'--file',file,'--sha',SHA],{
+    encoding:'utf8',timeout:5000,env:{PATH:process.env.PATH}
+  });
+}
+
+test('CLI only reviews locally owned private QA file; does not modify it or grant GO',t=>{
+  const {file,doc}=privateFixture(t);
+  const before=readFileSync(file);
+  const result=runIntake(file);
+  assert.equal(result.status,0,result.stderr);
+  const output=JSON.parse(result.stdout.slice(0,result.stdout.indexOf('\nEvidencia declarada')));
+  assert.equal(output.status,'COMPLETE_FOR_HUMAN_REVIEW');
+  assert.equal(output.device_verified,false);
+  assert.equal(output.evidence_verified,false);
+  assert.equal(output.production_go,false);
+  assert.equal(doc.cases.length,22);
+  assert.deepEqual(readFileSync(file),before);
+});
+
+test('CLI rejects shared QA files, shared parents, symlinks and noncanonical paths',t=>{
+  const {file,dir}=privateFixture(t);
+  const linked=join(dir,'linked.json');
+  symlinkSync(file,linked);
+  const nested=join(dir,'shared-parent');
+  mkdirSync(nested,{mode:0o755});
+  const sharedParentFile=join(nested,'mob.json');
+  writeFileSync(sharedParentFile,readFileSync(file),{mode:0o600});
+  const invalid=[linked,sharedParentFile,join(dir,'./evidence.json'),file.slice(1)];
+  for(const path of invalid) {
+    const result=runIntake(path);
+    assert.equal(result.status,2,path+' '+result.stderr);
+    assert.doesNotMatch(result.stdout,/COMPLETE_FOR_HUMAN_REVIEW/);
+    assert.doesNotMatch(result.stdout+result.stderr,/QA-FIELD-/);
+  }
+  chmodSync(file,0o644);
+  const shared=runIntake(file);
+  assert.equal(shared.status,2,shared.stderr);
+  assert.doesNotMatch(shared.stdout,/COMPLETE_FOR_HUMAN_REVIEW/);
+});
+
+test('CLI blocks oversized, malformed and nonregular evidence, without leaking content',t=>{
+  const {file,dir}=privateFixture(t);
+  writeFileSync(file,'{ "privateToken": "MOB_SECRET" }',{mode:0o600});
+  const invalid=runIntake(file);
+  assert.equal(invalid.status,2);
+  assert.doesNotMatch(invalid.stdout+invalid.stderr,/MOB_SECRET/);
+  writeFileSync(file,Buffer.alloc(65537,0x20),{mode:0o600});
+  const huge=runIntake(file);
+  assert.equal(huge.status,2);
+  const folder=join(dir,'directory.json');
+  mkdirSync(folder,{mode:0o700});
+  const nonFile=runIntake(folder);
+  assert.equal(nonFile.status,2);
+  for(const r of [huge,nonFile]) {
+    assert.doesNotMatch(r.stdout,/COMPLETE_FOR_HUMAN_REVIEW/);
+    assert.match(r.stderr,/BLOCKED: expediente MOB/);
+  }
+});
+
+test('reader uses descriptor-bound no-follow and bounded local read',()=>{
+  const source=readFileSync(intakeCli,'utf8');
+  assert.match(source,/constants\.O_NOFOLLOW/);
+  assert.match(source,/constants\.O_NONBLOCK/);
+  assert.match(source,/fstatSync\(fd\)/);
+  assert.match(source,/Buffer\.alloc\(65537\)/);
 });
