@@ -41,10 +41,19 @@ request_status() {
   curl_safe --output /dev/null --write-out '%{http_code}' "$1"
 }
 echo "Validando encabezados TLS y salud de staging (sin escritura)..."
-if ! headers="$(curl_safe --head "$URL/")"; then
-  echo "BLOCKED: no se pudieron verificar los encabezados HTTPS de staging." >&2
+# HEAD alone is not browser evidence: reverse proxies can apply a secure
+# location only to HEAD while serving an unsafe GET document.
+if ! head_headers="$(curl_safe --head "$URL/")" ||
+    ! get_headers="$(curl_safe --dump-header - --output /dev/null "$URL/")"; then
+  echo "BLOCKED: no se pudieron verificar HEAD y GET HTTPS de staging." >&2
   exit 1
 fi
+for method in HEAD GET; do
+  if [[ "$method" == HEAD ]]; then
+    headers="$head_headers"
+  else
+    headers="$get_headers"
+  fi
 # A proxy CONNECT, redirect or stale/non-200 shell must not be mistaken for
 # the HTTPS response of the staging frontend itself.
 http_status_lines="$(printf '%s\n' "$headers" | grep -Ec '^HTTP/[0-9.]+[[:space:]]+[0-9]{3}([[:space:]]|$)' || true)"
@@ -114,6 +123,7 @@ END {
   echo "BLOCKED: staging devolvió CSP, HSTS u otros headers inseguros o ambiguos." >&2
   exit 1
 fi
+done
 if [[ "$(request_status "$URL/health")" != "200" ]] ||
     ! health_body="$(curl_safe --fail "$URL/health")" ||
     [[ "$health_body" != '{"ok":true,"service":"sedeagro-backend"}' ]]; then
@@ -140,6 +150,6 @@ if [[ "$(request_status "$URL/api/v1/auth/me")" != "401" ]]; then
   echo "Una solicitud sin JWT debe devolver 401, no datos privados." >&2
   exit 1
 fi
-echo "PASS staging read-only: HTTPS 200 sin redirecciones, HSTS, CSP, JSON de health/readiness, backend SHA exacto y acceso anónimo 401."
+echo "PASS staging read-only: HEAD y GET HTTPS 200 sin redirecciones, HSTS, CSP, JSON de health/readiness, backend SHA exacto y acceso anónimo 401."
 echo "ATENCIÓN: verifica el SHA declarado por la imagen backend, no los digests OCI ni RLS, restores o QA móvil."
 echo "El SHA verificado corresponde al checkout local: $ACTUAL_SHA"
