@@ -43,6 +43,7 @@ function live(){return {
   network:'sedeagro-staging_staging_internal',
   image_reference_kind:'immutable-config-id',
   project_container_census_verified:true,
+  project_volume_inventory_verified:true,
   image_ids:{db:ID('7'),redis:ID('8'),...IMAGES},
   container_ids:{...CONTAINERS},
   signed_provenance_certified:false,
@@ -82,6 +83,7 @@ test('real human risk is checked before host Docker, then same four staging cont
   assert.deepEqual(result.image_ids,IMAGES);
   assert.equal(result.verified_same_four_containers_twice,true);
   assert.equal(result.checked_running_container_ids,true);
+  assert.equal(result.verified_project_volumes_twice,true);
   assert.equal(result.read_only,true);
   assert.equal(result.signed_risk_accepted,true);
   for(const property of [
@@ -152,6 +154,8 @@ test('unhealthy, wrong project, wrong OCI config reference or overclaimed stagin
     {services:3},{network:'production'},
     {image_reference_kind:'legacy-staging-tag'},
     {project_container_census_verified:false},
+    {project_volume_inventory_verified:false},
+    {project_volume_inventory_verified:undefined},
     {image_ids:{...IMAGES,backend:ID('f')}},
     {image_ids:{...IMAGES,frontend:ID('f')}},
     {container_ids:{...CONTAINERS,frontend:'bad'}},
@@ -188,6 +192,17 @@ test('second host signature/ID check and second container inspection catch concu
       {...live(),container_ids:swapped}
   })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
   assert.equal(inspect,2);
+});
+
+test('signed review cannot accept a missing volume scan or changed inventory between rounds',async()=>{
+  let calls=0;
+  await assert.rejects(reviewSignedStagingRuntime(options({
+    inspectRuntime:async()=>{
+      calls++;
+      return calls===1?live():{...live(),project_volume_inventory_verified:false};
+    }
+  })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
+  assert.equal(calls,2);
 });
 
 test('invalid staging hostname or SHA cannot reach human review or Docker',async()=>{

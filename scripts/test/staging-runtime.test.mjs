@@ -4,7 +4,9 @@ const baseLock = JSON.parse(readFileSync(new URL('../base-image-lock.json', impo
 const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].digest;
 
 import assert from 'node:assert/strict';
-import { validateStagingContainers, inspectStagingRuntime } from '../verify-staging-runtime.mjs';
+import {
+  validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory
+} from '../verify-staging-runtime.mjs';
 
 const sha='a'.repeat(40);
 const host='staging.ci.test';
@@ -47,6 +49,68 @@ function container(name, letter) {
 const fixture=()=>({
   db:container('db','1'),redis:container('redis','2'),
   backend:container('backend','3'),frontend:container('frontend','4')
+});
+
+// Only signed runtime inspection reads Docker's independent volume metadata.
+function volumeFixture(containers) {
+  const result = {};
+  for(const [name,short,destination] of [
+    ['db','staging_pgdata','/var/lib/postgresql/data'],
+    ['redis','staging_redisdata','/data']
+  ]) {
+    const full=project+'_'+short;
+    const path='/var/lib/docker/volumes/'+full+'/_data';
+    result[name]={
+      Name:full,Driver:'local',Scope:'local',Mountpoint:path,Options:null,
+      Labels:{
+        'com.docker.compose.project':project,
+        'com.docker.compose.volume':short,
+        'com.docker.compose.version':'2.0.0'
+      }
+    };
+    Object.assign(containers[name].Mounts[0],{
+      Driver:'local',Source:path,Destination:destination,
+      RW:true,Propagation:''
+    });
+  }
+  return result;
+}
+
+test('signed volume inventory rejects remote drivers, bind options and spoofed project labels',()=>{
+  const mutations=[
+    v=>{v.db.Driver='nfs';},
+    v=>{v.redis.Scope='global';},
+    v=>{v.db.Options={type:'none',device:'/srv/prod',o:'bind'};},
+    v=>{v.db.Labels['com.docker.compose.project']='sedeagro';},
+    v=>{v.redis.Labels['com.docker.compose.volume']='staging_pgdata';},
+    v=>{v.db.Mountpoint='/srv/production/volumes/staging_data/_data';},
+    v=>{v.db.Mountpoint='/var/lib/docker/volumes/../volumes/'+project+'_staging_pgdata/_data';},
+    v=>{v.redis.Name='sedeagro_redisdata';},
+    v=>{v.db.Mountpoint='/var/lib/docker/volumes/'+project+'_staging_redisdata/_data';},
+    v=>{v.db.Options=['type=none'];}
+  ];
+  for(const mutation of mutations){
+    const c=fixture(), v=volumeFixture(c);
+    mutation(v);
+    assert.throws(()=>validateStagingVolumeInventory(v,c),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
+  for(const modify of [
+    c=>{c.db.Mounts[0].Source='/var/lib/docker/volumes/production/_data';},
+    c=>{c.redis.Mounts[0].Driver='nfs';},
+    c=>{c.db.Mounts[0].Destination='/srv/production';},
+    c=>{c.db.Mounts[0].RW=false;},
+    c=>{c.db.Mounts[0].Propagation='shared';},
+    c=>{c.redis.Mounts[0].Type='bind';},
+    c=>{c.redis.Mounts.push({Type:'bind',Source:'/srv'});}
+  ]){
+    const c=fixture(),v=volumeFixture(c);modify(c);
+    assert.throws(()=>validateStagingVolumeInventory(v,c),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
+  const c=fixture(),v=volumeFixture(c);
+  assert.equal(validateStagingVolumeInventory(v,c),true);
+  assert.equal(v.db.Options,null);
 });
 
 test('actual containers prove project, internal network, runtime image IDs and health',()=>{
@@ -294,7 +358,13 @@ test('signed staging Docker inspector ties each container list ID to inspected f
     c[name].Id=byService[name].repeat(64);
     if(ids[name])c[name].Config.Image=ids[name];
   }
+  const volumes=volumeFixture(c);
   const execute=args=>{
+    if(args[0]==='volume') {
+      assert.deepEqual(args.slice(0,3),['volume','inspect','--format']);
+      const name=args.at(-1);
+      return JSON.stringify(Object.values(volumes).find(v=>v.Name===name));
+    }
     if(args[0]==='container'){
       if(args.includes('--no-trunc'))
         return Object.values(byService).map(x=>x.repeat(64)).join('\n')+'\n';
@@ -309,6 +379,7 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   const ok=inspectStagingRuntime({sha,host,signedImageIds:ids,execute});
   assert.equal(ok.image_reference_kind,'immutable-config-id');
   assert.equal(ok.project_container_census_verified,true);
+  assert.equal(ok.project_volume_inventory_verified,true);
   c.frontend.Id='9'.repeat(64);
   assert.throws(()=>inspectStagingRuntime({
     sha,host,signedImageIds:ids,execute
