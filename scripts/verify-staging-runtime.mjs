@@ -193,6 +193,40 @@ export function validateStagingEffectivePorts(containers) {
   return true;
 }
 
+// Config.Image only tells us the pull reference passed when a container was
+// CREATED. A reused/stale local image may not be the locked upstream digest.
+// Signed staging checks Docker's independent image-store record for the two
+// third-party services and ties it to the actual running container Image ID.
+// This does NOT assert signatures from Docker; provenance remains a separate gate.
+export function validateStagingBaseImageInventory(images, containers) {
+  assert(images && typeof images === 'object' && !Array.isArray(images) &&
+    Object.keys(images).sort().join(',') === 'db,redis');
+  const ids = {};
+  for (const [name,lock] of [
+    ['db',BASE_REFS.postgis],['redis',BASE_REFS.redis]
+  ]) {
+    const image = images[name], container = containers?.[name];
+    const at = lock.lastIndexOf('@');
+    assert(at > 0 && IMAGE_ID.test(lock.slice(at + 1)));
+    const digest = lock.slice(at + 1);
+    const registryName = lock.slice(0,at).replace(/:[^/:]+$/, '');
+    const acceptedNames = name === 'redis' ?
+      ['redis','docker.io/library/redis'] :
+      ['postgis/postgis','docker.io/postgis/postgis'];
+    assert(acceptedNames.includes(registryName));
+    assert(image && typeof image === 'object' && !Array.isArray(image) &&
+      IMAGE_ID.test(image.Id) &&
+      Array.isArray(image.RepoDigests) &&
+      image.RepoDigests.some(value =>
+        acceptedNames.some(repo => value === repo + '@' + digest)) &&
+      container && container.Config?.Image === lock &&
+      container.Image === image.Id);
+    ids[name] = image.Id;
+  }
+  assert(ids.db !== ids.redis);
+  return ids;
+}
+
 export function validateStagingContainers(containers, { sha, host, signedImageIds } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
@@ -338,6 +372,20 @@ export function inspectStagingRuntime({ sha, host, signedImageIds, execute = def
       new Set(fullIds).size === SERVICES.length &&
       SERVICES.every(name => fullIds.includes(report.container_ids[name])));
     report.project_container_census_verified = true;
+    // Image identity for db/redis must also be bound to the pinned upstream
+    // digest and the *running* image ID, not Config.Image alone.
+    const baseImages = {};
+    for (const [name,reference] of [
+      ['db',BASE_REFS.postgis],['redis',BASE_REFS.redis]
+    ]) {
+      const rawImage = execute(['image','inspect','--format','{{json .}}',reference]);
+      assert(typeof rawImage === 'string' && rawImage.length > 0 &&
+        rawImage.length < 65536);
+      try { baseImages[name] = JSON.parse(rawImage); } catch { assert(false); }
+    }
+    report.project_base_image_ids =
+      validateStagingBaseImageInventory(baseImages, containers);
+    report.project_base_image_inventory_verified = true;
     // Read Docker's actual volume metadata, not solely the container's
     // reported Mounts.Name. Fixed names only; no operator-chosen volume.
     const volumeNames = {
