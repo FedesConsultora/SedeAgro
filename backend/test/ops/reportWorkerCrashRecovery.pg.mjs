@@ -23,10 +23,10 @@ if(!disposable(ownerUrl)||!disposable(runtimeUrl)){
 }
 const workerCli=fileURLToPath(new URL('../../src/workers/reportWorkerCli.js',import.meta.url));
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-function startWorker(tenantId){
+function startWorker(tenantId,{once=true}={}){
   const {TEST_DATABASE_ADMIN_URL:_owner,TEST_DATABASE_APP_URL:_app,
     DATABASE_URL:_db,REPORT_WORKER_TENANT_ID:_tenant,...inherited}=process.env;
-  const child=spawn(process.execPath,[workerCli,'--once'],{
+  const child=spawn(process.execPath,[workerCli,...(once?['--once']:[])],{
     env:{...inherited,DATABASE_URL:runtimeUrl,REPORT_WORKER_TENANT_ID:tenantId,
       NODE_ENV:'test',JWT_SECRET:'rp02-disposable-crash-only',
       LOG_SQL:'0',LOG_STACK:'0',LOG_FORMAT:'json',LOG_LEVEL:'info'},
@@ -187,6 +187,31 @@ test('RP-02 real SIGKILL -> stale lease -> new worker process completes one priv
     assert.equal(third.logs().filter(x=>x.event==='report_worker_job').length,0);
     live.delete(third);
     assert.equal(await fileCount(),1,'restarting again cannot duplicate private bytes');
+
+    // A supervisor stop must release the long-running worker cleanly, without
+    // a SIGKILL or an extra claim. A new heartbeat proves it actually started.
+    const heartbeatBefore=(await owner.query(
+      'SELECT last_seen_at FROM report_worker_presence WHERE tenant_id=$1',
+      [tenantId])).rows[0].last_seen_at;
+    const continuous=startWorker(tenantId,{once:false});live.add(continuous);
+    let observed=false;
+    const readyUntil=Date.now()+9000;
+    while(Date.now()<readyUntil){
+      const seen=(await owner.query(
+        'SELECT last_seen_at FROM report_worker_presence WHERE tenant_id=$1',
+        [tenantId])).rows[0]?.last_seen_at;
+      if(seen && new Date(seen)>new Date(heartbeatBefore)){observed=true;break;}
+      if(continuous.child.exitCode!==null)break;
+      await pause(90);
+    }
+    assert.ok(observed,'long-running worker never published heartbeat');
+    assert.equal(continuous.child.kill('SIGTERM'),true);
+    assert.deepEqual(await continuous.exited,{code:0,signal:null},
+      'SIGTERM must stop worker gracefully and close DB connections');
+    assert.equal(continuous.logs().filter(x=>x.event==='report_worker_job').length,0);
+    live.delete(continuous);
+    assert.equal(await fileCount(),1,'clean shutdown must not create other files');
+
   } finally {
     for(const p of live){
       if(p.child.exitCode===null)p.child.kill('SIGKILL');
