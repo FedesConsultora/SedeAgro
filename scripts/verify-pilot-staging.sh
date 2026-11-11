@@ -17,7 +17,7 @@ if [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "El HEAD esperado debe ser un SHA Git completo de 40 caracteres." >&2
   exit 2
 fi
-for command in curl git grep; do
+for command in curl git grep awk tr; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Falta herramienta: $command" >&2
     exit 2
@@ -53,19 +53,65 @@ if [[ "$http_status_lines" != "1" ]] ||
   echo "BLOCKED: staging no devolvió un único HTTP 200 HTTPS sin redirecciones." >&2
   exit 1
 fi
-printf '%s\n' "$headers" | grep -Eiq '^content-security-policy:.*script-src .self.'
-printf '%s\n' "$headers" | grep -Eiq '^referrer-policy: no-referrer'
-printf '%s\n' "$headers" | grep -Eiq '^x-frame-options: DENY'
-printf '%s\n' "$headers" | grep -Eiq '^x-content-type-options: nosniff'
-# HSTS is provided by the HTTPS edge. Require at least 24 hours for pilot;
-# never accept a header on HTTP or silently treat liveness as DB readiness.
-hsts="$(printf '%s\n' "$headers" | tr -d '\r' | grep -Ei '^strict-transport-security:' | head -n 1 || true)"
-if [[ ! "$hsts" =~ [Mm][Aa][Xx]-[Aa][Gg][Ee]=([0-9]+) ]]; then
-  echo "Falta Strict-Transport-Security con max-age en el edge HTTPS." >&2
-  exit 1
-fi
-if (( ${BASH_REMATCH[1]} < 86400 )); then
-  echo "Strict-Transport-Security max-age inferior al mínimo piloto (86400s)." >&2
+# Require one non-ambiguous copy of every security header. Substring greps
+# could accept CSP "script-src 'self' 'unsafe-inline'" or HSTS
+# "max-age=86400garbage", and duplicated headers can be interpreted
+# differently by clients and proxies.
+if ! printf '%s\n' "$headers" | tr -d '\r' | awk '
+function trim(s) {
+  sub(/^[[:space:]]+/, "", s)
+  sub(/[[:space:]]+$/, "", s)
+  return s
+}
+{
+  if ($0 ~ /^[[:space:]]/) bad = 1
+  colon = index($0, ":")
+  if (!colon) next
+  name = tolower(trim(substr($0, 1, colon-1)))
+  value = trim(substr($0, colon+1))
+  if (name == "content-security-policy") { csp_count++; csp=value }
+  else if (name == "strict-transport-security") { hsts_count++; hsts=value }
+  else if (name == "referrer-policy") {
+    referrer_count++; if (tolower(value) != "no-referrer") bad=1
+  }
+  else if (name == "x-frame-options") {
+    frame_count++; if (tolower(value) != "deny") bad=1
+  }
+  else if (name == "x-content-type-options") {
+    type_count++; if (tolower(value) != "nosniff") bad=1
+  }
+}
+END {
+  if (bad || csp_count != 1 || hsts_count != 1 ||
+      referrer_count != 1 || frame_count != 1 || type_count != 1) exit 1
+  # HSTS is scoped only to this staging hostname. Reject additional
+  # directives, typos, duplicate max-age and overly large numeric values.
+  if (tolower(hsts) !~ /^max-age=[0-9]+$/) exit 1
+  age = substr(hsts, 9)
+  if (length(age) > 9 || (age+0) < 86400) exit 1
+
+  required["default-src"]="'\''self'\''"
+  required["script-src"]="'\''self'\''"
+  required["connect-src"]="'\''self'\''"
+  required["worker-src"]="'\''self'\''"
+  required["object-src"]="'\''none'\''"
+  required["base-uri"]="'\''self'\''"
+  required["form-action"]="'\''self'\''"
+  required["frame-ancestors"]="'\''none'\''"
+  n = split(csp, directives, ";")
+  for (i=1; i<=n; i++) {
+    directive = trim(directives[i])
+    if (directive == "") continue
+    split(directive, words, /[[:space:]]+/)
+    key = tolower(words[1])
+    value = trim(substr(directive, length(words[1])+1))
+    if (key == "" || seen[key]++) exit 1
+    if ((key in required) && value != required[key]) exit 1
+  }
+  for (key in required) if (!seen[key]) exit 1
+}
+'; then
+  echo "BLOCKED: staging devolvió CSP, HSTS u otros headers inseguros o ambiguos." >&2
   exit 1
 fi
 if [[ "$(request_status "$URL/health")" != "200" ]] ||
