@@ -61,6 +61,8 @@ function validateLive(live,sha,host,ids) {
     live.image_reference_kind==='immutable-config-id'&&
     live.project_container_census_verified===true&&
     live.project_volume_inventory_verified===true&&
+    live.project_network_inventory_verified===true&&
+    HEX.test(live.project_network_id||'')&&
     live.image_ids?.backend===ids.backend&&
     live.image_ids?.frontend===ids.frontend&&
     live.signed_provenance_certified===false&&
@@ -111,6 +113,8 @@ export async function reviewSignedStagingRuntime({
   check(['db','redis','backend','frontend'].every(name=>
     running.container_ids[name]===again.container_ids[name]),
   'staging Compose containers were replaced during read-only identity review');
+  check(running.project_network_id===again.project_network_id,
+  'staging network was replaced during read-only identity review');
   return {
     status:'SIGNED_OCI_STAGING_RUNTIME_IDENTITIES_REVIEWED_NOT_CERTIFIED',
     head:sha,host,project:'sedeagro-staging',
@@ -122,6 +126,7 @@ export async function reviewSignedStagingRuntime({
     checked_running_container_ids:true,
     checked_immutable_image_ids:true,
     verified_same_four_containers_twice:true,
+    verified_private_network_twice:true,
     verified_project_volumes_twice:true,
     read_only:true,containers_created:false,
     containers_started_by_review:false,production_env_read:false,
