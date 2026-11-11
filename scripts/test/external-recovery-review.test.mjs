@@ -106,7 +106,7 @@ test('each missing operational control is individually fail-closed', () => {
 
 test('non-causal, nonexistent, non-UTC and future timestamp inputs fail', () => {
   const attempts = [
-    ['outage_started_at', stamp + '00:00:01.000Z'],
+    ['outage_started_at', '2026-11-09T23:59:59.000Z'],
     ['backup_consistent_until_at', stamp + '00:10:00.000Z'],
     ['api_ready_at', stamp + '00:03:59.000Z'],
     ['rollback_ready_at', stamp + '00:08:30.000Z'],
