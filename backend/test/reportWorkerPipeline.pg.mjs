@@ -185,6 +185,13 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
     assert.equal(rejected.error_code,'AUTHORITY_REVOKED');
     expectStatus(await request('/reports/runs/'+revoked.id+'/download',a),
       409,'revoked job has no private file');
+    // Re-enable the template in THIS disposable fixture before exercising
+    // an unrelated exhausted lease. The failed work must stay terminal.
+    await owner.query("UPDATE report_templates SET is_active=true "+
+      "WHERE id=$1 AND tenant_id=$2",[template.id,a.tenant]);
+    assert.equal(expectStatus(await request('/reports/runs/'+revoked.id,a),
+      200,'re-enabling template does not resurrect failed job').status,'failed');
+    assert.equal((await processNextReport(a.tenant)).state,'idle');
 
     // A crashed worker's third expired lease must be terminal, not retried
     // forever or silently picked up by a different tenant.
