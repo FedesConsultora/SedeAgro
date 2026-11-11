@@ -149,9 +149,10 @@ test('CLI rejects shared QA files, shared parents, symlinks and noncanonical pat
   symlinkSync(file,linked);
   const nested=join(dir,'shared-parent');
   mkdirSync(nested,{mode:0o755});
+  chmodSync(nested,0o755);
   const sharedParentFile=join(nested,'mob.json');
   writeFileSync(sharedParentFile,readFileSync(file),{mode:0o600});
-  const invalid=[linked,sharedParentFile,join(dir,'./evidence.json'),file.slice(1)];
+  const invalid=[linked,sharedParentFile,dir + '/./evidence.json',file.slice(1)];
   for(const path of invalid) {
     const result=runIntake(path);
     assert.equal(result.status,2,path+' '+result.stderr);
