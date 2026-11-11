@@ -34,7 +34,9 @@ function container(name, letter) {
         'NODE_ENV=production','SEED_MODE=prod','LOG_SQL=0','LOG_STACK=0',
         'BASE_DOMAIN='+host,'CORS_ORIGIN=https://'+host,'SEDEAGRO_BUILD_SHA='+sha,
         'DATABASE_URL=postgres://sedeagro_staging_app:'+'x'.repeat(40)+'@db:5432/sedeagro_staging',
-        'JWT_SECRET='+'PRIVATE-NOT-IN-OUTPUT-'+'j'.repeat(40)
+        'JWT_SECRET='+'PRIVATE-NOT-IN-OUTPUT-'+'j'.repeat(40),
+        'REDIS_URL=redis://redis:6379','PORT=3001',
+        'LOG_LEVEL=info','LOG_FORMAT=json'
       ]:[]
     },
     HostConfig:{
@@ -76,6 +78,96 @@ function volumeFixture(containers) {
   }
   return result;
 }
+
+function changeBackendEnv(c,key,value) {
+  const index=c.backend.Config.Env.findIndex(entry=>entry.startsWith(key+'='));
+  assert.ok(index>=0, 'fixture must declare '+key);
+  if(value===undefined) c.backend.Config.Env.splice(index,1);
+  else c.backend.Config.Env[index]=key+'='+value;
+}
+
+test('staging rejects any Redis endpoint drift even when all four containers are healthy',()=>{
+  const bad=[
+    'redis://production-redis:6379',
+    'redis://redis:6380',
+    'rediss://redis:6379',
+    'redis://redis:6379/1',
+    'redis://redis:6379?db=0',
+    'redis://admin:password@redis:6379',
+    'redis://127.0.0.1:6379',
+    'redis://redis:6379#shadow',
+    '',
+    undefined
+  ];
+  for(const value of bad){
+    const c=fixture();
+    changeBackendEnv(c,'REDIS_URL',value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,String(value));
+  }
+  const ok=validateStagingContainers(fixture(),{sha,host});
+  assert.equal(ok.status,'RUNTIME_REVIEW_REQUIRED');
+});
+
+test('staging denies alternate PostgreSQL authority, options and weak or reused secrets',()=>{
+  const validUser='sedeagro_staging_app',validPassword='x'.repeat(40);
+  const base='postgres://'+validUser+':'+validPassword+'@db:5432/sedeagro_staging';
+  const bad=[
+    'postgres://'+validUser+':'+validPassword+'@prod-db:5432/sedeagro_staging',
+    'postgres://'+validUser+':'+validPassword+'@db:5432/production',
+    'postgres://'+validUser+':'+validPassword+'@db:5433/sedeagro_staging',
+    'postgres://sedeagro_staging_owner:'+validPassword+'@db:5432/sedeagro_staging',
+    base.replace('postgres://','postgresql://'),
+    base.replace('postgres://','http://'),
+    base+'?sslmode=disable',
+    base+'#fragment',
+    base.replace(':'+validPassword+'@',':short@'),
+    base.replace(':'+validPassword+'@',':@'),
+    base.replace(':'+validPassword+'@',':password-example-secret@'),
+    base.replace(':'+validPassword+'@',':jwt%40pass@'),
+    undefined
+  ];
+  for(const value of bad){
+    const c=fixture();
+    changeBackendEnv(c,'DATABASE_URL',value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,String(value));
+  }
+  for(const [name,value] of [
+    ['JWT_SECRET',validPassword],['JWT_SECRET','too-short'],
+    ['JWT_SECRET',undefined],['LOG_LEVEL','debug'],['LOG_FORMAT','text'],
+    ['PORT','3002'],['LOG_LEVEL',undefined],['PORT',undefined]
+  ]){
+    const c=fixture();
+    changeBackendEnv(c,name,value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,name+'='+value);
+  }
+});
+
+test('signed OCI runtime review also validates live staging-only DB and Redis endpoints',()=>{
+  const signed={backend:imageId('3'),frontend:imageId('4')};
+  const make=()=>{
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries())
+      c[name].Id=String(i+5).repeat(64);
+    c.backend.Config.Image=signed.backend;
+    c.frontend.Config.Image=signed.frontend;
+    return c;
+  };
+  const ok=validateStagingContainers(make(),{sha,host,signedImageIds:signed});
+  assert.equal(ok.image_reference_kind,'immutable-config-id');
+  for(const [key,value] of [
+    ['REDIS_URL','redis://production-redis:6379'],
+    ['DATABASE_URL','postgres://sedeagro_staging_app:'+'x'.repeat(40)+'@db:5432/sedeagro_staging?sslmode=disable'],
+    ['JWT_SECRET','x'.repeat(40)]
+  ]){
+    const c=make();
+    changeBackendEnv(c,key,value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host,signedImageIds:signed}),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
+});
 
 test('signed volume inventory rejects remote drivers, bind options and spoofed project labels',()=>{
   const mutations=[
