@@ -34,10 +34,12 @@ function fixture(t) {
     'url=""',
     'for arg in "$@"; do',
     '  [[ "$arg" == --head ]] && mode=head',
+    '  [[ "$arg" == --fail ]] && mode=body',
     '  [[ "$arg" == https://* ]] && url="$arg"',
     'done',
     'if [[ "$mode" == head ]]; then',
-    '  echo "HTTP/2 200"',
+    '  echo "HTTP/2 ${MOCK_HEAD_STATUS:-200}"',
+    '  if [[ "$MOCK_DOUBLE_STATUS" == 1 ]]; then echo "HTTP/1.1 200"; fi',
     '  echo "content-security-policy: default-src \u0027self\u0027; script-src \u0027self\u0027"',
     '  echo "referrer-policy: no-referrer"',
     '  echo "x-frame-options: DENY"',
@@ -47,8 +49,8 @@ function fixture(t) {
     'fi',
     'case "$url" in',
     '  */health/revision) printf \'{"revision":"%s"}\\n\' "$MOCK_BACKEND_SHA" ;;',
-    '  */health/ready) echo "$MOCK_READY_STATUS" ;;',
-    '  */health) echo 200 ;;',
+    '  */health/ready) if [[ "$mode" == body ]]; then echo "$MOCK_READY_BODY"; else echo "$MOCK_READY_STATUS"; fi ;;',
+    '  */health) if [[ "$mode" == body ]]; then echo "$MOCK_HEALTH_BODY"; else echo "$MOCK_HEALTH_STATUS"; fi ;;',
     '  */api/v1/auth/me) echo "$MOCK_AUTH_STATUS" ;;',
     '  *) echo 404 ;;',
     'esac',
@@ -58,6 +60,9 @@ function fixture(t) {
   const env = { ...process.env, PATH: bin + ':' + (process.env.PATH || '/usr/bin:/bin'),
     MOCK_GIT_SHA: sha, MOCK_BACKEND_SHA: sha,
     MOCK_HSTS_MAX: '86400', MOCK_READY_STATUS: '200',
+    MOCK_HEALTH_STATUS: '200',
+    MOCK_HEALTH_BODY: '{"ok":true,"service":"sedeagro-backend"}',
+    MOCK_READY_BODY: '{"ready":true}',
     MOCK_AUTH_STATUS: '401' };
   const attempt = (vars = {}, args = ['https://staging.example.test', sha]) =>
     spawnSync('bash', [join(repo, 'scripts/verify-pilot-staging.sh'), ...args],
@@ -87,6 +92,32 @@ test('rejects missing or too-short HSTS and unavailable PostgreSQL', (t) => {
     assert.equal(result.status, 1, JSON.stringify(override) + ': ' + result.stderr);
     assert.doesNotMatch(result.stdout, /PASS staging/);
   }
+});
+
+test('rejects redirects, multiple status lines and wrong backend health JSON', (t) => {
+  const { attempt } = fixture(t);
+  for (const override of [
+    { MOCK_HEAD_STATUS: '302' },
+    { MOCK_HEAD_STATUS: '503' },
+    { MOCK_DOUBLE_STATUS: '1' },
+    { MOCK_HEALTH_STATUS: '404' },
+    { MOCK_HEALTH_BODY: '<!doctype html><html>SPA fallback</html>' },
+    { MOCK_HEALTH_BODY: '{"ok":true,"service":"other-backend"}' },
+    { MOCK_READY_BODY: '{"ready":false}' },
+    { MOCK_READY_BODY: '{"ready":true,"cached":true}' },
+    { MOCK_READY_BODY: '<html>fallback</html>' }
+  ]) {
+    const result = attempt(override);
+    assert.equal(result.status, 1, JSON.stringify(override) + ': ' + result.stderr);
+    assert.doesNotMatch(result.stdout, /PASS staging/);
+  }
+});
+
+test('curl staging smoke is pinned to HTTPS without ambient curlrc, proxy or redirects', () => {
+  const script = readFileSync(smokeScript, 'utf8');
+  assert.match(script, /curl -q --silent --show-error/);
+  assert.match(script, /--proto '=https' --noproxy '\*'/);
+  assert.doesNotMatch(script, /--location|--insecure|curl -k/);
 });
 
 test('requires explicit origin HTTPS, full SHA and matching local checkout', (t) => {
