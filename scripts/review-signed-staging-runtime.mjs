@@ -60,6 +60,14 @@ function validateLive(live,sha,host,ids) {
     live.network==='sedeagro-staging_staging_internal'&&
     live.image_reference_kind==='immutable-config-id'&&
     live.project_container_census_verified===true&&
+    live.project_base_image_inventory_verified===true&&
+    live.project_base_image_ids&&
+    Object.keys(live.project_base_image_ids).sort().join(',')==='db,redis'&&
+    ID.test(live.project_base_image_ids.db)&&
+    ID.test(live.project_base_image_ids.redis)&&
+    live.project_base_image_ids.db!==live.project_base_image_ids.redis&&
+    !Object.values(live.project_base_image_ids).includes(ids.backend)&&
+    !Object.values(live.project_base_image_ids).includes(ids.frontend)&&
     live.project_volume_inventory_verified===true&&
     live.project_network_inventory_verified===true&&
     HEX.test(live.project_network_id||'')&&
@@ -115,6 +123,9 @@ export async function reviewSignedStagingRuntime({
   'staging Compose containers were replaced during read-only identity review');
   check(running.project_network_id===again.project_network_id,
   'staging network was replaced during read-only identity review');
+  check(['db','redis'].every(name=>
+    running.project_base_image_ids[name]===again.project_base_image_ids[name]),
+  'staging base image digest or local image identity drifted between reviews');
   return {
     status:'SIGNED_OCI_STAGING_RUNTIME_IDENTITIES_REVIEWED_NOT_CERTIFIED',
     head:sha,host,project:'sedeagro-staging',
@@ -127,6 +138,7 @@ export async function reviewSignedStagingRuntime({
     checked_immutable_image_ids:true,
     verified_same_four_containers_twice:true,
     verified_private_network_twice:true,
+    verified_base_images_twice:true,
     verified_project_volumes_twice:true,
     read_only:true,containers_created:false,
     containers_started_by_review:false,production_env_read:false,
