@@ -42,13 +42,18 @@ function fixture(t) {
     'url=""',
     'for arg in "$@"; do',
     '  [[ "$arg" == --head ]] && mode=head',
+    '  [[ "$arg" == --dump-header ]] && mode=getheaders',
     '  [[ "$arg" == --fail ]] && mode=body',
     '  [[ "$arg" == https://* ]] && url="$arg"',
     'done',
-    'if [[ "$mode" == head ]]; then',
-    '  echo "HTTP/2 ${MOCK_HEAD_STATUS:-200}"',
+    'if [[ "$mode" == head || "$mode" == getheaders ]]; then',
+    '  status="${MOCK_HEAD_STATUS:-200}"',
+    '  [[ "$mode" == getheaders ]] && status="${MOCK_GET_STATUS:-200}"',
+    '  echo "HTTP/2 $status"',
     '  if [[ "$MOCK_DOUBLE_STATUS" == 1 ]]; then echo "HTTP/1.1 200"; fi',
-    '  echo "content-security-policy: $MOCK_CSP"',
+    '  csp="$MOCK_CSP"',
+    '  [[ "$mode" == getheaders && -n "$MOCK_GET_CSP" ]] && csp="$MOCK_GET_CSP"',
+    '  echo "content-security-policy: $csp"',
     '  if [[ "$MOCK_DUPLICATE_CSP" == 1 ]]; then echo "content-security-policy: $MOCK_CSP"; fi',
     '  echo "referrer-policy: ${MOCK_REFERRER:-no-referrer}"',
     '  if [[ "$MOCK_DUPLICATE_REFERRER" == 1 ]]; then echo "referrer-policy: unsafe-url"; fi',
@@ -56,7 +61,9 @@ function fixture(t) {
     '  if [[ "$MOCK_DUPLICATE_XFRAME" == 1 ]]; then echo "x-frame-options: SAMEORIGIN"; fi',
     '  echo "x-content-type-options: ${MOCK_XTYPE:-nosniff}"',
     '  if [[ "$MOCK_DUPLICATE_XTYPE" == 1 ]]; then echo "x-content-type-options: sniff"; fi',
-    '  if [[ "$MOCK_NO_HSTS" != 1 ]]; then echo "strict-transport-security: ${MOCK_HSTS_VALUE:-max-age=$MOCK_HSTS_MAX}"; fi',
+    '  if [[ "$MOCK_NO_HSTS" != 1 && ( "$mode" != getheaders || "$MOCK_GET_NO_HSTS" != 1 ) ]]; then',
+    '    echo "strict-transport-security: ${MOCK_HSTS_VALUE:-max-age=$MOCK_HSTS_MAX}"',
+    '  fi',
     '  if [[ "$MOCK_DUPLICATE_HSTS" == 1 ]]; then echo "strict-transport-security: max-age=0"; fi',
     '  exit 0',
     'fi',
@@ -208,4 +215,29 @@ test('proxy passes HTTPS from edge only and production vhost declares HSTS', () 
   assert.match(nginx, /https https;/);
   assert.match(nginx, /proxy_set_header X-Forwarded-Proto \$sedeagro_upstream_proto;/);
   assert.match(edge, /Strict-Transport-Security "max-age=86400" always/);
+});
+
+test('GET document must pass independent security checks even if HEAD looks safe',t=>{
+  const {attempt}=fixture(t);
+  const insecureCsp=validCsp.replace("script-src 'self'","script-src 'self' 'unsafe-inline'");
+  for (const overrides of [
+    {MOCK_GET_STATUS:'302'},
+    {MOCK_GET_STATUS:'503'},
+    {MOCK_GET_CSP:insecureCsp},
+    {MOCK_GET_CSP:validCsp.replace("object-src 'none'","object-src *")},
+    {MOCK_GET_NO_HSTS:'1'}
+  ]) {
+    const result=attempt(overrides);
+    assert.equal(result.status,1,JSON.stringify(overrides)+': '+result.stderr);
+    assert.doesNotMatch(result.stdout,/PASS staging/);
+  }
+  const good=attempt({MOCK_GET_STATUS:'200',MOCK_GET_CSP:validCsp});
+  assert.equal(good.status,0,good.stderr);
+});
+
+test('staging smoke checks actual GET response headers without downloading a file', () => {
+  const script=readFileSync(smokeScript,'utf8');
+  assert.match(script,/curl_safe --head/);
+  assert.match(script,/curl_safe --dump-header - --output \/dev\/null/);
+  assert.match(script,/for method in HEAD GET; do/);
 });
