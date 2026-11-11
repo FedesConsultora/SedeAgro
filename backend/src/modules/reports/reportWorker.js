@@ -88,10 +88,15 @@ async function renderClaimedReport(run, tenantId) {
     `, { transaction: tx, replacements: {
       tenant: tenantId, actor: run.requested_by, template: run.report_template_id
     }, type: QueryTypes.SELECT });
+    // Never merge authorization failures with malformed-template failures.
+    // classifyReportFailure maps the former to AUTHORITY_REVOKED and the
+    // latter to INVALID_REPORT, without exposing private row values.
     if (!authority || !authority.is_active || !authority.is_enabled ||
-        !['tenant_admin', 'agronomic_coordinator'].includes(authority.role_code) ||
-        authority.scope !== 'field' || !Object.hasOwn(MIME, authority.format)) {
-      throw new Error('Autoridad revocada, plantilla inactiva o formato no admitido.');
+        !['tenant_admin', 'agronomic_coordinator'].includes(authority.role_code)) {
+      throw new Error('Autoridad revocada: plantilla inactiva o membresía no disponible.');
+    }
+    if (authority.scope !== 'field' || !Object.hasOwn(MIME, authority.format)) {
+      throw new Error('Formato o alcance de reporte no admitido.');
     }
     const fieldId = run.filters?.field_id;
     if (typeof fieldId !== 'string' || !UUID.test(fieldId)) throw new Error('Formato de lote no admitido.');
