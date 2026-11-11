@@ -162,6 +162,14 @@ jobs:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
           TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
         run: npm --workspace backend run test:db
+      # The probe takes a short ACCESS EXCLUSIVE lock on a disposable test
+      # report template while it kills a real worker between claim/render.
+      # Run only AFTER the parallel *.pg.mjs suite to avoid lock contention.
+      - name: Prove real report-worker SIGKILL lease recovery and graceful supervisor shutdown
+        env:
+          TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
+          TEST_DATABASE_APP_URL: postgres://sedeagro_app:temporary-ci-runtime-password@localhost:5432/sedeagro_test
+        run: node --test backend/test/ops/reportWorkerCrashRecovery.pg.mjs
       - name: Benchmark authenticated membership discovery with FORCE RLS at 1 25 100 250 tenants
         env:
           TEST_DATABASE_ADMIN_URL: postgres://sedeagro_owner:temporary-ci-owner-password@localhost:5432/sedeagro_test
