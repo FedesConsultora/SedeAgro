@@ -222,14 +222,30 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
     }
     if (name === 'backend') {
       const env = envValues(c.Config.Env);
+      // Validate the ACTUAL running backend environment, not only the
+      // previously resolved Compose file. Healthy containers can still point
+      // queues at production Redis or use a malformed database connection.
       assert(env.NODE_ENV === 'production' && env.SEED_MODE === 'prod' &&
         env.BASE_DOMAIN === host && env.CORS_ORIGIN === 'https://' + host &&
         env.SEDEAGRO_BUILD_SHA === sha && env.LOG_SQL === '0' &&
-        env.LOG_STACK === '0');
+        env.LOG_STACK === '0' && env.LOG_FORMAT === 'json' &&
+        env.LOG_LEVEL === 'info' && env.PORT === '3001' &&
+        env.REDIS_URL === 'redis://redis:6379');
+
       let url;
       try { url = new URL(env.DATABASE_URL); } catch { assert(false); }
-      assert(url.hostname === 'db' && url.port === '5432' &&
-        url.pathname === '/sedeagro_staging' && url.username === 'sedeagro_staging_app');
+      // Match the same staging-only authority and credential constraints
+      // required at Compose admission. Never disclose secret values.
+      const safeSecret = value => typeof value === 'string' &&
+        value.length >= 24 && value.length <= 512 &&
+        /^[a-zA-Z0-9._~-]+$/.test(value) &&
+        !/replace|change|demo|example|password|secret|testing/i.test(value);
+      assert(url.protocol === 'postgres:' && url.hostname === 'db' &&
+        url.port === '5432' && url.pathname === '/sedeagro_staging' &&
+        url.username === 'sedeagro_staging_app' && !url.search && !url.hash &&
+        safeSecret(url.password) &&
+        safeSecret(env.JWT_SECRET) && env.JWT_SECRET.length >= 32 &&
+        env.JWT_SECRET !== url.password);
     }
     images[name] = c.Image; // LOCAL Docker image ID; not a registry digest attestation.
     if (immutable) {
