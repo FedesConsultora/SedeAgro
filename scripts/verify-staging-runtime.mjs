@@ -80,6 +80,47 @@ function envValues(list) {
   return env;
 }
 
+// A Docker container's Mounts.Name alone does not attest the backing volume.
+// Inspect the two Compose-owned local volumes independently: local driver,
+// Compose project identity and expected Docker-managed path (rootful/rootless).
+// Never print Mountpoint or Docker's raw inspect data.
+export function validateStagingVolumeInventory(volumes, containers) {
+  assert(volumes && typeof volumes === 'object' && !Array.isArray(volumes) &&
+    Object.keys(volumes).sort().join(',') === 'db,redis');
+  const expected = {
+    db: {name: PROJECT + '_staging_pgdata', label:'staging_pgdata',
+      destination:'/var/lib/postgresql/data'},
+    redis: {name: PROJECT + '_staging_redisdata', label:'staging_redisdata',
+      destination:'/data'}
+  };
+  const paths = [];
+  for (const name of ['db','redis']) {
+    const spec = expected[name], v = volumes[name];
+    assert(v && typeof v === 'object' && !Array.isArray(v) &&
+      v.Name === spec.name && v.Driver === 'local' &&
+      v.Scope === 'local' &&
+      v.Labels && v.Labels['com.docker.compose.project'] === PROJECT &&
+      v.Labels['com.docker.compose.volume'] === spec.label &&
+      (v.Options == null ||
+        (typeof v.Options === 'object' && !Array.isArray(v.Options) &&
+          Object.keys(v.Options).length === 0)));
+    const root = v.Mountpoint;
+    assert(typeof root === 'string' && root.startsWith('/') &&
+      !root.includes('\\') && !root.includes('//') && !root.includes('\\0') &&
+      !root.split('/').includes('..') &&
+      root.endsWith('/volumes/' + spec.name + '/_data'));
+    const mount = containers?.[name]?.Mounts?.[0];
+    assert(mount && containers[name].Mounts.length === 1 &&
+      mount.Type === 'volume' && mount.Name === spec.name &&
+      mount.Driver === 'local' && mount.Source === root &&
+      mount.Destination === spec.destination && mount.RW === true &&
+      (mount.Propagation == null || mount.Propagation === ''));
+    paths.push(root);
+  }
+  assert(new Set(paths).size === paths.length);
+  return true;
+}
+
 export function validateStagingContainers(containers, { sha, host, signedImageIds } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
@@ -207,6 +248,20 @@ export function inspectStagingRuntime({ sha, host, signedImageIds, execute = def
       new Set(fullIds).size === SERVICES.length &&
       SERVICES.every(name => fullIds.includes(report.container_ids[name])));
     report.project_container_census_verified = true;
+    // Read Docker's actual volume metadata, not solely the container's
+    // reported Mounts.Name. Fixed names only; no operator-chosen volume.
+    const volumeNames = {
+      db: PROJECT + '_staging_pgdata',
+      redis: PROJECT + '_staging_redisdata'
+    };
+    const volumes = {};
+    for (const name of ['db','redis']) {
+      const result = execute(['volume','inspect','--format','{{json .}}',volumeNames[name]]);
+      assert(typeof result === 'string' && result.length > 0 && result.length < 16384);
+      try { volumes[name] = JSON.parse(result); } catch { assert(false); }
+    }
+    validateStagingVolumeInventory(volumes, containers);
+    report.project_volume_inventory_verified = true;
   }
   return report;
 }
