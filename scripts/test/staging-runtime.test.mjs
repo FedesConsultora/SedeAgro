@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
   validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory,
   validateStagingNetworkInventory, validateStagingEffectivePorts,
-  validateStagingBaseImageInventory
+  validateStagingBaseImageInventory, validateStagingDataServiceConfig
 } from '../verify-staging-runtime.mjs';
 
 const sha='a'.repeat(40);
@@ -38,7 +38,12 @@ function container(name, letter) {
         'JWT_SECRET='+'PRIVATE-NOT-IN-OUTPUT-'+'j'.repeat(40),
         'REDIS_URL=redis://redis:6379','PORT=3001',
         'LOG_LEVEL=info','LOG_FORMAT=json'
-      ]:[]
+      ]:name==='db'?[
+        'POSTGRES_DB=sedeagro_staging',
+        'POSTGRES_USER=sedeagro_staging_owner',
+        'POSTGRES_PASSWORD='+'o'.repeat(40)
+      ]:[],
+      ...(name==='redis'?{Cmd:['redis-server','--appendonly','yes']}:{})
     },
     HostConfig:{
       Privileged:false,
@@ -58,6 +63,90 @@ function container(name, letter) {
 const fixture=()=>({
   db:container('db','1'),redis:container('redis','2'),
   backend:container('backend','3'),frontend:container('frontend','4')
+});
+
+function overrideEnv(c,service,key,value) {
+  const env=c[service].Config.Env;
+  const index=env.findIndex(x=>x.startsWith(key+'='));
+  if(value===undefined){
+    if(index!==-1)env.splice(index,1);
+  }else if(index!==-1)env[index]=key+'='+value;
+  else env.push(key+'='+value);
+}
+
+test('runtime staging demands PostGIS bootstrap, distinct secrets and Redis AOF',()=>{
+  const c=fixture();
+  assert.equal(validateStagingDataServiceConfig(c),true);
+  assert.equal(validateStagingContainers(c,{sha,host}).status,'RUNTIME_REVIEW_REQUIRED');
+});
+
+test('runtime blocks PostGIS production bootstrap or trust/weak/auth-file overrides',()=>{
+  const attacks=[
+    ['POSTGRES_DB','production'],
+    ['POSTGRES_USER','postgres'],
+    ['POSTGRES_USER','sedeagro_production_owner'],
+    ['POSTGRES_PASSWORD','short'],
+    ['POSTGRES_PASSWORD','password-example-insecure'],
+    ['POSTGRES_PASSWORD',undefined],
+    ['POSTGRES_HOST_AUTH_METHOD','trust'],
+    ['POSTGRES_HOST_AUTH_METHOD','scram-sha-256'],
+    ['POSTGRES_INITDB_ARGS','--auth-host=trust'],
+    ['POSTGRES_PASSWORD_FILE','/srv/prod/secret']
+  ];
+  for(const [name,value] of attacks){
+    const c=fixture();
+    overrideEnv(c,'db',name,value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,name+'='+value);
+  }
+  for(const reused of [
+    {service:'db',key:'POSTGRES_PASSWORD',value:'x'.repeat(40)},
+    {service:'db',key:'POSTGRES_PASSWORD',
+      value:'PRIVATE-NOT-IN-OUTPUT-'+'j'.repeat(40)}
+  ]){
+    const c=fixture();
+    overrideEnv(c,reused.service,reused.key,reused.value);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,reused.key);
+  }
+});
+
+test('healthy Redis with disabled AOF or alternate executable is not accepted',()=>{
+  const commands=[
+    undefined,
+    [],
+    ['redis-server'],
+    ['redis-server','--appendonly','no'],
+    ['redis-server','--save',''],
+    ['redis-server','--appendonly','yes','--protected-mode','no'],
+    ['sh','-c','redis-server --appendonly yes'],
+    'redis-server --appendonly yes',
+    ['redis-server','--appendonly',true]
+  ];
+  for(const command of commands){
+    const c=fixture();
+    c.redis.Config.Cmd=command;
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,JSON.stringify(command));
+  }
+});
+
+test('signed OCI review also denies PostGIS trust and Redis AOF downgrade',()=>{
+  const ids={backend:imageId('3'),frontend:imageId('4')};
+  for(const attack of [
+    c=>{overrideEnv(c,'db','POSTGRES_HOST_AUTH_METHOD','trust');},
+    c=>{c.redis.Config.Cmd=['redis-server','--appendonly','no'];},
+    c=>{overrideEnv(c,'db','POSTGRES_PASSWORD','x'.repeat(40));}
+  ]){
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries())
+      c[name].Id=String(i+5).repeat(64);
+    c.backend.Config.Image=ids.backend;
+    c.frontend.Config.Image=ids.frontend;
+    attack(c);
+    assert.throws(()=>validateStagingContainers(c,{sha,host,signedImageIds:ids}),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
 });
 
 // Independent image-store metadata for the two digest-locked base services.
