@@ -5,7 +5,8 @@ const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].dige
 
 import assert from 'node:assert/strict';
 import {
-  validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory
+  validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory,
+  validateStagingNetworkInventory
 } from '../verify-staging-runtime.mjs';
 
 const sha='a'.repeat(40);
@@ -111,6 +112,91 @@ test('signed volume inventory rejects remote drivers, bind options and spoofed p
   const c=fixture(),v=volumeFixture(c);
   assert.equal(validateStagingVolumeInventory(v,c),true);
   assert.equal(v.db.Options,null);
+});
+
+// Signed OCI only: independent Docker network inspect and container-endpoint parity.
+function networkFixture(containers) {
+  const id='9'.repeat(64);
+  const net={
+    Name:network,Id:id,Driver:'bridge',Scope:'local',Internal:true,
+    Attachable:false,Ingress:false,ConfigOnly:false,Options:{},
+    Labels:{
+      'com.docker.compose.project':project,
+      'com.docker.compose.network':'staging_internal'
+    },
+    Containers:{}
+  };
+  for(const [i,name] of ['db','redis','backend','frontend'].entries()) {
+    const c=containers[name],endpointId=String.fromCharCode(97+i).repeat(64);
+    c.Name='/'+project+'-'+name+'-1';
+    c.NetworkSettings.Networks[network]={
+      NetworkID:id,EndpointID:endpointId
+    };
+    net.Containers[c.Id]={
+      Name:c.Name.slice(1),EndpointID:endpointId
+    };
+  }
+  return net;
+}
+
+test('signed staging checks real private network and exact four attached containers',()=>{
+  const c=fixture();
+  for(const [i,name] of ['db','redis','backend','frontend'].entries())
+    c[name].Id=String(i+5).repeat(64);
+  const n=networkFixture(c);
+  assert.equal(validateStagingNetworkInventory(n,c),n.Id);
+  assert.doesNotMatch(JSON.stringify({network_id:n.Id}),/PRIVATE-NOT-IN-OUTPUT/);
+});
+
+test('signed OCI staging blocks public, externally attachable or mislabeled Docker networks',()=>{
+  const attacks=[
+    n=>{n.Internal=false;},
+    n=>{n.Driver='macvlan';},
+    n=>{n.Driver='overlay';},
+    n=>{n.Scope='swarm';},
+    n=>{n.Attachable=true;},
+    n=>{n.Ingress=true;},
+    n=>{n.ConfigOnly=true;},
+    n=>{n.Options={'com.docker.network.bridge.name':'production0'};},
+    n=>{n.Name='sedeagro_internal';},
+    n=>{n.Id='not-64-hex';},
+    n=>{n.Labels['com.docker.compose.project']='sedeagro';},
+    n=>{n.Labels['com.docker.compose.network']='production';},
+    n=>{n.Containers['f'.repeat(64)]={Name:'production',EndpointID:'1'.repeat(64)};},
+    n=>{delete n.Containers['5'.repeat(64)];},
+    n=>{n.Containers['6'.repeat(64)].Name='production-redis';},
+    n=>{n.Containers['7'.repeat(64)].EndpointID='f'.repeat(64);}
+  ];
+  for(const mutate of attacks){
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries())
+      c[name].Id=String(i+5).repeat(64);
+    const n=networkFixture(c);
+    mutate(n);
+    assert.throws(()=>validateStagingNetworkInventory(n,c),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
+});
+
+test('signed OCI staging denies swapped, duplicated or unbound endpoint identity',()=>{
+  const attacks=[
+    c=>{c.backend.NetworkSettings.Networks[network].NetworkID='e'.repeat(64);},
+    c=>{c.db.NetworkSettings.Networks[network].EndpointID='f'.repeat(64);},
+    c=>{c.redis.NetworkSettings.Networks[network].EndpointID=
+      c.db.NetworkSettings.Networks[network].EndpointID;},
+    c=>{c.frontend.Name='/sedeagro-frontend-1';},
+    c=>{c.db.Id='1'.repeat(64);},
+    c=>{delete c.redis.NetworkSettings.Networks[network];}
+  ];
+  for(const mutate of attacks){
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries())
+      c[name].Id=String(i+5).repeat(64);
+    const n=networkFixture(c);
+    mutate(c);
+    assert.throws(()=>validateStagingNetworkInventory(n,c),
+      /STAGING_RUNTIME_BLOCKED/);
+  }
 });
 
 test('actual containers prove project, internal network, runtime image IDs and health',()=>{
@@ -359,7 +445,12 @@ test('signed staging Docker inspector ties each container list ID to inspected f
     if(ids[name])c[name].Config.Image=ids[name];
   }
   const volumes=volumeFixture(c);
+  const privateNet=networkFixture(c);
   const execute=args=>{
+    if(args[0]==='network'){
+      assert.deepEqual(args,['network','inspect','--format','{{json .}}',network]);
+      return JSON.stringify(privateNet);
+    }
     if(args[0]==='volume') {
       assert.deepEqual(args.slice(0,3),['volume','inspect','--format']);
       const name=args.at(-1);
@@ -380,6 +471,8 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   assert.equal(ok.image_reference_kind,'immutable-config-id');
   assert.equal(ok.project_container_census_verified,true);
   assert.equal(ok.project_volume_inventory_verified,true);
+  assert.equal(ok.project_network_inventory_verified,true);
+  assert.equal(ok.project_network_id,privateNet.Id);
   c.frontend.Id='9'.repeat(64);
   assert.throws(()=>inspectStagingRuntime({
     sha,host,signedImageIds:ids,execute
