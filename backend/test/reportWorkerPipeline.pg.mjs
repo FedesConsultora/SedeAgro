@@ -74,7 +74,7 @@ async function runWorkerCliOnce(tenantId) {
     .map(record=>({state:record.state,run_id:record.run_id,error_code:record.error_code}));
 }
 
-const { markReportWorkerPresent,processNextReport,purgeExpiredReportFiles }=
+const { markReportWorkerPresent,processNextReport }=
   await import('../src/modules/reports/reportWorker.js');
 
 test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> revoke -> expiry, with RLS',async()=>{
@@ -223,8 +223,8 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
     const cancelled=expectStatus(await request(
       '/reports/runs/'+pending.id+'/cancel',a,{method:'POST'}),200,'cancel queued job');
     assert.equal(cancelled.status,'cancelled');
-    assert.equal((await processNextReport(a.tenant)).state,'idle',
-      'cancelled work must not be claimed');
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'new worker process must not resurrect cancelled work');
     expectStatus(await request('/reports/runs/'+pending.id+'/download',a),
       409,'cancelled job has no artifact');
 
@@ -261,8 +261,8 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
       "WHERE tenant_id=$1 AND id=$2",
       [a.tenant,exhausted.id,randomUUID()]);
     assert.equal((await processNextReport(b.tenant)).state,'idle');
-    assert.equal((await processNextReport(a.tenant)).state,'idle',
-      'expired third lease becomes failed without another render');
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'fresh worker process must fail exhausted lease without another render');
     const finalLease=expectStatus(await request('/reports/runs/'+exhausted.id,a),
       200,'exhausted job must expose terminal result');
     assert.equal(finalLease.status,'failed');
@@ -276,7 +276,9 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
       "WHERE tenant_id=$1 AND run_id=$2",[a.tenant,queued.id]);
     expectStatus(await request('/reports/runs/'+queued.id+'/download',a),
       410,'expired artifact cannot be returned');
-    await purgeExpiredReportFiles(a.tenant);
+    // --once also runs the real artifact TTL cleanup on its first tick.
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'cleaner must not try to process terminal work');
     const left=await owner.query(
       'SELECT count(*)::integer AS n FROM report_run_files WHERE tenant_id=$1 AND run_id=$2',
       [a.tenant,queued.id]);
