@@ -233,6 +233,8 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   }
   const execute=args=>{
     if(args[0]==='container'){
+      if(args.includes('--no-trunc'))
+        return Object.values(byService).map(x=>x.repeat(64)).join('\n')+'\n';
       const service=args.at(-1).split('=').at(-1);
       return byService[service].repeat(12)+'\n';
     }
@@ -243,6 +245,7 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   };
   const ok=inspectStagingRuntime({sha,host,signedImageIds:ids,execute});
   assert.equal(ok.image_reference_kind,'immutable-config-id');
+  assert.equal(ok.project_container_census_verified,true);
   c.frontend.Id='9'.repeat(64);
   assert.throws(()=>inspectStagingRuntime({
     sha,host,signedImageIds:ids,execute
@@ -253,4 +256,44 @@ test('signed staging Docker inspector ties each container list ID to inspected f
     execute:()=>{used=true;return '{}';}
   }),/STAGING_RUNTIME_BLOCKED/);
   assert.equal(used,false);
+});
+
+
+test('signed staging rejects orphan, missing, duplicate or replaced project container census',()=>{
+  const ids={backend:imageId('3'),frontend:imageId('4')},
+    c=fixture(),names=['db','redis','backend','frontend'];
+  const byService={db:'5',redis:'6',backend:'7',frontend:'8'};
+  for(const name of names){
+    c[name].Id=byService[name].repeat(64);
+    if(ids[name])c[name].Config.Image=ids[name];
+  }
+  const exact=names.map(name=>c[name].Id);
+  for(const projectIds of [
+    [...exact,'9'.repeat(64)],   // malicious fifth or prior orphan service
+    exact.slice(0,3),            // missing known project member
+    [exact[0],exact[1],exact[2],exact[2]], // duplicated list
+    [exact[0],exact[1],exact[2],'f'.repeat(64)], // swapped image container
+    [exact[0],exact[1],exact[2],'malformed'],
+    []
+  ]){
+    let censusCalls=0;
+    const execute=args=>{
+      if(args[0]==='container'){
+        if(args.includes('--no-trunc')){
+          censusCalls++;
+          assert.ok(args.includes(
+            'label=com.docker.compose.project=sedeagro-staging'));
+          assert.ok(!args.some(x=>/prod\\.env|sedeagro\\.fedes\\.ai/.test(x)));
+          return projectIds.join('\n')+(projectIds.length?'\n':'');
+        }
+        const service=args.at(-1).split('=').at(-1);
+        return byService[service].repeat(12)+'\n';
+      }
+      const service=names.find(name=>byService[name].repeat(12)===args.at(-1));
+      return JSON.stringify(c[service]);
+    };
+    assert.throws(()=>inspectStagingRuntime({sha,host,signedImageIds:ids,execute}),
+      /STAGING_RUNTIME_BLOCKED/);
+    assert.equal(censusCalls,1,'whole project must be inventoried independently');
+  }
 });
