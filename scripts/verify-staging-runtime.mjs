@@ -80,6 +80,41 @@ function envValues(list) {
   return env;
 }
 
+// Preserve the same private-credential format in both Compose admission and
+// runtime inspections. The rejected values are never echoed or returned.
+function safeStagingSecret(value, minimum=24) {
+  return typeof value === 'string' && value.length >= minimum &&
+    value.length <= 512 && /^[a-zA-Z0-9._~-]+$/.test(value) &&
+    !/replace|change|demo|example|password|secret|testing/i.test(value);
+}
+
+// A healthy PostGIS/Redis process does NOT prove safe initialization or AOF
+// durability. Validate the actual Docker Config, not just Compose's preview.
+export function validateStagingDataServiceConfig(containers) {
+  assert(containers && typeof containers === 'object' &&
+    !Array.isArray(containers));
+  const db = containers.db?.Config, redis = containers.redis?.Config;
+  assert(db && redis && containers.backend?.Config);
+  const env = envValues(db.Env), app = envValues(containers.backend.Config.Env);
+  assert(env.POSTGRES_DB === 'sedeagro_staging' &&
+    env.POSTGRES_USER === 'sedeagro_staging_owner' &&
+    safeStagingSecret(env.POSTGRES_PASSWORD) &&
+    !Object.hasOwn(env, 'POSTGRES_HOST_AUTH_METHOD') &&
+    !Object.hasOwn(env, 'POSTGRES_INITDB_ARGS') &&
+    !Object.hasOwn(env, 'POSTGRES_PASSWORD_FILE'));
+  let url;
+  try { url = new URL(app.DATABASE_URL); } catch { assert(false); }
+  // Require all three distinct credentials: owner != application != JWT.
+  assert(safeStagingSecret(url.password) &&
+    safeStagingSecret(app.JWT_SECRET, 32) &&
+    new Set([env.POSTGRES_PASSWORD,url.password,app.JWT_SECRET]).size === 3);
+  assert(Array.isArray(redis.Cmd) && redis.Cmd.length === 3 &&
+    redis.Cmd[0] === 'redis-server' &&
+    redis.Cmd[1] === '--appendonly' &&
+    redis.Cmd[2] === 'yes');
+  return true;
+}
+
 // A Docker container's Mounts.Name alone does not attest the backing volume.
 // Inspect the two Compose-owned local volumes independently: local driver,
 // Compose project identity and expected Docker-managed path (rootful/rootless).
@@ -302,15 +337,11 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
       try { url = new URL(env.DATABASE_URL); } catch { assert(false); }
       // Match the same staging-only authority and credential constraints
       // required at Compose admission. Never disclose secret values.
-      const safeSecret = value => typeof value === 'string' &&
-        value.length >= 24 && value.length <= 512 &&
-        /^[a-zA-Z0-9._~-]+$/.test(value) &&
-        !/replace|change|demo|example|password|secret|testing/i.test(value);
       assert(url.protocol === 'postgres:' && url.hostname === 'db' &&
         url.port === '5432' && url.pathname === '/sedeagro_staging' &&
         url.username === 'sedeagro_staging_app' && !url.search && !url.hash &&
-        safeSecret(url.password) &&
-        safeSecret(env.JWT_SECRET) && env.JWT_SECRET.length >= 32 &&
+        safeStagingSecret(url.password) &&
+        safeStagingSecret(env.JWT_SECRET, 32) &&
         env.JWT_SECRET !== url.password);
     }
     images[name] = c.Image; // LOCAL Docker image ID; not a registry digest attestation.
@@ -320,6 +351,7 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
     }
   }
   if (immutable) assert(new Set(Object.values(containerIds)).size === SERVICES.length);
+  validateStagingDataServiceConfig(containers);
   // Requested loopback bindings alone cannot prove the runtime listener/NAT.
   validateStagingEffectivePorts(containers);
   return {

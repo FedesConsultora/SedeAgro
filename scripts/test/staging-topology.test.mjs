@@ -30,6 +30,7 @@ function config() {
   const redis=baseService();
   Object.assign(redis,{
     image:locked('redis'),
+    command:['redis-server','--appendonly','yes'],
     volumes:[{type:'volume',source:'staging_redisdata',target:'/data'}]
   });
   const backend=baseService();
@@ -107,6 +108,29 @@ test('never silently joins shared production network or reuses fixed container n
     const c=config();mutate(c);
     assert.throws(()=>validateStagingTopology(c,{sha,host}),/BLOCKED/,
       'unsafe topology must fail closed: '+mutate.toString());
+  }
+});
+
+test('staging denies Redis persistence downgrade and Postgres bootstrap auth overrides',()=>{
+  const mutations=[
+    c=>{delete c.services.redis.command;},
+    c=>{c.services.redis.command=['redis-server'];},
+    c=>{c.services.redis.command=['redis-server','--appendonly','no'];},
+    c=>{c.services.redis.command=['redis-server','--save',''];},
+    c=>{c.services.redis.command=['redis-server','--appendonly','yes','--protected-mode','no'];},
+    c=>{c.services.redis.command='redis-server --appendonly yes';},
+    c=>{c.services.redis.environment={REDIS_PASSWORD:'production'};},
+    c=>{c.services.db.environment.POSTGRES_HOST_AUTH_METHOD='trust';},
+    c=>{c.services.db.environment.POSTGRES_HOST_AUTH_METHOD='md5';},
+    c=>{c.services.db.environment.POSTGRES_INITDB_ARGS='--auth-host=trust';},
+    c=>{c.services.db.environment.POSTGRES_PASSWORD_FILE='/srv/prod/secret';},
+    c=>{c.services.db.environment.PGDATA='/srv/prod/postgres';},
+    c=>{delete c.services.db.environment.POSTGRES_PASSWORD;}
+  ];
+  for(const mutation of mutations){
+    const c=config();mutation(c);
+    assert.throws(()=>validateStagingTopology(c,{sha,host}),/STAGING_TOPOLOGY_BLOCKED/,
+      mutation.toString());
   }
 });
 
