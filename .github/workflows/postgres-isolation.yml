@@ -119,6 +119,10 @@ jobs:
           node --test scripts/test/image-security.test.mjs
           node --test scripts/test/pilot-trivy-verified-install.test.mjs
           bash -n scripts/ci-rollback-rehearsal.sh
+          # 0R.45: operator-supplied external recovery is only measurable/reviewable,
+          # never a synthetic CI certification of off-VPS restore or production GO.
+          node --check scripts/external-recovery-review.mjs
+          node --test scripts/test/external-recovery-review.test.mjs
           node --test scripts/test/rollback-decision.test.mjs scripts/test/ci-rollback-rehearsal.test.mjs
           bash -n scripts/ci-disposable-restore.sh
           bash -n scripts/ci-independent-recovery.sh
