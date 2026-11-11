@@ -121,6 +121,46 @@ export function validateStagingVolumeInventory(volumes, containers) {
   return true;
 }
 
+// A container can name the expected network while its Docker network object
+// is externally reachable, attachable or shared with another project.
+// Check the independently inspected network object and the exact four live
+// endpoints. Read-only: never create, connect, disconnect or prune networks.
+export function validateStagingNetworkInventory(net, containers) {
+  const HEX64 = /^[a-f0-9]{64}$/;
+  assert(net && typeof net === 'object' && !Array.isArray(net) &&
+    net.Name === NETWORK && HEX64.test(net.Id || '') &&
+    net.Driver === 'bridge' && net.Scope === 'local' &&
+    net.Internal === true && net.Attachable === false &&
+    net.Ingress === false && net.ConfigOnly !== true &&
+    net.Labels && net.Labels['com.docker.compose.project'] === PROJECT &&
+    net.Labels['com.docker.compose.network'] === 'staging_internal' &&
+    (net.Options == null ||
+      (typeof net.Options === 'object' && !Array.isArray(net.Options) &&
+        Object.keys(net.Options).length === 0)));
+  const endpoints = net.Containers;
+  assert(endpoints && typeof endpoints === 'object' &&
+    !Array.isArray(endpoints) &&
+    Object.keys(endpoints).length === SERVICES.length);
+  const seenEndpoints = new Set();
+  for (const name of SERVICES) {
+    const c = containers?.[name], member = endpoints?.[c?.Id];
+    const attached = c?.NetworkSettings?.Networks?.[NETWORK];
+    const expectedName = c?.Name;
+    assert(c && HEX64.test(c.Id || '') &&
+      typeof expectedName === 'string' && /^\/[a-z0-9_-]+$/.test(expectedName) &&
+      member && typeof member === 'object' &&
+      member.Name === expectedName.slice(1) &&
+      attached && attached.NetworkID === net.Id &&
+      HEX64.test(attached.EndpointID || '') &&
+      member.EndpointID === attached.EndpointID &&
+      !seenEndpoints.has(attached.EndpointID));
+    seenEndpoints.add(attached.EndpointID);
+  }
+  assert(Object.keys(endpoints).every(id =>
+    SERVICES.some(name => containers[name].Id === id)));
+  return net.Id;
+}
+
 export function validateStagingContainers(containers, { sha, host, signedImageIds } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
@@ -262,6 +302,16 @@ export function inspectStagingRuntime({ sha, host, signedImageIds, execute = def
     }
     validateStagingVolumeInventory(volumes, containers);
     report.project_volume_inventory_verified = true;
+    // NetworkSettings.Networks does not prove the actual bridge is internal.
+    // Inspect exactly the pinned Compose network, including its connected
+    // endpoints, without touching any production network or service.
+    const rawNetwork = execute(['network','inspect','--format','{{json .}}',NETWORK]);
+    assert(typeof rawNetwork === 'string' && rawNetwork.length > 0 &&
+      rawNetwork.length < 65536);
+    let inspectedNetwork;
+    try { inspectedNetwork = JSON.parse(rawNetwork); } catch { assert(false); }
+    report.project_network_id = validateStagingNetworkInventory(inspectedNetwork, containers);
+    report.project_network_inventory_verified = true;
   }
   return report;
 }
