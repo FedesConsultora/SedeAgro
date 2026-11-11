@@ -59,6 +59,7 @@ function validateLive(live,sha,host,ids) {
     live.host===host&&live.services===4&&
     live.network==='sedeagro-staging_staging_internal'&&
     live.image_reference_kind==='immutable-config-id'&&
+    live.project_container_census_verified===true&&
     live.image_ids?.backend===ids.backend&&
     live.image_ids?.frontend===ids.frontend&&
     live.signed_provenance_certified===false&&
