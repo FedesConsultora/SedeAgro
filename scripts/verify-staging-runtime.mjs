@@ -151,7 +151,22 @@ export function inspectStagingRuntime({ sha, host, signedImageIds, execute = def
     if (immutable) assert(typeof containers[name]?.Id === 'string' &&
       containers[name].Id.startsWith(ids[0]));
   }
-  return validateStagingContainers(containers,{sha,host,signedImageIds});
+  const report = validateStagingContainers(containers,{sha,host,signedImageIds});
+  if (immutable) {
+    // Service-by-service queries cannot discover an orphan with a different
+    // or unknown service label. Inventory ALL project containers independently,
+    // including stopped ones. A signed staging review must have exactly four.
+    const raw = execute(['container','ls','--all','--quiet','--no-trunc',
+      '--filter','label=com.docker.compose.project=' + PROJECT]);
+    assert(typeof raw === 'string' && raw.length < 1024);
+    const fullIds = raw.trim().split(/\s+/).filter(Boolean);
+    assert(fullIds.length === SERVICES.length &&
+      fullIds.every(id => /^[a-f0-9]{64}$/.test(id)) &&
+      new Set(fullIds).size === SERVICES.length &&
+      SERVICES.every(name => fullIds.includes(report.container_ids[name])));
+    report.project_container_census_verified = true;
+  }
+  return report;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
