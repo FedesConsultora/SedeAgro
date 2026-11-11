@@ -25,6 +25,49 @@ const defaultExecute = (args) => execFileSync('docker', args, {
 function assert(ok) {
   if (!ok) throw new Error('STAGING_RUNTIME_BLOCKED');
 }
+// Docker's .Mounts and NetworkSettings alone cannot detect elevated host
+// access: a container can have privileged host namespaces, extra devices,
+// redirected name resolution or additional capabilities while still looking
+// healthy on its expected Compose network. Reject such staging drift before
+// accepting ANY of the four runtime identities.
+function validateHostIsolation(hostConfig) {
+  assert(hostConfig && hostConfig.Privileged === false &&
+    hostConfig.NetworkMode === NETWORK &&
+    hostConfig.PublishAllPorts !== true);
+
+  const emptyList = value => value == null ||
+    (Array.isArray(value) && value.length === 0);
+  const privateMode = value => value == null ||
+    value === '' || value === 'private';
+  // No extra privileges, host aliases, manual DNS, host-volume shortcuts,
+  // devices, supplementary groups or custom cgroup device permissions.
+  for (const field of [
+    'CapAdd', 'Devices', 'DeviceRequests', 'DeviceCgroupRules',
+    'Binds', 'ExtraHosts', 'Dns', 'DnsOptions', 'DnsSearch', 'Links',
+    'GroupAdd', 'CdiDevices'
+  ]) assert(emptyList(hostConfig[field]));
+  // Even when .Mounts looks harmless, tmpfs and host cgroup settings must
+  // not be silently accepted as part of the signed staging baseline.
+  assert(hostConfig.Tmpfs == null ||
+    (typeof hostConfig.Tmpfs === 'object' &&
+      !Array.isArray(hostConfig.Tmpfs) &&
+      Object.keys(hostConfig.Tmpfs).length === 0));
+  assert(hostConfig.Sysctls == null ||
+    (typeof hostConfig.Sysctls === 'object' &&
+      !Array.isArray(hostConfig.Sysctls) &&
+      Object.keys(hostConfig.Sysctls).length === 0));
+  assert(hostConfig.CgroupParent == null || hostConfig.CgroupParent === '');
+  for (const field of [
+    'PidMode', 'IpcMode', 'UTSMode', 'CgroupnsMode', 'UsernsMode'
+  ]) assert(privateMode(hostConfig[field]));
+  // Docker permits "no-new-privileges", a hardening-only security option.
+  // Reject AppArmor/Seccomp overrides and unconfined flags.
+  const security = hostConfig.SecurityOpt;
+  assert(security == null || (Array.isArray(security) &&
+    security.every(flag => flag === 'no-new-privileges' ||
+      flag === 'no-new-privileges:true')));
+}
+
 function envValues(list) {
   assert(Array.isArray(list) && list.length < 100);
   const env = Object.create(null);
@@ -58,6 +101,7 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
     const c = containers[name];
     assert(c && c.Config && c.HostConfig && c.State &&
       c.NetworkSettings && Array.isArray(c.Mounts));
+    validateHostIsolation(c.HostConfig);
     const labels = c.Config.Labels || {};
     assert(labels['com.docker.compose.project'] === PROJECT &&
       labels['com.docker.compose.service'] === name);
@@ -65,9 +109,7 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
       c.State.Health?.Status === 'healthy' && c.RestartCount === 0 &&
       IMAGE_ID.test(c.Image));
     const nets = Object.keys(c.NetworkSettings.Networks || {});
-    assert(nets.length === 1 && nets[0] === NETWORK &&
-      c.HostConfig.Privileged !== true &&
-      !c.HostConfig.NetworkMode?.startsWith('host'));
+    assert(nets.length === 1 && nets[0] === NETWORK);
     const bindings = c.HostConfig.PortBindings || {};
     if (name === 'frontend') {
       assert(Object.keys(bindings).length === 1 &&
