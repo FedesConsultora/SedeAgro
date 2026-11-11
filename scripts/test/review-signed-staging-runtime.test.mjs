@@ -43,6 +43,8 @@ function live(){return {
   network:'sedeagro-staging_staging_internal',
   image_reference_kind:'immutable-config-id',
   project_container_census_verified:true,
+  project_base_image_inventory_verified:true,
+  project_base_image_ids:{db:ID('7'),redis:ID('8')},
   project_volume_inventory_verified:true,
   project_network_inventory_verified:true,
   project_network_id:DIGEST('e'),
@@ -85,6 +87,7 @@ test('real human risk is checked before host Docker, then same four staging cont
   assert.deepEqual(result.image_ids,IMAGES);
   assert.equal(result.verified_same_four_containers_twice,true);
   assert.equal(result.verified_private_network_twice,true);
+  assert.equal(result.verified_base_images_twice,true);
   assert.equal(result.checked_running_container_ids,true);
   assert.equal(result.verified_project_volumes_twice,true);
   assert.equal(result.read_only,true);
@@ -157,6 +160,13 @@ test('unhealthy, wrong project, wrong OCI config reference or overclaimed stagin
     {services:3},{network:'production'},
     {image_reference_kind:'legacy-staging-tag'},
     {project_container_census_verified:false},
+    {project_base_image_inventory_verified:false},
+    {project_base_image_inventory_verified:undefined},
+    {project_base_image_ids:undefined},
+    {project_base_image_ids:{db:'bad',redis:ID('8')}},
+    {project_base_image_ids:{db:ID('7'),redis:ID('7')}},
+    {project_base_image_ids:{db:IMAGES.backend,redis:ID('8')}},
+    {project_base_image_ids:{db:ID('7'),redis:ID('8'),other:ID('9')}},
     {project_volume_inventory_verified:false},
     {project_network_inventory_verified:false},
     {project_network_inventory_verified:undefined},
@@ -207,6 +217,19 @@ test('signed review cannot accept a missing volume scan or changed inventory bet
     inspectRuntime:async()=>{
       calls++;
       return calls===1?live():{...live(),project_volume_inventory_verified:false};
+    }
+  })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
+  assert.equal(calls,2);
+});
+
+test('base image identity drift between inspections blocks signed OCI review',async()=>{
+  let calls=0;
+  await assert.rejects(reviewSignedStagingRuntime(options({
+    inspectRuntime:async()=>{
+      calls++;
+      return calls===1?live():{
+        ...live(),project_base_image_ids:{db:ID('f'),redis:ID('8')}
+      };
     }
   })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
   assert.equal(calls,2);

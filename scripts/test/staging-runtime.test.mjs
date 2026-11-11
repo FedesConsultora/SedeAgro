@@ -6,7 +6,8 @@ const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].dige
 import assert from 'node:assert/strict';
 import {
   validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory,
-  validateStagingNetworkInventory, validateStagingEffectivePorts
+  validateStagingNetworkInventory, validateStagingEffectivePorts,
+  validateStagingBaseImageInventory
 } from '../verify-staging-runtime.mjs';
 
 const sha='a'.repeat(40);
@@ -57,6 +58,52 @@ function container(name, letter) {
 const fixture=()=>({
   db:container('db','1'),redis:container('redis','2'),
   backend:container('backend','3'),frontend:container('frontend','4')
+});
+
+// Independent image-store metadata for the two digest-locked base services.
+function baseImageFixture(containers) {
+  const repo={db:'postgis/postgis',redis:'redis'};
+  const digest={db:baseLock.images.postgis.digest,redis:baseLock.images.redis.digest};
+  return Object.fromEntries(['db','redis'].map(name=>[
+    name,{Id:containers[name].Image,RepoDigests:[repo[name]+'@'+digest[name]]}
+  ]));
+}
+
+test('signed staging checks base image-store digest and actual running IDs',()=>{
+  const c=fixture(), images=baseImageFixture(c);
+  assert.deepEqual(validateStagingBaseImageInventory(images,c),{
+    db:imageId('1'),redis:imageId('2')
+  });
+});
+
+test('signed staging blocks substituted, stale, unsigned-alias or missing base image metadata',()=>{
+  const mutations=[
+    (images,c)=>{c.db.Image=imageId('f');},
+    (images,c)=>{c.redis.Image=imageId('f');},
+    (images)=>{images.db.Id=imageId('f');},
+    (images)=>{images.redis.RepoDigests=['redis@sha256:'+'f'.repeat(64)];},
+    (images)=>{images.db.RepoDigests=['postgis/postgis:latest'];},
+    (images)=>{images.db.RepoDigests=['other/postgis@'+baseLock.images.postgis.digest];},
+    (images)=>{images.redis.RepoDigests=[];},
+    (images)=>{images.redis.RepoDigests=undefined;},
+    (images)=>{images.db.Id='truncated';},
+    (images)=>{images.db.Id=images.redis.Id;},
+    (images)=>{images.extra={Id:imageId('f')};},
+    (images)=>{delete images.redis;},
+    (images,c)=>{c.db.Config.Image='postgis/postgis:latest';},
+    (images,c)=>{c.redis.Config.Image='redis:latest';}
+  ];
+  for(const mutate of mutations){
+    const c=fixture(),images=baseImageFixture(c);
+    mutate(images,c);
+    assert.throws(()=>validateStagingBaseImageInventory(images,c),
+      /STAGING_RUNTIME_BLOCKED/,mutate.toString());
+  }
+  // Some registries display Docker Hub's fully-qualified canonical name.
+  const c=fixture(),images=baseImageFixture(c);
+  images.redis.RepoDigests=['docker.io/library/redis@'+baseLock.images.redis.digest];
+  images.db.RepoDigests=['docker.io/postgis/postgis@'+baseLock.images.postgis.digest];
+  assert.equal(validateStagingBaseImageInventory(images,c).redis,c.redis.Image);
 });
 
 // Only signed runtime inspection reads Docker's independent volume metadata.
@@ -596,7 +643,15 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   }
   const volumes=volumeFixture(c);
   const privateNet=networkFixture(c);
+  const baseImages=baseImageFixture(c);
   const execute=args=>{
+    if(args[0]==='image'){
+      assert.deepEqual(args.slice(0,4),['image','inspect','--format','{{json .}}']);
+      const ref=args.at(-1);
+      const name=ref===locked('postgis')?'db':ref===locked('redis')?'redis':null;
+      assert.ok(name,'only pinned db/redis image inspect allowed');
+      return JSON.stringify(baseImages[name]);
+    }
     if(args[0]==='network'){
       assert.deepEqual(args,['network','inspect','--format','{{json .}}',network]);
       return JSON.stringify(privateNet);
@@ -620,6 +675,8 @@ test('signed staging Docker inspector ties each container list ID to inspected f
   const ok=inspectStagingRuntime({sha,host,signedImageIds:ids,execute});
   assert.equal(ok.image_reference_kind,'immutable-config-id');
   assert.equal(ok.project_container_census_verified,true);
+  assert.equal(ok.project_base_image_inventory_verified,true);
+  assert.deepEqual(ok.project_base_image_ids,{db:imageId('1'),redis:imageId('2')});
   assert.equal(ok.project_volume_inventory_verified,true);
   assert.equal(ok.project_network_inventory_verified,true);
   assert.equal(ok.project_network_id,privateNet.Id);
