@@ -497,10 +497,22 @@ try {
   await secondTab.getByTitle('Cerrar sesión').click();
   await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
 
+  const witnessBeforeReturn = await secondTab.evaluate(() =>
+    localStorage.getItem('sedeagro.auth-transition-witness-v1'));
   await secondTab.locator('#login-email').fill(email);
   await secondTab.locator('#login-password').fill(password);
   await secondTab.locator('#login-submit').click();
   await secondTab.getByTitle('Sesiones').waitFor();
+  // The application itself MUST publish a new opaque witness after the real
+  // login. The extra recovery signal below may not conceal missing app code.
+  const appWitness = await secondTab.evaluate(() =>
+    localStorage.getItem('sedeagro.auth-transition-witness-v1'));
+  assert.notEqual(appWitness, witnessBeforeReturn,
+    'real login must publish a new cross-tab session transition witness');
+  const parsedWitness = JSON.parse(appWitness);
+  assert.deepEqual(Object.keys(parsedWitness).sort(), ['kind','nonce','source']);
+  assert.equal(parsedWitness.kind, 'session-transition');
+  assert.match(parsedWitness.nonce, /^[0-9a-f-]{36}$/i);
   // The first tab was logged out by another tab and is now backgrounded.
   // A foreground focus alone can be dropped (or throttled), especially when
   // a session transition happened before the first document became visible.
