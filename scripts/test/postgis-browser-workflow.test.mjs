@@ -63,7 +63,9 @@ test('all previous live Chromium cases and two 12-cycle focus passes remain mand
   const browser = job('browser-postgis');
   assert.match(browser, /npm ci/);
   assert.match(browser, /npm install --no-save --package-lock=false playwright@1\.58\.2/);
-  assert.match(browser, /npx playwright install chromium --with-deps/);
+  assert.match(browser, /npx playwright install chromium(?! --with-deps)/);
+  assert.match(browser,/run: node scripts\/ci-verify-playwright-chromium\.mjs/);
+  assert.doesNotMatch(browser,/playwright install chromium --with-deps/);
   assert.match(browser, /for pass in 1 2; do/);
   assert.match(browser, /SEDEAGRO_FOCUS_STRESS_CYCLES=12 node scripts\/acceptance-browser-cookie\.mjs/);
   assert.match(browser, /node scripts\/acceptance-browser-evidence-history\.mjs/);
