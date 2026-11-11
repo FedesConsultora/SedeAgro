@@ -161,6 +161,69 @@ test('unknown host and truncated SHA never reach Docker',()=>{
 });
 
 
+test('staging accepts private namespace Docker defaults and no-new-privileges only',()=>{
+  const c=fixture();
+  Object.assign(c.backend.HostConfig,{
+    PidMode:'',IpcMode:'private',UTSMode:'',CgroupnsMode:'private',
+    UsernsMode:'',CapAdd:[],Devices:null,DeviceRequests:[],
+    Binds:[],ExtraHosts:null,Dns:[],DnsOptions:[],DnsSearch:[],
+    SecurityOpt:['no-new-privileges:true'],CgroupParent:'',
+    Sysctls:{},Tmpfs:{},PublishAllPorts:false
+  });
+  const report=validateStagingContainers(c,{sha,host});
+  assert.equal(report.services,4);
+  assert.equal(report.status,'RUNTIME_REVIEW_REQUIRED');
+});
+
+test('signed staging refuses host namespace escapes, injected DNS and privileged devices',()=>{
+  const ids={backend:imageId('3'),frontend:imageId('4')};
+  const signedFixture=()=>{
+    const c=fixture();
+    for(const [i,name] of ['db','redis','backend','frontend'].entries())
+      c[name].Id=String(i+5).repeat(64);
+    c.backend.Config.Image=ids.backend;
+    c.frontend.Config.Image=ids.frontend;
+    return c;
+  };
+  const attacks=[
+    ['alternate Compose network mode',h=>{h.NetworkMode='foreign_private_net';}],
+    ['host PID namespace',h=>{h.PidMode='host';}],
+    ['host IPC namespace',h=>{h.IpcMode='host';}],
+    ['host UTS namespace',h=>{h.UTSMode='host';}],
+    ['host cgroup namespace',h=>{h.CgroupnsMode='host';}],
+    ['host user namespace',h=>{h.UsernsMode='host';}],
+    ['extra Linux capability',h=>{h.CapAdd=['SYS_ADMIN'];}],
+    ['mapped host device',h=>{h.Devices=[{PathOnHost:'/dev/sda'}];}],
+    ['GPU/device request',h=>{h.DeviceRequests=[{Driver:'nvidia',Count:1}];}],
+    ['device group rule',h=>{h.DeviceCgroupRules=['a *:* rwm'];}],
+    ['host volume bind',h=>{h.Binds=['/srv/production:/secrets:ro'];}],
+    ['host gateway override',h=>{h.ExtraHosts=['db:host-gateway'];}],
+    ['custom DNS resolver',h=>{h.Dns=['8.8.8.8'];}],
+    ['custom DNS options',h=>{h.DnsOptions=['use-vc'];}],
+    ['custom DNS search',h=>{h.DnsSearch=['production.internal'];}],
+    ['legacy container link',h=>{h.Links=['production_db:db'];}],
+    ['supplementary host group',h=>{h.GroupAdd=['docker'];}],
+    ['CDI device injection',h=>{h.CdiDevices=['vendor.com/gpu=all'];}],
+    ['unconfined seccomp',h=>{h.SecurityOpt=['seccomp=unconfined'];}],
+    ['unconfined AppArmor',h=>{h.SecurityOpt=['apparmor=unconfined'];}],
+    ['unexpected tmpfs',h=>{h.Tmpfs={'/etc':'rw'};}],
+    ['custom sysctl',h=>{h.Sysctls={'net.ipv4.ip_forward':'1'};}],
+    ['custom cgroup parent',h=>{h.CgroupParent='/docker/production';}],
+    ['publish all image ports',h=>{h.PublishAllPorts=true;}],
+    ['privileged process',h=>{h.Privileged=true;}]
+  ];
+  for(const [label,mutate] of attacks){
+    const f=signedFixture();
+    mutate(f.backend.HostConfig);
+    assert.throws(()=>validateStagingContainers(f,{sha,host,signedImageIds:ids}),
+      /STAGING_RUNTIME_BLOCKED/,label);
+    const legacy=fixture();
+    mutate(legacy.frontend.HostConfig);
+    assert.throws(()=>validateStagingContainers(legacy,{sha,host}),
+      /STAGING_RUNTIME_BLOCKED/,label+' legacy');
+  }
+});
+
 test('signed OCI staging accepts ONLY exact backend/frontend immutable config IDs',()=>{
   const c=fixture(),expected={backend:imageId('3'),frontend:imageId('4')};
   for(const [i,name] of ['db','redis','backend','frontend'].entries()){
