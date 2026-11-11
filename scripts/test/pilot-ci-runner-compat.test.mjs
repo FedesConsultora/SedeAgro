@@ -32,12 +32,19 @@ test('runner pinning cannot bypass the existing Chromium or OCI verification', (
   const offline = job('browser-offline');
   const images = job('production-images');
   const importer = job('offline-image-import');
-  assert.match(chrome, /npx playwright install chromium --with-deps/);
+  assert.match(chrome, /npx playwright install chromium(?! --with-deps)/);
   assert.match(chrome, /for pass in 1 2; do/);
   assert.match(chrome, /SEDEAGRO_FOCUS_STRESS_CYCLES=12 node scripts\/acceptance-browser-cookie\.mjs/);
   assert.match(chrome, /node scripts\/acceptance-browser-evidence-history\.mjs/);
   assert.match(chrome, /node scripts\/acceptance-browser-review-inbox\.mjs/);
-  assert.match(offline, /npx playwright install chromium --with-deps/);
+  assert.match(offline, /npx playwright install chromium(?! --with-deps)/);
+  // Fail closed: runtime preflight must launch the actual binary, not trust
+  // download success or skip browser integration on missing Ubuntu packages.
+  for(const source of [chrome,offline]){
+    assert.match(source,/run: node scripts\/ci-verify-playwright-chromium\.mjs/);
+    assert.doesNotMatch(source,/playwright install chromium --with-deps/);
+    assert.doesNotMatch(source,/continue-on-error:\\s*true/);
+  }
   assert.match(offline, /node frontend\/test\/offlineBrowser\.mjs/);
   assert.match(images, /Verify built backend OS and libraries|Scan built backend OS and libraries/);
   assert.match(images, /Scan built frontend OS and libraries/);
