@@ -44,6 +44,8 @@ function live(){return {
   image_reference_kind:'immutable-config-id',
   project_container_census_verified:true,
   project_volume_inventory_verified:true,
+  project_network_inventory_verified:true,
+  project_network_id:DIGEST('e'),
   image_ids:{db:ID('7'),redis:ID('8'),...IMAGES},
   container_ids:{...CONTAINERS},
   signed_provenance_certified:false,
@@ -82,6 +84,7 @@ test('real human risk is checked before host Docker, then same four staging cont
     'SIGNED_OCI_STAGING_RUNTIME_IDENTITIES_REVIEWED_NOT_CERTIFIED');
   assert.deepEqual(result.image_ids,IMAGES);
   assert.equal(result.verified_same_four_containers_twice,true);
+  assert.equal(result.verified_private_network_twice,true);
   assert.equal(result.checked_running_container_ids,true);
   assert.equal(result.verified_project_volumes_twice,true);
   assert.equal(result.read_only,true);
@@ -155,6 +158,10 @@ test('unhealthy, wrong project, wrong OCI config reference or overclaimed stagin
     {image_reference_kind:'legacy-staging-tag'},
     {project_container_census_verified:false},
     {project_volume_inventory_verified:false},
+    {project_network_inventory_verified:false},
+    {project_network_inventory_verified:undefined},
+    {project_network_id:'foreign'},
+    {project_network_id:undefined},
     {project_volume_inventory_verified:undefined},
     {image_ids:{...IMAGES,backend:ID('f')}},
     {image_ids:{...IMAGES,frontend:ID('f')}},
@@ -203,6 +210,17 @@ test('signed review cannot accept a missing volume scan or changed inventory bet
     }
   })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
   assert.equal(calls,2);
+});
+
+test('network ID rotation during double runtime inspection blocks signed staging',async()=>{
+  let reads=0;
+  await assert.rejects(reviewSignedStagingRuntime(options({
+    inspectRuntime:async()=>{
+      reads++;
+      return reads===1?live():{...live(),project_network_id:DIGEST('f')};
+    }
+  })),/SIGNED_STAGING_RUNTIME_BLOCKED/);
+  assert.equal(reads,2);
 });
 
 test('invalid staging hostname or SHA cannot reach human review or Docker',async()=>{
