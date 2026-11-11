@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const ownerUrl=process.env.TEST_DATABASE_ADMIN_URL;
@@ -22,7 +24,57 @@ process.env.JWT_SECRET='disposable-RP02-acceptance-only';
 const { createApp }=await import('../src/app.js');
 const { sequelize }=await import('../src/core/db.js');
 const { signSession }=await import('../src/utils/jwt.js');
-const { markReportWorkerPresent,processNextReport,purgeExpiredReportFiles }=
+
+const workerCli=fileURLToPath(new URL('../src/workers/reportWorkerCli.js',import.meta.url));
+
+// Exercise the actual operational entrypoint as a SEPARATE Node process.
+// No shell, no schema-owner URL, no fake database client or shortcut to the
+// in-process worker function. A bounded timeout also prevents a hung CI job.
+async function runWorkerCliOnce(tenantId) {
+  const {TEST_DATABASE_ADMIN_URL: _ownerUrl, TEST_DATABASE_APP_URL: _runtimeUrl,
+    ...inherited}=process.env;
+  const child=spawn(process.execPath,[workerCli,'--once'],{
+    env:{
+      ...inherited,DATABASE_URL:appUrl,REPORT_WORKER_TENANT_ID:tenantId,
+      NODE_ENV:'test',JWT_SECRET:'disposable-RP02-worker-process-only',
+      LOG_LEVEL:'info',LOG_FORMAT:'json',LOG_SQL:'0',LOG_STACK:'0'
+    },
+    stdio:['ignore','pipe','pipe']
+  });
+  let stdout='',stderr='',overflow=false,timedOut=false;
+  const maxBytes=32*1024;
+  const collect=target=>chunk=>{
+    const value=chunk.toString('utf8');
+    if(target==='stdout')stdout+=value;
+    else stderr+=value;
+    if(Buffer.byteLength(stdout)+Buffer.byteLength(stderr)>maxBytes){
+      overflow=true;
+      child.kill('SIGKILL');
+    }
+  };
+  child.stdout.on('data',collect('stdout'));
+  child.stderr.on('data',collect('stderr'));
+  const result=await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{
+      timedOut=true;
+      child.kill('SIGKILL');
+    },15000);
+    child.on('error',error=>{clearTimeout(timer);reject(error);});
+    child.on('close',(code,signal)=>{clearTimeout(timer);resolve({code,signal});});
+  });
+  assert.equal(timedOut,false,'worker CLI process did not terminate');
+  assert.equal(overflow,false,'worker CLI exceeded bounded output');
+  assert.equal(result.signal,null,'worker CLI must exit normally');
+  assert.equal(result.code,0,'worker CLI --once failed with nonzero exit');
+  assert.equal(stderr,'','worker CLI must not emit errors');
+  const logs=stdout.trim().split('\n').filter(Boolean).map(line=>{
+    try{return JSON.parse(line);}catch{assert.fail('worker CLI must emit structured JSON logs');}
+  });
+  return logs.filter(record=>record.event==='report_worker_job')
+    .map(record=>({state:record.state,run_id:record.run_id,error_code:record.error_code}));
+}
+
+const { markReportWorkerPresent,processNextReport }=
   await import('../src/modules/reports/reportWorker.js');
 
 test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> revoke -> expiry, with RLS',async()=>{
@@ -126,12 +178,18 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
       404,'cross-tenant run hidden');
     expectStatus(await request('/reports/runs/'+queued.id+'/download',b),
       404,'cross-tenant file hidden');
-    assert.equal((await processNextReport(b.tenant)).state,'idle',
-      'worker in tenant B must not claim tenant A report');
+    // A real separate CLI process for B must finish without reading A's queue.
+    const foreignJobs=await runWorkerCliOnce(b.tenant);
+    assert.deepEqual(foreignJobs,[],'foreign worker CLI must not claim tenant A report');
+    assert.equal((await request('/reports/runs/'+queued.id,a)).result.data.status,'queued');
+    assert.equal((await request('/reports/worker-status',b)).result.data.online,true);
 
-    const job=await processNextReport(a.tenant);
-    assert.equal(job.state,'completed','real worker must generate and persist bytes');
-    assert.equal(job.id,queued.id);
+    // A brand-new process, with only the non-owner DB URL, performs the
+    // actual rendering and closes its connections before the HTTP download.
+    const jobs=await runWorkerCliOnce(a.tenant);
+    assert.deepEqual(jobs,[{
+      state:'completed',run_id:queued.id,error_code:null
+    }],'worker CLI must complete exactly one tenant A job');
     const after=expectStatus(await request('/reports/runs/'+queued.id,a),
       200,'downloadable completed run');
     assert.equal(after.status,'completed');
@@ -165,8 +223,8 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
     const cancelled=expectStatus(await request(
       '/reports/runs/'+pending.id+'/cancel',a,{method:'POST'}),200,'cancel queued job');
     assert.equal(cancelled.status,'cancelled');
-    assert.equal((await processNextReport(a.tenant)).state,'idle',
-      'cancelled work must not be claimed');
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'new worker process must not resurrect cancelled work');
     expectStatus(await request('/reports/runs/'+pending.id+'/download',a),
       409,'cancelled job has no artifact');
 
@@ -203,8 +261,8 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
       "WHERE tenant_id=$1 AND id=$2",
       [a.tenant,exhausted.id,randomUUID()]);
     assert.equal((await processNextReport(b.tenant)).state,'idle');
-    assert.equal((await processNextReport(a.tenant)).state,'idle',
-      'expired third lease becomes failed without another render');
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'fresh worker process must fail exhausted lease without another render');
     const finalLease=expectStatus(await request('/reports/runs/'+exhausted.id,a),
       200,'exhausted job must expose terminal result');
     assert.equal(finalLease.status,'failed');
@@ -218,7 +276,9 @@ test('RP-02 real API and worker: offline -> queue -> SHA download -> cancel -> r
       "WHERE tenant_id=$1 AND run_id=$2",[a.tenant,queued.id]);
     expectStatus(await request('/reports/runs/'+queued.id+'/download',a),
       410,'expired artifact cannot be returned');
-    await purgeExpiredReportFiles(a.tenant);
+    // --once also runs the real artifact TTL cleanup on its first tick.
+    assert.deepEqual(await runWorkerCliOnce(a.tenant),[],
+      'cleaner must not try to process terminal work');
     const left=await owner.query(
       'SELECT count(*)::integer AS n FROM report_run_files WHERE tenant_id=$1 AND run_id=$2',
       [a.tenant,queued.id]);
