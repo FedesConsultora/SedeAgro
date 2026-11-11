@@ -112,7 +112,7 @@ export function inspectPilotMobileEvidence(document, { expectedSha, now = Date.n
 // different inode between preflight and read. No path or contents are logged.
 export function readPrivateMobileEvidence(source) {
   assert(typeof source === 'string' && isAbsolute(source) &&
-    !source.includes('\\0') && source.length <= 4096 &&
+    !source.includes(String.fromCharCode(0)) && source.length <= 4096 &&
     realpathSync(source) === source);
   const directory = lstatSync(dirname(source));
   const leaf = lstatSync(source);
