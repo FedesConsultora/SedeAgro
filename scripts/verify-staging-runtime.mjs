@@ -161,6 +161,38 @@ export function validateStagingNetworkInventory(net, containers) {
   return net.Id;
 }
 
+// HostConfig.PortBindings describes requested bindings; NetworkSettings.Ports
+// reports what Docker ACTUALLY published. Both must agree. Containers often
+// have EXPOSE-d ports represented by null, which are not host publications.
+export function validateStagingEffectivePorts(containers) {
+  assert(containers && typeof containers === 'object' && !Array.isArray(containers));
+  for (const name of SERVICES) {
+    const c = containers[name];
+    const bindings = c?.NetworkSettings?.Ports;
+    assert(bindings && typeof bindings === 'object' &&
+      !Array.isArray(bindings));
+    let mapped = 0;
+    for (const [key, value] of Object.entries(bindings)) {
+      assert(/^[1-9][0-9]{0,4}\/(?:tcp|udp)$/.test(key) &&
+        Number(key.split('/')[0]) <= 65535);
+      if (value == null) continue; // Docker's unbound EXPOSE-only port.
+      assert(Array.isArray(value));
+      if (value.length === 0) continue; // Also no host publication.
+      assert(name === 'frontend' && key === '80/tcp' &&
+        value.length === 1 && value[0] &&
+        typeof value[0] === 'object' &&
+        !Array.isArray(value[0]) &&
+        value[0].HostIp === '127.0.0.1' &&
+        value[0].HostPort === '4183');
+      mapped++;
+    }
+    assert(name === 'frontend' ?
+      mapped === 1 && Object.hasOwn(bindings,'80/tcp') :
+      mapped === 0);
+  }
+  return true;
+}
+
 export function validateStagingContainers(containers, { sha, host, signedImageIds } = {}) {
   assert(SHA.test(sha || ''));
   validateStagingHost(host);
@@ -254,6 +286,8 @@ export function validateStagingContainers(containers, { sha, host, signedImageId
     }
   }
   if (immutable) assert(new Set(Object.values(containerIds)).size === SERVICES.length);
+  // Requested loopback bindings alone cannot prove the runtime listener/NAT.
+  validateStagingEffectivePorts(containers);
   return {
     status: 'RUNTIME_REVIEW_REQUIRED',
     project: PROJECT, release_sha: sha, host,

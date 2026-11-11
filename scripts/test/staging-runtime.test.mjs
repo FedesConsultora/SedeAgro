@@ -6,7 +6,7 @@ const locked = key => baseLock.images[key].tag + '@' + baseLock.images[key].dige
 import assert from 'node:assert/strict';
 import {
   validateStagingContainers, inspectStagingRuntime, validateStagingVolumeInventory,
-  validateStagingNetworkInventory
+  validateStagingNetworkInventory, validateStagingEffectivePorts
 } from '../verify-staging-runtime.mjs';
 
 const sha='a'.repeat(40);
@@ -44,7 +44,12 @@ function container(name, letter) {
       NetworkMode:network,
       PortBindings:name==='frontend'?{'80/tcp':[{HostIp:'127.0.0.1',HostPort:'4183'}]}:{}
     },
-    NetworkSettings:{Networks:{[network]:{}}},
+    NetworkSettings:{
+      Networks:{[network]:{}},
+      Ports:name==='frontend'
+        ? {'80/tcp':[{HostIp:'127.0.0.1',HostPort:'4183'}]}
+        : {[name==='db'?'5432/tcp':name==='redis'?'6379/tcp':'3001/tcp']:null}
+    },
     Mounts:name==='db'?[{Type:'volume',Name:project+'_staging_pgdata'}]:
       name==='redis'?[{Type:'volume',Name:project+'_staging_redisdata'}]:[]
   };
@@ -289,6 +294,59 @@ test('signed OCI staging denies swapped, duplicated or unbound endpoint identity
     assert.throws(()=>validateStagingNetworkInventory(n,c),
       /STAGING_RUNTIME_BLOCKED/);
   }
+});
+
+test('effective Docker published ports match loopback staging frontend only',()=>{
+  const c=fixture();
+  assert.equal(validateStagingEffectivePorts(c),true);
+  const result=validateStagingContainers(c,{sha,host});
+  assert.equal(result.services,4);
+  // EXPOSE without any host publication is legal for db, redis and backend.
+  c.backend.NetworkSettings.Ports['3001/tcp']=[];
+  assert.equal(validateStagingEffectivePorts(c),true);
+});
+
+test('staging rejects actual public, IPv6, external and sidecar host port exposure',()=>{
+  const mutations=[
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'][0].HostIp='0.0.0.0';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'][0].HostIp='::';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'][0].HostIp='';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'][0].HostPort='80';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'][0].HostPort='4184';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp'].push({HostIp:'::',HostPort:'4183'});},
+    c=>{c.frontend.NetworkSettings.Ports['443/tcp']=[{HostIp:'0.0.0.0',HostPort:'443'}];},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp']=null;},
+    c=>{delete c.frontend.NetworkSettings.Ports['80/tcp'];},
+    c=>{c.db.NetworkSettings.Ports['5432/tcp']=[{HostIp:'127.0.0.1',HostPort:'5432'}];},
+    c=>{c.db.NetworkSettings.Ports['5432/tcp']=[{HostIp:'0.0.0.0',HostPort:'5432'}];},
+    c=>{c.redis.NetworkSettings.Ports['6379/tcp']=[{HostIp:'::',HostPort:'6379'}];},
+    c=>{c.backend.NetworkSettings.Ports['3001/tcp']=[{HostIp:'127.0.0.1',HostPort:'3001'}];},
+    c=>{c.backend.NetworkSettings.Ports['3001/tcp']=[{HostIp:'0.0.0.0',HostPort:'3001'}];},
+    c=>{c.db.NetworkSettings.Ports=undefined;},
+    c=>{c.frontend.NetworkSettings.Ports=[];},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp']='127.0.0.1:4183';},
+    c=>{c.frontend.NetworkSettings.Ports['80/tcp']=[{HostIp:'127.0.0.1'}];},
+    c=>{c.redis.NetworkSettings.Ports['bad-port']=null;}
+  ];
+  for (const mutate of mutations){
+    const c=fixture();
+    mutate(c);
+    assert.throws(()=>validateStagingEffectivePorts(c),/STAGING_RUNTIME_BLOCKED/);
+    assert.throws(()=>validateStagingContainers(c,{sha,host}),/STAGING_RUNTIME_BLOCKED/);
+  }
+});
+
+test('signed OCI runtime rejects a published database port despite valid images and network',()=>{
+  const c=fixture(), signed={backend:imageId('3'),frontend:imageId('4')};
+  for (const [i,name] of ['db','redis','backend','frontend'].entries())
+    c[name].Id=String(i+5).repeat(64);
+  c.backend.Config.Image=signed.backend;
+  c.frontend.Config.Image=signed.frontend;
+  assert.equal(validateStagingContainers(c,{sha,host,signedImageIds:signed}).status,
+    'RUNTIME_REVIEW_REQUIRED');
+  c.redis.NetworkSettings.Ports['6379/tcp']=[{HostIp:'0.0.0.0',HostPort:'6379'}];
+  assert.throws(()=>validateStagingContainers(c,{sha,host,signedImageIds:signed}),
+    /STAGING_RUNTIME_BLOCKED/);
 });
 
 test('actual containers prove project, internal network, runtime image IDs and health',()=>{
