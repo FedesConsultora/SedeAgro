@@ -1,7 +1,9 @@
 // Read-only intake for MANUALLY witnessed mobile pilot acceptance.
 // This validates records, NOT devices, attached evidence, or release approval.
-import { readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
+import {
+  closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync
+} from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SHA = /^[0-9a-f]{40}$/;
@@ -105,6 +107,47 @@ export function inspectPilotMobileEvidence(document, { expectedSha, now = Date.n
   };
 }
 
+// The QA intake is operator-supplied and never independently attests a device.
+// Its local JSON must not be replaced by links, FIFOs, shared files or a
+// different inode between preflight and read. No path or contents are logged.
+export function readPrivateMobileEvidence(source) {
+  assert(typeof source === 'string' && isAbsolute(source) &&
+    !source.includes('\\0') && source.length <= 4096 &&
+    realpathSync(source) === source);
+  const directory = lstatSync(dirname(source));
+  const leaf = lstatSync(source);
+  const uid = process.getuid?.();
+  const privateNode = (info, isDir) =>
+    (isDir ? info.isDirectory() : info.isFile()) && !info.isSymbolicLink() &&
+    !(info.mode & 0o077) && (info.mode & 0o400) &&
+    (uid === undefined || info.uid === uid);
+  assert(privateNode(directory, true) && privateNode(leaf, false) &&
+    leaf.size >= 32 && leaf.size <= 65536);
+  assert(Number.isInteger(constants.O_NOFOLLOW) && Number.isInteger(constants.O_NONBLOCK));
+  const fd = openSync(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const first = fstatSync(fd);
+    assert(privateNode(first, false) && first.dev === leaf.dev &&
+      first.ino === leaf.ino && first.size === leaf.size);
+    // Read at most 64 KiB + 1 byte even if a file grows after preflight.
+    const bytes = Buffer.alloc(65537);
+    let total = 0;
+    while (total < bytes.length) {
+      const count = readSync(fd, bytes, total, bytes.length - total, null);
+      if (count === 0) break;
+      total += count;
+    }
+    const last = fstatSync(fd);
+    assert(total >= 32 && total <= 65536 &&
+      first.dev === last.dev && first.ino === last.ino &&
+      first.size === last.size && first.mtimeMs === last.mtimeMs &&
+      first.ctimeMs === last.ctimeMs && total === last.size);
+    return JSON.parse(bytes.toString('utf8', 0, total));
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function main(args) {
   if (args.length === 5 && args[0] === '--template' &&
       args[1] === '--sha' && args[3] === '--origin') {
@@ -114,10 +157,7 @@ function main(args) {
   if (args.length !== 4 || args[0] !== '--file' || args[2] !== '--sha') {
     throw new Error('INVALID_ARGS');
   }
-  const source = args[1];
-  const size = statSync(source).size;
-  assert(size > 0 && size <= 64 * 1024);
-  const record = JSON.parse(readFileSync(source, 'utf8'));
+  const record = readPrivateMobileEvidence(args[1]);
   const result = inspectPilotMobileEvidence(record, { expectedSha: args[3] });
   console.log(JSON.stringify(result, null, 2));
   console.log('Evidencia declarada sin autenticación criptográfica: NO es certificación física ni GO.');
