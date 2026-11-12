@@ -51,6 +51,8 @@ jobs:
           bash -n scripts/verify-pilot-staging.sh
           node --test scripts/test/staging-smoke-guards.test.mjs
           node --test scripts/test/pilot-mobile-evidence.test.mjs
+          node --check scripts/validate-pilot-actor-evidence.mjs
+          node --test scripts/test/pilot-actor-evidence.test.mjs
           bash -n scripts/deploy-prod.sh
           bash -n scripts/production-deploy-lock.sh
           node --test scripts/test/production-deploy-lock.test.mjs
